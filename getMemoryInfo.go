@@ -82,7 +82,7 @@ func queryPrometheus(ctx context.Context, client *http.Client, baseURL, promQL s
 	return maxVal, nil
 }
 
-func main() {
+func monitorMemory() {
 	promURL := flag.String("url", "http://localhost:9090", "Prometheus URL")
 	threshold := flag.Float64("threshold", 75, "Threshold percent")
 	overFor := flag.Duration("duration", 10*time.Second, "Time over threshold to trigger error")
