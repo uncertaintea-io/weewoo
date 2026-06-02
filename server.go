@@ -15,7 +15,7 @@ func main() {
 	//Serve files from static folder
 	http.Handle("/", http.FileServer(http.Dir("./static")))
 
-	//Serve api /TonyRippyis
+	//Serve api /Test
 	http.HandleFunc("/Test", func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, "hello world!")
 	})
