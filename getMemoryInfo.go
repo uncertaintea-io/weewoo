@@ -5,11 +5,15 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"log"
 	"math"
 	"net/http"
 	"net/url"
 	"os"
 	"time"
+
+	"github.com/prometheus/client_golang/api"
+	v1 "github.com/prometheus/client_golang/api/prometheus/v1"
 )
 
 /* ANSI colors */
@@ -80,6 +84,25 @@ func queryPrometheus(ctx context.Context, client *http.Client, baseURL, promQL s
 		return 0, fmt.Errorf("invalid value")
 	}
 	return maxVal, nil
+}
+
+func getMemoryInfo() {
+	//Get Prometheus targets
+	config := api.Config{
+		Address: "http://localhost:9090",
+	}
+	client, err := api.NewClient(config)
+	if err != nil {
+		log.Fatal(err)
+	}
+	API := v1.NewAPI(client)
+	targets, err := API.Targets(context.Background())
+	if err != nil {
+		log.Fatal(err)
+	}
+	for _, at := range targets.Active {
+		fmt.Println(at.ScrapeURL)
+	}
 }
 
 func monitorMemory() {

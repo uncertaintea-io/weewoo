@@ -1,13 +1,12 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
-	"context"
 	"net/http"
-
-	"github.com/prometheus/client_golang/api"
-	v1 "github.com/prometheus/client_golang/api/prometheus/v1"
+	"os/signal"
+	"syscall"
 )
 
 func main() {
@@ -23,25 +22,29 @@ func main() {
 	})
 
 	port := ":5000"
+	otherPort := ":8080"
 	fmt.Println("Server is running on port" + port)
 
 	//Start server on port specified above
 	log.Fatal(http.ListenAndServe(port, nil))
 
-	//Get Prometheus targets
-	config := api.Config{
-		Address: "http://localhost:9090",
-	}
-	client, err := api.NewClient(config)
-	if err != nil {
+	serverErr := make(chan error)
+	go func() {
+		serverErr <- http.ListenAndServe(port, nil)
+	}()
+
+	go func() {
+		serverErr <- http.ListenAndServe(otherPort, nil)
+	}()
+
+	signalCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	select {
+	case <-signalCtx.Done():
+
+	case err := <-serverErr:
 		log.Fatal(err)
 	}
-	API := v1.NewAPI(client)
-	targets, err := API.Targets(context.Background())
-	if err != nil {
-		log.Fatal(err)
-	}
-	for _, at := range targets.Active {
-		fmt.Println(at.ScrapeURL)
-	}
+
 }
