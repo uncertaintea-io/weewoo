@@ -7,34 +7,38 @@ import (
 	"net/http"
 	"os/signal"
 	"syscall"
+	"time"
 )
 
 func main() {
-
-	//API routes
 
 	//Serve files from static folder
 	http.Handle("/", http.FileServer(http.Dir("./static")))
 
 	//Serve api /TonyRippyis
-	http.HandleFunc("/TonyRippyis", func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprintf(w, "old, weak, bald, and short")
+	http.HandleFunc("/Test", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintf(w, "hello world!")
 	})
 
-	port := ":5000"
-	otherPort := ":8080"
-	fmt.Println("Server is running on port" + port)
+	// monitorPort := ":5000"
+	appPort := ":8080"
+	fmt.Println("Server is running on port" + appPort)
 
-	//Start server on port specified above
-	log.Fatal(http.ListenAndServe(port, nil))
+	appServer := &http.Server{
+		Addr:           appPort,
+		Handler:        nil,
+		ReadTimeout:    10 * time.Second,
+		WriteTimeout:   10 * time.Second,
+		MaxHeaderBytes: 1 << 20,
+	}
 
 	serverErr := make(chan error)
-	go func() {
-		serverErr <- http.ListenAndServe(port, nil)
-	}()
+	// go func() {
+	// 	serverErr <- http.ListenAndServe(monitorPort, nil)
+	// }()
 
 	go func() {
-		serverErr <- http.ListenAndServe(otherPort, nil)
+		serverErr <- appServer.ListenAndServe()
 	}()
 
 	signalCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -47,4 +51,5 @@ func main() {
 		log.Fatal(err)
 	}
 
+	appServer.Shutdown(context.Background())
 }
