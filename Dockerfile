@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-FROM golang:1.26.3
+FROM golang:1.26
 
 # make directory inside the image to store all commands
 WORKDIR /app
@@ -12,9 +12,9 @@ RUN go mod download
 
 # install app
 COPY server.go ./
-COPY static ./static/
+COPY static ./static
 
 # final configuration
-RUN CGO_ENABLED=0 GOOS=linux go build -o /weewoo
+RUN CGO_ENABLED=0 GOOS=linux go build -o ./weewoo
 EXPOSE 8080
-CMD ["/weewoo"]
+CMD ["./weewoo"]
