@@ -6,7 +6,6 @@ WORKDIR /app
 COPY . .
 
 # build the application
-COPY go.mod go.sum ./
 RUN go mod download
 
 # deploy the application binary into a lean image
