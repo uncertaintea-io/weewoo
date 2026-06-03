@@ -1,3 +1,4 @@
 .gocache/
 .gomodcache/
 .venv/
+secrets/docker.token
