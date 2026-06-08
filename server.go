@@ -20,7 +20,7 @@ func main() {
 		fmt.Fprintf(w, "hello world!")
 	})
 
-	// monitorPort := ":5000"
+	monitorPort := ":5000"
 	appPort := ":8080"
 	fmt.Println("Server is running on port" + appPort)
 
@@ -33,9 +33,9 @@ func main() {
 	}
 
 	serverErr := make(chan error)
-	// go func() {
-	// 	serverErr <- http.ListenAndServe(monitorPort, nil)
-	// }()
+	go func() {
+		serverErr <- http.ListenAndServe(monitorPort, nil)
+	}()
 
 	go func() {
 		serverErr <- appServer.ListenAndServe()
