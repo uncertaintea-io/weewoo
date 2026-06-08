@@ -1,5 +1,32 @@
 # Release Procedures
 
+## Tag the release
+
+Once the software has reached a stable state, and you're ready to release:
+
+```shell
+# Ensure the working directory is clean:
+git checkout main
+git pull
+git status
+
+# Ensure dependencies are up-to-date:
+go mod tidy
+git diff  # if there are diffs, merge changes before continuing
+
+# Sanity checks:
+go test ./...
+pre-commit run --all-files
+
+# Choose a new version, use the scheme v${MAJOR}.${MINOR}.${PATCH}
+# See references for a description of module version numbering.
+TAG="v0.2.0"
+
+# Create a release tag and push it to origin:
+git tag ${TAG}
+git push origin ${TAG}
+```
+
 ## Container Registry Access
 
 We use the GitHub Container Registry (ghcr.io) to store our images.
@@ -53,3 +80,9 @@ After the image is pushed, you can inspect the image's manifest to see if everyt
 ```shell
 docker buildx imagetools inspect ghcr.io/uncertaintea-io/weewoo:latest
 ```
+
+## References
+
+* [Module version numbering](https://go.dev/doc/modules/version-numbers)
+* [Publishing a module](https://go.dev/doc/modules/publishing)
+* [Module release and versioning workflow](https://go.dev/doc/modules/release-workflow)
