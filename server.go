@@ -8,7 +8,15 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
+
+func NewMetricshandler() http.Handler {
+	mux := http.NewServeMux()
+	mux.Handle("/metrics", promhttp.Handler())
+	return mux
+}
 
 func main() {
 
@@ -20,7 +28,7 @@ func main() {
 		fmt.Fprintf(w, "hello world!")
 	})
 
-	// monitorPort := ":5000"
+	monitorPort := ":5000"
 	appPort := ":8080"
 	fmt.Println("Server is running on port" + appPort)
 
@@ -32,10 +40,15 @@ func main() {
 		MaxHeaderBytes: 1 << 20,
 	}
 
+    metricsServer := &http.Server{
+		Addr:    monitorPort,
+		Handler: NewMetricshandler(),
+	}
+
 	serverErr := make(chan error)
-	// go func() {
-	// 	serverErr <- http.ListenAndServe(monitorPort, nil)
-	// }()
+	go func() {
+		serverErr <- metricsServer.ListenAndServe()
+	}()
 
 	go func() {
 		serverErr <- appServer.ListenAndServe()
@@ -52,4 +65,5 @@ func main() {
 	}
 
 	appServer.Shutdown(context.Background())
+	metricsServer.Shutdown(context.Background())
 }
