@@ -6,9 +6,12 @@ import (
 	"log"
 	"net/http"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
@@ -18,19 +21,68 @@ func NewMetricshandler() http.Handler {
 	return mux
 }
 
-func main() {
+type statusRecorder struct {
+	http.ResponseWriter
+	status      int
+	bytes       int
+	wroteHeader bool
+}
 
-	//Serve files from static folder
-	http.Handle("/", http.FileServer(http.Dir("./static")))
+func (r *statusRecorder) WriteHeader(code int) {
+	if r.wroteHeader {
+		return
+	}
+	r.status = code
+	r.wroteHeader = true
+	r.ResponseWriter.WriteHeader(code)
+}
 
-	//Serve api /Test
-	http.HandleFunc("/Test", func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprintf(w, "hello world!")
+func (r *statusRecorder) Write(p []byte) (int, error) {
+	if !r.wroteHeader {
+		r.WriteHeader(http.StatusOK)
+	}
+	n, err := r.ResponseWriter.Write(p)
+	r.bytes += n
+	return n, err
+}
+
+// requestDuration tracks total app request latency in seconds.
+var requestDuration = promauto.NewHistogramVec(
+	prometheus.HistogramOpts{
+		Namespace: "weewoo",
+		Subsystem: "http",
+		Name:      "request_duration_seconds",
+		Help:      "HTTP request latency in seconds.",
+		NativeHistogramBucketFactor: 1.1,
+	},
+	[]string{"status_code"},
+)
+
+// observeRequestDuration records how long the wrapped handler takes.
+func observeRequestDuration(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		rec := &statusRecorder{ResponseWriter: w}
+
+		next.ServeHTTP(rec, r)
+
+		status := rec.status
+		if status == 0 {
+			status = http.StatusOK
+		}
+
+		requestDuration.WithLabelValues(strconv.Itoa(status)).Observe(time.Since(start).Seconds())
 	})
+}
+
+func main() {
+	//Serve files from static folder
+	http.Handle("/", observeRequestDuration(http.FileServer(http.Dir("./static"))))
 
 	monitorPort := ":5000"
 	appPort := ":8080"
 	fmt.Println("Server is running on port" + appPort)
+	fmt.Println("Metrics are running on port" + monitorPort)
 
 	appServer := &http.Server{
 		Addr:           appPort,
@@ -40,7 +92,7 @@ func main() {
 		MaxHeaderBytes: 1 << 20,
 	}
 
-    metricsServer := &http.Server{
+	metricsServer := &http.Server{
 		Addr:    monitorPort,
 		Handler: NewMetricshandler(),
 	}
