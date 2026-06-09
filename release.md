@@ -1,6 +1,6 @@
 # Release Procedures
 
-## Tag the release
+## Release Automation
 
 Once the software has reached a stable state, and you're ready to release:
 
@@ -22,16 +22,22 @@ pre-commit run --all-files
 # See references for a description of module version numbering.
 TAG="v0.2.0"
 
-# Create a release tag and push it to origin:
-git tag ${TAG}
-git push origin ${TAG}
+# Trigger the release using the GitHub CLI:
+gh release create ${TAG} --title ${TAG} --notes ""
 ```
 
-## Container Registry Access
+Creating a release triggers the `Publish Docker Image` GitHub Action. That
+workflow builds the Docker image for `linux/amd64` and `linux/arm64`, then pushes
+both `ghcr.io/uncertaintea-io/weewoo:${TAG}` and
+`ghcr.io/uncertaintea-io/weewoo:latest`.
+
+## Manual Release Procedure
+
+### Container Registry Access
 
 We use the GitHub Container Registry (ghcr.io) to store our images.
-In order to access the registry, you will need a GitHub Personal Access Token; specifically a "Personal Access Token (classic)".
-GutHub's instructions are [here](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry#authenticating-to-the-container-registry).
+In order to access the registry locally, you will need a GitHub Personal Access Token; specifically a "Personal Access Token (classic)".
+GitHub's instructions are [here](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry#authenticating-to-the-container-registry).
 
 I recommend storing this token in a `secrets/docker.token` file. If you do, lock the file down so only you can read it:
 
@@ -45,7 +51,7 @@ You can then use the token to login to the container registry:
 cat secrets/docker.token | docker login ghcr.io -u ${GITHUB_USER} --password-stdin
 ```
 
-## Docker buildx
+### Docker buildx
 
 In order to build the multi-platform images we need, you will need to have Docker's `buildx` extension installed and configured.
 You can see if you already have it by running:
@@ -59,14 +65,14 @@ When you run that last command, you should see a "multiarch" configuration.
 If you don't, you can set it up as follows:
 
 ```shell
-make ui-build # temporarily needed, see issue #57
 docker buildx create --name multiarch --driver docker-container --use
 docker buildx inspect --bootstrap
 ```
 
-## Building the Docker Image
+### Building the Docker Image
 
-Run this in the root directory of the repo:
+The GitHub Action normally handles this after a release is published. If you need
+to push an image manually, run this in the root directory of the repo:
 
 ```shell
 docker buildx build \

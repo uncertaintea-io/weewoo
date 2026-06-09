@@ -1,0 +1,37 @@
+# See https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax
+
+name: golangci-lint
+on:
+  # # NOTE: Disabled the runs on merge to conserve GitHub Actions quota.
+  # push:
+  #   branches:
+  #     - main
+
+  pull_request:
+    paths:
+      - 'go.mod'
+      - 'go.sum'
+      - '**.go'
+      - '.github/workflows/golangci-lint.yml'
+      - '!ui/node_modules/**'
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  golangci:
+    name: lint
+    runs-on: ubuntu-latest
+    env:
+      GOPRIVATE: "github.com/uncertaintea-io/*"
+      GONOSUMDB: "github.com/uncertaintea-io/*"
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: '.go-version'
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.11
