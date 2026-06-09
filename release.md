@@ -28,7 +28,7 @@ git tag ${TAG}
 git push origin ${TAG}
 
 # Trigger the release using the GitHub CLI:
-gh release create ${TAG} --title ${TAG} --notes ""
+gh release create ${TAG} --title ${TAG} --generate-notes
 ```
 
 Creating a release triggers the `Publish Docker Image` GitHub Action. That
