@@ -22,6 +22,11 @@ pre-commit run --all-files
 # See references for a description of module version numbering.
 TAG="v0.2.0"
 
+# Create a tag for the release and push it.
+# This helps prevent new PRs merged to main from sneaking into the release. 
+git tag ${TAG}
+git push origin ${TAG}
+
 # Trigger the release using the GitHub CLI:
 gh release create ${TAG} --title ${TAG} --notes ""
 ```
@@ -30,6 +35,7 @@ Creating a release triggers the `Publish Docker Image` GitHub Action. That
 workflow builds the Docker image for `linux/amd64` and `linux/arm64`, then pushes
 both `ghcr.io/uncertaintea-io/weewoo:${TAG}` and
 `ghcr.io/uncertaintea-io/weewoo:latest`.
+It also will generate and publish release notes based on the PRs included in the release.
 
 ## Manual Release Procedure
 
