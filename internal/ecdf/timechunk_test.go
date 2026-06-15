@@ -68,6 +68,10 @@ var (
 	diskY = []Sample{{Value: 3, Count: 3}, {Value: 4, Count: 4}, {Value: 5, Count: 5}}
 )
 
+// The tests below are used to create and validate a "golden" chunk file.
+// This file isn't used in the code or these tests, but it is useful for 
+// testing compatibility with internal tools written in other languages.
+
 func TestWriteChunkToDisk(t *testing.T) {
 	t.Skip("skipping write to disk")
 	
