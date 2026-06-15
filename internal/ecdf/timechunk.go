@@ -14,6 +14,7 @@ type Sample struct {
 	Count uint64
 }
 
+// CountSamples converts float64 values into Samples, counting the number of occurrences of each unique value.
 func CountSamples(samples []float64) []Sample {
 	if len(samples) == 0 {
 		return nil
@@ -34,10 +35,9 @@ func CountSamples(samples []float64) []Sample {
 	return result
 }
 
-// Encode creates a binary blob that records the given samples.
+// Encode creates a "time chunk", a binary blob that records the given samples.
 func Encode(timestamp time.Time, x []Sample, y []Sample) ([]byte, error) {
 	buf := bytes.NewBuffer(nil)
-	//w := snappy.NewBufferedWriter(buf)
 	w := bufio.NewWriter(buf)
 	err := binary.Write(w, binary.BigEndian, timestamp.Unix())
 	if err != nil {

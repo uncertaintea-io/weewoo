@@ -1,6 +1,7 @@
 package timechunk
 
 import (
+	"os"
 	"testing"
 	"time"
 
@@ -59,4 +60,35 @@ func TestEncodeDecode(t *testing.T) {
 			assert.Equal(t, test.y, decodedY)
 		})
 	}
+}
+
+var (
+	diskTimestamp = time.Unix(1781561298, 0)
+	diskX = []Sample{{Value: 1, Count: 1}, {Value: 2, Count: 2}}
+	diskY = []Sample{{Value: 3, Count: 3}, {Value: 4, Count: 4}, {Value: 5, Count: 5}}
+)
+
+func TestWriteChunkToDisk(t *testing.T) {
+	t.Skip("skipping write to disk")
+	
+	chunk, err := Encode(diskTimestamp, diskX, diskY)
+	require.NoError(t, err)
+	require.NotNil(t, chunk)
+	
+	err = os.WriteFile("testdata/chunk.bin", chunk, 0644)
+	require.NoError(t, err)
+}
+
+func TestReadChunkFromDisk(t *testing.T) {
+	t.Skip("skipping read from disk")
+
+	chunk, err := os.ReadFile("testdata/chunk.bin")
+	require.NoError(t, err)
+	require.NotNil(t, chunk)
+
+	decodedTimestamp, decodedX, decodedY, err := Decode(chunk)
+	require.NoError(t, err)
+	require.Equal(t, diskTimestamp, decodedTimestamp)
+	require.Equal(t, diskX, decodedX)
+	require.Equal(t, diskY, decodedY)
 }
