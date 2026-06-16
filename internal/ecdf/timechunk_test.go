@@ -9,6 +9,48 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestCountSamples(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		input []float64
+		expected []Sample
+	}{
+		{
+			name: "empty",
+			input: []float64{},
+			expected: []Sample{},
+		},
+		{
+			name: "single",
+			input: []float64{1},
+			expected: []Sample{{Value: 1, Count: 1}},
+		},
+		{
+			name: "multiple",
+			input: []float64{1, 2, 2, 3, 3, 3},
+			expected: []Sample{{Value: 1, Count: 1}, {Value: 2, Count: 2}, {Value: 3, Count: 3}},
+		},
+		{
+			name: "multiple reversed",
+			input: []float64{3, 2, 3, 2, 3, 1},
+			expected: []Sample{{Value: 1, Count: 1}, {Value: 2, Count: 2}, {Value: 3, Count: 3}},
+		},
+		{
+			name: "multiple unique",
+			input: []float64{1, 2, 3},
+			expected: []Sample{{Value: 1, Count: 1}, {Value: 2, Count: 1}, {Value: 3, Count: 1}},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			result := CountSamples(test.input)
+			assert.Equal(t, test.expected, result)
+		})
+	}
+}
+
 func TestEncodeDecode(t *testing.T) {
 	t.Parallel()
 	tests := []struct {

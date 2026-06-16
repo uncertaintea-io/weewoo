@@ -16,22 +16,25 @@ type Sample struct {
 
 // CountSamples converts float64 values into Samples, counting the number of occurrences of each unique value.
 func CountSamples(samples []float64) []Sample {
-	if len(samples) == 0 {
-		return nil
+	n := len(samples)
+	if n == 0 {
+		return []Sample{}
 	}
-	result := make([]Sample, 0, len(samples))
+	result := make([]Sample, 0, n)
 	sort.Float64Slice(samples).Sort()
-	last := samples[0]
-	lastIndex := 0
-	for i, sample := range samples[1:] {
-		if sample == last {
+	i := 0
+	lastValue := samples[i]
+	lastIndex := i
+	for ; i < n; i++ {
+		sample := samples[i]
+		if sample == lastValue {
 			continue
 		}
-		result = append(result, Sample{Value: last, Count: uint64(i - lastIndex)})
+		result = append(result, Sample{Value: lastValue, Count: uint64(i - lastIndex)})
 		lastIndex = i
-		last = sample
+		lastValue = sample
 	}
-	result = append(result, Sample{Value: last, Count: uint64(len(samples) - lastIndex)})
+	result = append(result, Sample{Value: lastValue, Count: uint64(n - lastIndex)})
 	return result
 }
 
