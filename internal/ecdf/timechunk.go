@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/binary"
+	"fmt"
 	"io"
 	"sort"
 	"time"
@@ -61,15 +62,28 @@ func Encode(timestamp time.Time, x []Sample, y []Sample) ([]byte, error) {
 // Decode reads samples back from an encoded time chunk.
 func Decode(data []byte) (time.Time, []Sample, []Sample, error) {
 	r := bufio.NewReader(bytes.NewBuffer(data))
+
+	// Read the timestamp:
 	var t int64
 	if err := binary.Read(r, binary.BigEndian, &t); err != nil {
 		return time.Time{}, nil, nil, err
 	}
-	x, err := readSamples(r)
+
+	// To prevent over-allocation from corrupted or malicious data, attempt to calculate
+	// the maximum number of records that can be safely decoded from a blob of the given size.
+	//
+	// First, subtract 10 bytes to account for fixed metadata
+	// (8 byte timestamp and 1 byte minimum for each of the two varint-encoded sample counts)
+	// Then, assume each sample will have a minimum size of 9 bytes.
+	// (8 bytes for the value and 1 byte for the smallest possible varint-encoded count).
+	safeRecordCount := uint64((len(data) - 10) / 9)
+
+	// Read the samples:
+	x, err := readSamples(r, safeRecordCount)
 	if err != nil {
 		return time.Time{}, nil, nil, err
 	}
-	y, err := readSamples(r)
+	y, err := readSamples(r, safeRecordCount)
 	if err != nil {
 		return time.Time{}, nil, nil, err
 	}
@@ -103,10 +117,13 @@ func writeUvarint(writer io.Writer, i uint64) error {
 	return err
 }
 
-func readSamples(r *bufio.Reader) ([]Sample, error) {
+func readSamples(r *bufio.Reader, maxRecords uint64) ([]Sample, error) {
 	n, err := binary.ReadUvarint(r)
 	if err != nil {
 		return nil, err
+	}
+	if n > maxRecords {
+		return nil, fmt.Errorf("suspect sample count: %d > safety limit %d", n, maxRecords)
 	}
 	samples := make([]Sample, n)
 	for i := range n {
