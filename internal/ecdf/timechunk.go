@@ -1,4 +1,4 @@
-package timechunk
+package ecdf
 
 import (
 	"bufio"
