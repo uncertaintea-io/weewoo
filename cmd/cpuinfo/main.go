@@ -9,9 +9,6 @@ import (
 	"math"
 	"net/http"
 	"net/url"
-	"sort"
-
-	//"os"
 	"strconv"
 	"strings"
 	"time"
@@ -203,36 +200,7 @@ func monitorCpu() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	fmt.Println(makeECDF(values))
-}
-
-type Coord struct {
-	X float64
-	Y float64
-}
-
-func makeECDF(values []float64) []Coord {
-	// sort values in ascending order and return values that are less than or equal to the given value
-	sort.Float64s(values)
-	// return values that are less than or equal to the given value
-	ecdf := make([]Coord, 0, len(values))
-	var locationInArray float64
-	var currNum float64
-	for _, v := range values {
-		if v <= currNum {
-			locationInArray += 1
-		} else {
-			if currNum != 0 {
-				ecdf = append(ecdf, Coord{X: currNum, Y: locationInArray / float64(len(values))})
-			}
-			currNum = v
-			locationInArray += 1
-		}
-	}
-	if currNum != 0 {
-		ecdf = append(ecdf, Coord{X: currNum, Y: 1.000000})
-	}
-	return ecdf
+	fmt.Println(MakeECDF(values))
 }
 
 func main() {
