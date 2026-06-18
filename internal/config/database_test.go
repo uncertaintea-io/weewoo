@@ -29,12 +29,5 @@ func TestGetConfigDatabase(t *testing.T) {
 	//t.Skip() // comment this out to run the test manually
 	config := newDatabaseConfig(t)
 	defer config.Close()
-	testGetConfig(t, config)
-}
-
-func TestSetConfigDatabase(t *testing.T) {
-	//t.Skip() // comment this out to run the test manually
-	config := newDatabaseConfig(t)
-	defer config.Close()
-	testSetConfig(t, config)
+	testConfigFunctions(t, config)
 }

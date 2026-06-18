@@ -5,7 +5,7 @@ import (
 )
 
 type Config interface {
-	getConfig(key string) string
-	setConfig(key string, value string) bool
+	GetConfig(key string) (string, error)
+	SetConfig(key string, value string) (bool, error)
 	Close()
 }
