@@ -3,6 +3,7 @@ package config
 import (
 	"database/sql"
 	"errors"
+	"fmt"
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
@@ -35,10 +36,10 @@ func (c *database) GetConfig(key string) (string, error) {
 	return value, nil
 }
 
-// sets the 'key' and 'value' strings into the config table and returns a boolean indicating success or failure.
-func (c *database) SetConfig(key string, value string) (bool, error) {
+// sets the 'key' and 'value' strings into the config table.
+func (c *database) SetConfig(key string, value string) error {
 	if key == "" || value == "" {
-		return false, errors.New("key and value are required")
+		return errors.New("key and value are required")
 	}
 	_, err := c.db.Exec(`
 		WITH updated AS (
@@ -52,9 +53,9 @@ func (c *database) SetConfig(key string, value string) (bool, error) {
 		WHERE NOT EXISTS (SELECT 1 FROM updated)
 	`, key, value)
 	if err != nil {
-		return false, errors.New("failed to set config: " + err.Error())
+		return fmt.Errorf("failed to set config: %w", err)
 	}
-	return true, nil
+	return nil
 }
 
 func (c *database) Close() {

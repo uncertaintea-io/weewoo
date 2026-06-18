@@ -10,7 +10,11 @@ import (
 
 // this tests that the connect function returns a non-nil value.
 func TestNewDatabaseConfig(t *testing.T) {
-	config, err := NewDatabaseConfig(os.Getenv("DATABASE_URL"))
+	conn := os.Getenv("DATABASE_URL")
+	if conn == "" {
+		t.Skip("DATABASE_URL is not set")
+	}
+	config, err := NewDatabaseConfig(conn)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -19,7 +23,11 @@ func TestNewDatabaseConfig(t *testing.T) {
 }
 
 func newDatabaseConfig(t *testing.T) Config {
-	config, err := NewDatabaseConfig(os.Getenv("DATABASE_URL"))
+	conn := os.Getenv("DATABASE_URL")
+	if conn == "" {
+		t.Skip("DATABASE_URL is not set")
+	}
+	config, err := NewDatabaseConfig(conn)
 	require.NoError(t, err)
 	require.NotNil(t, config)
 	return config

@@ -6,6 +6,6 @@ import (
 
 type Config interface {
 	GetConfig(key string) (string, error)
-	SetConfig(key string, value string) (bool, error)
+	SetConfig(key string, value string) error
 	Close()
 }
