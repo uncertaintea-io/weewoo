@@ -41,3 +41,10 @@ func testConfigFunctions(t *testing.T, config Config) {
 	err = config.SetConfig("key", "")
 	assert.EqualError(t, err, "key and value are required")
 }
+
+func TestReadingYamlFile(t *testing.T) {
+	systemSettings, err := ReadSystemSettings("config.yaml")
+	assert.NoError(t, err)
+	assert.NotNil(t, systemSettings)
+	assert.Equal(t, "example", systemSettings.DatabaseURL)
+}
