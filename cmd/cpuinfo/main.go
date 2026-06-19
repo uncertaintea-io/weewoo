@@ -15,6 +15,7 @@ import (
 
 	"github.com/prometheus/client_golang/api"
 	v1 "github.com/prometheus/client_golang/api/prometheus/v1"
+	"github.com/uncertaintea-io/weewoo/internal/config"
 )
 
 /* ANSI colors */
@@ -178,25 +179,24 @@ func printTargets(promURL string) {
 	}
 }
 
-func monitorCpu() {
-	promURL := flag.String("url", "http://pc0:9090", "Prometheus URL")
+func monitorCpu(config config.Config) {
+	promURL := "http://pc0:9090"
 	//threshold := flag.Float64("threshold", 0.25, "Threshold percent")
 	//overFor := flag.Duration("duration", 5*time.Minute, "Time over threshold to trigger error")
 	//interval := flag.Duration("interval", 15*time.Second, "Polling interval")
-	timeout := flag.Duration("timeout", 5*time.Second, "HTTP timeout")
+	timeout := 5*time.Second
 	//once := flag.Bool("once", false, "Run the query once and print only the value")
-	targets := flag.Bool("targets", false, "Print Prometheus scrape targets and exit")
-	flag.Parse()
+	targets := false
 
-	if *targets {
-		printTargets(*promURL)
+	if targets {
+		printTargets(promURL)
 		return
 	}
 
-	client := &http.Client{Timeout: *timeout}
+	client := &http.Client{Timeout: timeout}
 	end := time.Now()
 	start := end.Add(-5 * time.Minute)
-	values, err := queryPrometheusRange(context.Background(), client, *promURL, cpuQuery, start, end)
+	values, err := queryPrometheusRange(context.Background(), client, promURL, cpuQuery, start, end)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -204,6 +204,16 @@ func monitorCpu() {
 }
 
 func main() {
-	monitorCpu()
+	configfile := flag.String("config", "config.yaml", "Config file")
+	flag.Parse()
+	systemSettings, err := config.ReadSystemSettings(*configfile)
+	if err != nil {
+		log.Fatalf("Failed to read system settings: %v", err)
+	}
+	config, err := config.NewDatabaseConfig(systemSettings.DatabaseURL)
+	if err != nil {
+		log.Fatalf("Failed to create database config: %v", err)
+	}
+	monitorCpu(config)
 
 }
