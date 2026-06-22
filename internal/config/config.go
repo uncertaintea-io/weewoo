@@ -2,6 +2,7 @@ package config
 
 import (
 	"os"
+	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"gopkg.in/yaml.v3"
@@ -28,5 +29,14 @@ func ReadSystemSettings(filename string) (*SystemSettings, error) {
 type Config interface {
 	GetConfig(key string) (string, error)
 	SetConfig(key string, value string) error
+	ReadData(id int) (*DataSource, error)
+	WriteData(dataSource *DataSource) (int, error)
 	Close()
+}
+
+type DataSource struct {
+	id               int
+	data_type        string
+	url              string
+	polling_interval time.Duration
 }

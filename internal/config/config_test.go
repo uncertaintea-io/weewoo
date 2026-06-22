@@ -3,6 +3,7 @@ package config
 import (
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -40,6 +41,28 @@ func testConfigFunctions(t *testing.T, config Config) {
 	// testing setConfig with empty value
 	err = config.SetConfig("key", "")
 	assert.EqualError(t, err, "key and value are required")
+}
+
+// this is one testing function that tests both readData and writeData making them deterministic.
+func testDataSourceFunctions(t *testing.T, config Config) {
+	var writtenID int
+	// testing writeData on a counter for the id
+	t.Run("WriteData", func(t *testing.T) {
+		id, err := config.WriteData(&DataSource{
+			data_type:        "test",
+			url:              "https://example.com",
+			polling_interval: 10 * time.Second,
+		})
+		assert.NoError(t, err)
+		assert.NotEqual(t, 0, id)
+		writtenID = id
+	})
+	// testing readData
+	t.Run("ReadData", func(t *testing.T) {
+		data, err := config.ReadData(writtenID)
+		assert.NoError(t, err)
+		assert.NotNil(t, data)
+	})
 }
 
 func TestReadingYamlFile(t *testing.T) {

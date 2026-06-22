@@ -33,9 +33,11 @@ func newDatabaseConfig(t *testing.T) Config {
 	return config
 }
 
+// this test test the get/set config functions along side the read/write data source functions.
 func TestGetConfigDatabase(t *testing.T) {
 	//t.Skip() // comment this out to run the test manually
 	config := newDatabaseConfig(t)
 	defer config.Close()
 	testConfigFunctions(t, config)
+	testDataSourceFunctions(t, config)
 }

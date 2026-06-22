@@ -4,11 +4,12 @@ import "errors"
 
 // a new fake config should be initially empty
 func NewFakeConfig() Config {
-	return &fakeConfig{config: map[string]string{}}
+	return &fakeConfig{config: map[string]string{}, dataSource: map[int]*DataSource{}}
 }
 
 type fakeConfig struct {
 	config map[string]string
+	dataSource map[int]*DataSource
 }
 
 func (c *fakeConfig) GetConfig(key string) (string, error) {
@@ -26,4 +27,19 @@ func (c *fakeConfig) SetConfig(key string, value string) error {
 	return nil
 }
 
-func (c *fakeConfig) Close() {}
+func (c *fakeConfig) ReadData(id int) (*DataSource, error) {
+	return c.dataSource[id], nil
+}
+
+func (c *fakeConfig) WriteData(dataSource *DataSource) (int, error) {
+	if dataSource.id == 0 {
+		dataSource.id = len(c.dataSource) + 1
+	}
+	c.dataSource[dataSource.id] = dataSource
+	return dataSource.id, nil
+}
+
+func (c *fakeConfig) Close() {
+	c.config = nil
+	c.dataSource = nil
+}

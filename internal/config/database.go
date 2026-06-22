@@ -4,6 +4,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"time"
+
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
@@ -58,10 +60,6 @@ func (c *database) SetConfig(key string, value string) error {
 	return nil
 }
 
-func (c *database) Close() {
-	c.db.Close()
-}
-
 // opens connection to the database for the functions below to use
 func NewDatabaseConfig(conn string) (Config, error) {
 	connection, err := sql.Open("pgx", conn)
@@ -69,4 +67,40 @@ func NewDatabaseConfig(conn string) (Config, error) {
 		return nil, err
 	}
 	return &database{db: connection}, nil
+}
+
+func (c *database) ReadData(id int) (*DataSource, error) {
+	var dataSource DataSource
+	var pollingIntervalSeconds int
+	err := c.db.QueryRow("SELECT id, data_type, url, polling_interval FROM data_source WHERE id = $1", id).Scan(&dataSource.id, &dataSource.data_type, &dataSource.url, &pollingIntervalSeconds)
+	if err != nil {
+		return nil, err
+	}
+	dataSource.polling_interval = time.Duration(pollingIntervalSeconds) * time.Second
+	return &dataSource, nil
+}
+
+func (c *database) WriteData(ds *DataSource) (int, error) {
+	pollingIntervalSeconds := int(ds.polling_interval / time.Second)
+	if ds.id == 0 {
+		err := c.db.QueryRow(`
+			INSERT INTO data_source (id, data_type, url, polling_interval)
+			VALUES ((SELECT COALESCE(MAX(id), 0) + 1 FROM data_source), $1, $2, $3)
+			RETURNING id
+		`, ds.data_type, ds.url, pollingIntervalSeconds).Scan(&ds.id)
+		if err != nil {
+			return 0, fmt.Errorf("failed to insert data source: %w", err)
+		}
+		return ds.id, nil
+	} else {
+		err := c.db.QueryRow("UPDATE data_source SET data_type = $1, url = $2, polling_interval = $3 WHERE id = $4 RETURNING id", ds.data_type, ds.url, pollingIntervalSeconds, ds.id).Scan(&ds.id)
+		if err != nil {
+			return 0, fmt.Errorf("failed to update data source: %w", err)
+		}
+		return ds.id, nil
+	}
+}
+
+func (c *database) Close() {
+	c.db.Close()
 }
