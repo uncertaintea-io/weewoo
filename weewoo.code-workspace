@@ -6,10 +6,10 @@
 	],
 	"settings": {
 		"files.watcherExclude": {
-			".gocache/**": true
-			".gomodcache/**": true
-			".venv/**": true
-      "ui/node_modules/**": true
+			".gocache/**": true,
+			".gomodcache/**": true,
+			".venv/**": true,
+			"ui/node_modules/**": true
 		}
-  }
+	}
 }
