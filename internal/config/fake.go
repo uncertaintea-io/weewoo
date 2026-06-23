@@ -1,14 +1,18 @@
 package config
 
-import "errors"
+import (
+	"errors"
+	"fmt"
+)
 
 // a new fake config should be initially empty
 func NewFakeConfig() Config {
-	return &fakeConfig{config: map[string]string{}}
+	return &fakeConfig{config: map[string]string{}, dataSources: map[int]*DataSource{}}
 }
 
 type fakeConfig struct {
 	config map[string]string
+	dataSources map[int]*DataSource
 }
 
 func (c *fakeConfig) GetConfig(key string) (string, error) {
@@ -26,4 +30,22 @@ func (c *fakeConfig) SetConfig(key string, value string) error {
 	return nil
 }
 
-func (c *fakeConfig) Close() {}
+func (c *fakeConfig) ReadDataSource(id int) (*DataSource, error) {
+	if _, ok := c.dataSources[id]; !ok {
+		return nil, fmt.Errorf("id not found in database")
+	}
+	return c.dataSources[id], nil
+}
+
+func (c *fakeConfig) WriteDataSource(dataSource *DataSource) (int, error) {
+	if dataSource.Id == 0 {
+		dataSource.Id = len(c.dataSources) + 1
+	}
+	c.dataSources[dataSource.Id] = dataSource
+	return dataSource.Id, nil
+}
+
+func (c *fakeConfig) Close() {
+	c.config = nil
+	c.dataSources = nil
+}

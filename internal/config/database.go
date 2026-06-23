@@ -4,6 +4,9 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"net/url"
+	"time"
+
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
@@ -58,10 +61,6 @@ func (c *database) SetConfig(key string, value string) error {
 	return nil
 }
 
-func (c *database) Close() {
-	c.db.Close()
-}
-
 // opens connection to the database for the functions below to use
 func NewDatabaseConfig(conn string) (Config, error) {
 	connection, err := sql.Open("pgx", conn)
@@ -69,4 +68,52 @@ func NewDatabaseConfig(conn string) (Config, error) {
 		return nil, err
 	}
 	return &database{db: connection}, nil
+}
+
+func (c *database) ReadDataSource(id int) (*DataSource, error) {
+	var dataSource DataSource
+	var pollingIntervalSeconds int
+	var urlString string
+	//if the id is less than or equal to 0 it returns a error.
+	if id <= 0 {
+		return nil, fmt.Errorf("id must be greater than 0")
+	}
+
+	//if the id is a valid id and in the database it returns the data source.
+	err := c.db.QueryRow("SELECT Id, DataType, URL, PollingInterval FROM data_source WHERE Id = $1", id).Scan(&dataSource.Id, &dataSource.DataType, &urlString, &pollingIntervalSeconds)
+	if err != nil {
+		return nil, err
+	}
+	parsedURL, err := url.Parse(urlString)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse URL string to url.URL: %w", err)
+	}
+	dataSource.URL = *parsedURL
+	dataSource.PollingInterval = time.Duration(pollingIntervalSeconds) * time.Second
+	return &dataSource, nil
+}
+
+func (c *database) WriteDataSource(ds *DataSource) (int, error) {
+	pollingIntervalSeconds := int(ds.PollingInterval / time.Second)
+	if ds.Id == 0 {
+		err := c.db.QueryRow(`
+			INSERT INTO data_source (Id, DataType, URL, PollingInterval)
+			VALUES ((SELECT COALESCE(MAX(Id), 0) + 1 FROM data_source), $1, $2, $3)
+			RETURNING Id
+		`, ds.DataType, ds.URL.String(), pollingIntervalSeconds).Scan(&ds.Id)
+		if err != nil {
+			return 0, fmt.Errorf("failed to insert data source: %w", err)
+		}
+		return ds.Id, nil
+	} else {
+		err := c.db.QueryRow("UPDATE data_source SET DataType = $1, URL = $2, PollingInterval = $3 WHERE Id = $4 RETURNING Id", ds.DataType, ds.URL.String(), pollingIntervalSeconds, ds.Id).Scan(&ds.Id)
+		if err != nil {
+			return 0, fmt.Errorf("failed to update data source: %w", err)
+		}
+		return ds.Id, nil
+	}
+}
+
+func (c *database) Close() {
+	c.db.Close()
 }
