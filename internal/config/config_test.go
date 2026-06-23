@@ -1,6 +1,7 @@
 package config
 
 import (
+	"net/url"
 	"strconv"
 	"testing"
 	"time"
@@ -46,22 +47,42 @@ func testConfigFunctions(t *testing.T, config Config) {
 // this is one testing function that tests both readData and writeData making them deterministic.
 func testDataSourceFunctions(t *testing.T, config Config) {
 	var writtenID int
-	// testing writeData on a counter for the id
+	u := url.URL{Scheme: "https", Host: "example.com"}
+
+	// testing writeData on a counter for the id. also tests what happens when there is no record for the id that was passed in.
 	t.Run("WriteData", func(t *testing.T) {
-		id, err := config.WriteData(&DataSource{
-			data_type:        "test",
-			url:              "https://example.com",
-			polling_interval: 10 * time.Second,
+		id, err := config.WriteDataSource(&DataSource{
+			DataType:        "test",
+			URL:             u,
+			PollingInterval: 10 * time.Second,
 		})
 		assert.NoError(t, err)
 		assert.NotEqual(t, 0, id)
 		writtenID = id
 	})
-	// testing readData
+	// testing readData.
 	t.Run("ReadData", func(t *testing.T) {
-		data, err := config.ReadData(writtenID)
+		data, err := config.ReadDataSource(writtenID)
 		assert.NoError(t, err)
-		assert.NotNil(t, data)
+		assert.Equal(t, "test", data.DataType)
+		assert.Equal(t, "https://example.com", data.URL.String())
+		assert.Equal(t, 10*time.Second, data.PollingInterval)
+		// testing when there is no record for the id that was passed in.
+		t.Logf("testing when there is no record for the id that was passed in. id: %d", writtenID+10)
+		data, err = config.ReadDataSource(writtenID + 10)
+		t.Log("error: ", err)
+		t.Log("data: ", data)
+		assert.Error(t, err)
+		assert.Nil(t, data)
+		// testing when the id is 0 it returns a error.
+		data, err = config.ReadDataSource(0)
+		assert.Nil(t, data)
+		assert.Error(t, err)
+
+		// testing when the id is negative it returns an error.
+		data, err = config.ReadDataSource(-1)
+		assert.Error(t, err)
+		assert.Nil(t, data)
 	})
 }
 

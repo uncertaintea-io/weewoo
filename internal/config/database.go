@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"net/url"
 	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
@@ -69,35 +70,54 @@ func NewDatabaseConfig(conn string) (Config, error) {
 	return &database{db: connection}, nil
 }
 
-func (c *database) ReadData(id int) (*DataSource, error) {
+func (c *database) ReadDataSource(id int) (*DataSource, error) {
 	var dataSource DataSource
 	var pollingIntervalSeconds int
-	err := c.db.QueryRow("SELECT id, data_type, url, polling_interval FROM data_source WHERE id = $1", id).Scan(&dataSource.id, &dataSource.data_type, &dataSource.url, &pollingIntervalSeconds)
+	var urlString string
+	//if the id is less than or equal to 0 it returns a error.
+	if id <= 0 {
+		return nil, fmt.Errorf("id must be greater than 0")
+	}
+	//if the id is a valid id but not in the database it returns a error.
+	if err := c.db.QueryRow("SELECT Id FROM data_source WHERE Id = $1", id).Scan(&id); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, fmt.Errorf("id not found in database")
+		}
+		return nil, err
+	}
+
+	//if the id is a valid id and in the database it returns the data source.
+	err := c.db.QueryRow("SELECT Id, DataType, URL, PollingInterval FROM data_source WHERE Id = $1", id).Scan(&dataSource.Id, &dataSource.DataType, &urlString, &pollingIntervalSeconds)
 	if err != nil {
 		return nil, err
 	}
-	dataSource.polling_interval = time.Duration(pollingIntervalSeconds) * time.Second
+	parsedURL, err := url.Parse(urlString)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse URL string to url.URL: %w", err)
+	}
+	dataSource.URL = *parsedURL
+	dataSource.PollingInterval = time.Duration(pollingIntervalSeconds) * time.Second
 	return &dataSource, nil
 }
 
-func (c *database) WriteData(ds *DataSource) (int, error) {
-	pollingIntervalSeconds := int(ds.polling_interval / time.Second)
-	if ds.id == 0 {
+func (c *database) WriteDataSource(ds *DataSource) (int, error) {
+	pollingIntervalSeconds := int(ds.PollingInterval / time.Second)
+	if ds.Id == 0 {
 		err := c.db.QueryRow(`
-			INSERT INTO data_source (id, data_type, url, polling_interval)
-			VALUES ((SELECT COALESCE(MAX(id), 0) + 1 FROM data_source), $1, $2, $3)
-			RETURNING id
-		`, ds.data_type, ds.url, pollingIntervalSeconds).Scan(&ds.id)
+			INSERT INTO data_source (Id, DataType, URL, PollingInterval)
+			VALUES ((SELECT COALESCE(MAX(Id), 0) + 1 FROM data_source), $1, $2, $3)
+			RETURNING Id
+		`, ds.DataType, ds.URL.String(), pollingIntervalSeconds).Scan(&ds.Id)
 		if err != nil {
 			return 0, fmt.Errorf("failed to insert data source: %w", err)
 		}
-		return ds.id, nil
+		return ds.Id, nil
 	} else {
-		err := c.db.QueryRow("UPDATE data_source SET data_type = $1, url = $2, polling_interval = $3 WHERE id = $4 RETURNING id", ds.data_type, ds.url, pollingIntervalSeconds, ds.id).Scan(&ds.id)
+		err := c.db.QueryRow("UPDATE data_source SET DataType = $1, URL = $2, PollingInterval = $3 WHERE Id = $4 RETURNING Id", ds.DataType, ds.URL.String(), pollingIntervalSeconds, ds.Id).Scan(&ds.Id)
 		if err != nil {
 			return 0, fmt.Errorf("failed to update data source: %w", err)
 		}
-		return ds.id, nil
+		return ds.Id, nil
 	}
 }
 

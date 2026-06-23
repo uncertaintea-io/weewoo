@@ -1,6 +1,7 @@
 package config
 
 import (
+	"net/url"
 	"os"
 	"time"
 
@@ -29,14 +30,14 @@ func ReadSystemSettings(filename string) (*SystemSettings, error) {
 type Config interface {
 	GetConfig(key string) (string, error)
 	SetConfig(key string, value string) error
-	ReadData(id int) (*DataSource, error)
-	WriteData(dataSource *DataSource) (int, error)
+	ReadDataSource(id int) (*DataSource, error)
+	WriteDataSource(dataSource *DataSource) (int, error)
 	Close()
 }
 
 type DataSource struct {
-	id               int
-	data_type        string
-	url              string
-	polling_interval time.Duration
+	Id               int
+	DataType        string
+	URL              url.URL
+	PollingInterval time.Duration
 }
