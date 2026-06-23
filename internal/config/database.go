@@ -78,13 +78,13 @@ func (c *database) ReadDataSource(id int) (*DataSource, error) {
 	if id <= 0 {
 		return nil, fmt.Errorf("id must be greater than 0")
 	}
-	//if the id is a valid id but not in the database it returns a error.
-	if err := c.db.QueryRow("SELECT Id FROM data_source WHERE Id = $1", id).Scan(&id); err != nil {
-		if err == sql.ErrNoRows {
-			return nil, fmt.Errorf("id not found in database")
-		}
-		return nil, err
-	}
+	// //if the id is a valid id but not in the database it returns a error.
+	// if err := c.db.QueryRow("SELECT Id FROM data_source WHERE Id = $1", id).Scan(&id); err != nil {
+	// 	if err == sql.ErrNoRows {
+	// 		return nil, fmt.Errorf("id not found in database")
+	// 	}
+	// 	return nil, err
+	// }
 
 	//if the id is a valid id and in the database it returns the data source.
 	err := c.db.QueryRow("SELECT Id, DataType, URL, PollingInterval FROM data_source WHERE Id = $1", id).Scan(&dataSource.Id, &dataSource.DataType, &urlString, &pollingIntervalSeconds)
