@@ -1,0 +1,21 @@
+{
+  "compilerOptions": {
+    "rootDir":"./src/",
+    "outDir": "./dist/",
+    "sourceMap": true,
+    "module": "es2022",
+    "target": "es2022",
+    "lib": ["es2022", "dom"],
+    "allowJs": true,
+    "pretty": false,
+    "moduleResolution": "bundler",
+    "strictNullChecks": true
+  },
+  "ts-node": {
+    "compilerOptions": {
+      "module": "CommonJS",
+      "moduleResolution": "node"
+    }
+  },
+  "include": ["src/**/*"]
+}

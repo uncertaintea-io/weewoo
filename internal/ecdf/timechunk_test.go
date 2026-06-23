@@ -111,16 +111,16 @@ var (
 )
 
 // The tests below are used to create and validate a "golden" chunk file.
-// This file isn't used in the code or these tests, but it is useful for 
+// This file isn't used in the code or these tests, but it is useful for
 // testing compatibility with internal tools written in other languages.
 
 func TestWriteChunkToDisk(t *testing.T) {
 	t.Skip("skipping write to disk")
-	
+
 	chunk, err := Encode(diskTimestamp, diskX, diskY)
 	require.NoError(t, err)
 	require.NotNil(t, chunk)
-	
+
 	err = os.WriteFile("testdata/chunk.bin", chunk, 0644)
 	require.NoError(t, err)
 }

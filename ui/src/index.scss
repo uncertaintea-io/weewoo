@@ -1,0 +1,123 @@
+    /* Early-2000s vibes: loud, messy, proud */
+    body {
+      margin: 0;
+      background: #20dca387;
+      /* your current color but we go harder below */
+      background-image:
+        radial-gradient(circle, rgba(255, 255, 0, 0.843) 20%, transparent 20%),
+        radial-gradient(circle, rgba(255, 5, 1, 0.84) 20%, transparent 20%);
+      background-size: 40px 40px;
+      background-position: 0 0, 20px 20px;
+      font-family: "Comic Sans MS", "Papyrus", "Impact", Arial, sans-serif;
+      cursor: crosshair;
+    }
+
+    /* Glittery "container" like old sites */
+    .wrap {
+      width: 900px;
+      margin: 12px auto;
+      border: 6px ridge #ff00ff;
+      background: rgba(255, 255, 255, 0.75);
+      box-shadow: 0 0 0 6px #00ffff, 0 0 30px rgba(255, 0, 255, 0.6);
+      padding: 12px;
+    }
+
+    .title {
+      font-family: Impact, "Arial Black", sans-serif;
+      font-size: 54px;
+      color: #4800ff;
+      text-shadow: 3px 3px 0 #00ffea, -3px -3px 0 #ff00ff;
+      margin: 0;
+    }
+
+    .blink {
+      animation: blink 0.7s steps(2, start) infinite;
+      color: #ff0033;
+      font-size: 22px;
+      font-family: "Comic Sans MS", cursive;
+    }
+
+    @keyframes blink {
+      to {
+        visibility: hidden;
+      }
+    }
+
+    /* Rainbow links like a chaos goblin */
+    a {
+      font-weight: bold;
+      text-decoration: underline wavy;
+      padding: 2px 6px;
+      border-radius: 6px;
+    }
+
+    a:link {
+      color: #0000ff;
+      background: #ffff00;
+    }
+
+    a:visited {
+      color: #ff00ff;
+      background: #ccffcc;
+    }
+
+    a:hover {
+      color: #00ff00;
+      background: #000;
+    }
+
+    a:active {
+      color: #ff0000;
+      background: #00ffff;
+    }
+
+    .marq {
+      margin: 10px 0;
+      padding: 6px;
+      border: 4px dashed #ff6600;
+      background: #000;
+      color: #0f0;
+      font-family: "Courier New", monospace;
+      font-size: 18px;
+    }
+
+    .row {
+      display: flex;
+      gap: 12px;
+      align-items: flex-start;
+      flex-wrap: wrap;
+    }
+
+    .box {
+      border: 4px groove #00aaff;
+      background: rgba(255, 255, 255, 0.9);
+      padding: 10px;
+      flex: 1 1 360px;
+      min-width: 320px;
+    }
+
+    .fineprint {
+      font-family: "Times New Roman", serif;
+      font-size: 14px;
+      color: #333;
+    }
+
+    /* Make your image look like "webmaster edited it" */
+    .mainimg {
+      border: 8px outset #ff00ff;
+      image-rendering: pixelated;
+      display: block;
+      margin-top: 8px;
+      max-width: 100%;
+      height: auto;
+    }
+
+    /* Classic “under construction” footer style */
+    .footer {
+      margin-top: 12px;
+      padding: 10px;
+      border-top: 5px double #000;
+      background: #ffe600;
+      font-family: "Comic Sans MS", cursive;
+      text-align: center;
+    }
