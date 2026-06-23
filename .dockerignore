@@ -1,0 +1,14 @@
+.envrc
+.git/
+.github/
+.gocache/
+.gomodcache/
+.venv/
+
+bin/
+docs/
+secrets/
+ui/node_modules/
+
+Dockerfile
+*.code-workspace
