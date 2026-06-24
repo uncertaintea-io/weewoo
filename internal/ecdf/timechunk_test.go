@@ -12,33 +12,33 @@ import (
 func TestCountSamples(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
-		name string
-		input []float64
+		name     string
+		input    []float64
 		expected []Sample
 	}{
 		{
-			name: "empty",
-			input: []float64{},
+			name:     "empty",
+			input:    []float64{},
 			expected: []Sample{},
 		},
 		{
-			name: "single",
-			input: []float64{1},
+			name:     "single",
+			input:    []float64{1},
 			expected: []Sample{{Value: 1, Count: 1}},
 		},
 		{
-			name: "multiple",
-			input: []float64{1, 2, 2, 3, 3, 3},
+			name:     "multiple",
+			input:    []float64{1, 2, 2, 3, 3, 3},
 			expected: []Sample{{Value: 1, Count: 1}, {Value: 2, Count: 2}, {Value: 3, Count: 3}},
 		},
 		{
-			name: "multiple reversed",
-			input: []float64{3, 2, 3, 2, 3, 1},
+			name:     "multiple reversed",
+			input:    []float64{3, 2, 3, 2, 3, 1},
 			expected: []Sample{{Value: 1, Count: 1}, {Value: 2, Count: 2}, {Value: 3, Count: 3}},
 		},
 		{
-			name: "multiple unique",
-			input: []float64{1, 2, 3},
+			name:     "multiple unique",
+			input:    []float64{1, 2, 3},
 			expected: []Sample{{Value: 1, Count: 1}, {Value: 2, Count: 1}, {Value: 3, Count: 1}},
 		},
 	}
@@ -106,21 +106,21 @@ func TestEncodeDecode(t *testing.T) {
 
 var (
 	diskTimestamp = time.Unix(1781561298, 0)
-	diskX = []Sample{{Value: 1, Count: 1}, {Value: 2, Count: 2}}
-	diskY = []Sample{{Value: 3, Count: 3}, {Value: 4, Count: 4}, {Value: 5, Count: 5}}
+	diskX         = []Sample{{Value: 1, Count: 1}, {Value: 2, Count: 2}}
+	diskY         = []Sample{{Value: 3, Count: 3}, {Value: 4, Count: 4}, {Value: 5, Count: 5}}
 )
 
 // The tests below are used to create and validate a "golden" chunk file.
-// This file isn't used in the code or these tests, but it is useful for 
+// This file isn't used in the code or these tests, but it is useful for
 // testing compatibility with internal tools written in other languages.
 
 func TestWriteChunkToDisk(t *testing.T) {
 	t.Skip("skipping write to disk")
-	
+
 	chunk, err := Encode(diskTimestamp, diskX, diskY)
 	require.NoError(t, err)
 	require.NotNil(t, chunk)
-	
+
 	err = os.WriteFile("testdata/chunk.bin", chunk, 0644)
 	require.NoError(t, err)
 }
