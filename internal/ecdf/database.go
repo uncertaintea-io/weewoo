@@ -14,22 +14,30 @@ func NewDatabaseChunkStore(db *sql.DB) ChunkStore {
 }
 
 // WriteChunk writes a time chunk to the database.
-func (c *database) WriteChunk(service_id int, indicator_id int, timestamp time.Time, x, y []Sample) error {
+func (c *database) WriteChunk(service_Id int, indicator_Id int, timestamp time.Time, x, y []Sample) error {
 	chunk, err := Encode(timestamp, x, y)
 	if err != nil {
 		return err
 	}
-	_, err = c.db.Exec("INSERT INTO time_chunk (service_id, indicator_id, \"Timestamp\", chunk) VALUES ($1, $2, $3, $4)", service_id, indicator_id, timestamp, chunk)
-	if err != nil {
-		return err
+	if service_Id == 0 {
+		_, err = c.db.Exec("INSERT INTO time_chunk (service_Id, indicator_Id, \"Timestamp\", chunk) VALUES ($1, $2, $3, $4)", service_Id, indicator_Id, timestamp, chunk)
+		if err != nil {
+			return err
+		}
+		return nil
+	} else {
+		_, err = c.db.Exec("UPDATE time_chunk SET chunk = $1 WHERE service_Id = $2 AND indicator_Id = $3 AND \"Timestamp\" = $4", chunk, service_Id, indicator_Id, timestamp)
+		if err != nil {
+			return err
+		}
+		return nil
 	}
-	return nil
 }
 
 // ReadChunk reads a time chunk from the database.
-func (c *database) ReadChunk(service_id int, indicator_id int, timestamp time.Time) (TimeChunk, error) {
+func (c *database) ReadChunk(service_Id int, indicator_Id int, timestamp time.Time) (TimeChunk, error) {
 	var chunk []byte
-	err := c.db.QueryRow("SELECT chunk FROM time_chunk WHERE service_id = $1 AND indicator_id = $2 AND \"Timestamp\" = $3", service_id, indicator_id, timestamp).Scan(&chunk)
+	err := c.db.QueryRow("SELECT chunk FROM time_chunk WHERE service_Id = $1 AND indicator_Id = $2 AND \"Timestamp\" = $3", service_Id, indicator_Id, timestamp).Scan(&chunk)
 	if err != nil {
 		return TimeChunk{}, err
 	}

@@ -22,8 +22,8 @@ type TimeChunk struct {
 }
 
 type ChunkStore interface {
-	WriteChunk(service_id int, indicator_id int, timestamp time.Time, x, y []Sample) error
-	ReadChunk(service_id int, indicator_id int, timestamp time.Time) (TimeChunk, error)
+	WriteChunk(service_Id int, indicator_Id int, timestamp time.Time, x, y []Sample) error
+	ReadChunk(service_Id int, indicator_Id int, timestamp time.Time) (TimeChunk, error)
 	// ScanGoodChunks(serviceId int, indicatorId int, start, end time.Time, out chan<- TimeChunk) error
 }
 

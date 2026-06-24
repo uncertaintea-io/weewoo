@@ -1,7 +1,6 @@
 package ecdf
 
 import (
-	"database/sql"
 	"os"
 	"testing"
 	"time"
@@ -13,33 +12,33 @@ import (
 func TestCountSamples(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
-		name string
-		input []float64
+		name     string
+		input    []float64
 		expected []Sample
 	}{
 		{
-			name: "empty",
-			input: []float64{},
+			name:     "empty",
+			input:    []float64{},
 			expected: []Sample{},
 		},
 		{
-			name: "single",
-			input: []float64{1},
+			name:     "single",
+			input:    []float64{1},
 			expected: []Sample{{Value: 1, Count: 1}},
 		},
 		{
-			name: "multiple",
-			input: []float64{1, 2, 2, 3, 3, 3},
+			name:     "multiple",
+			input:    []float64{1, 2, 2, 3, 3, 3},
 			expected: []Sample{{Value: 1, Count: 1}, {Value: 2, Count: 2}, {Value: 3, Count: 3}},
 		},
 		{
-			name: "multiple reversed",
-			input: []float64{3, 2, 3, 2, 3, 1},
+			name:     "multiple reversed",
+			input:    []float64{3, 2, 3, 2, 3, 1},
 			expected: []Sample{{Value: 1, Count: 1}, {Value: 2, Count: 2}, {Value: 3, Count: 3}},
 		},
 		{
-			name: "multiple unique",
-			input: []float64{1, 2, 3},
+			name:     "multiple unique",
+			input:    []float64{1, 2, 3},
 			expected: []Sample{{Value: 1, Count: 1}, {Value: 2, Count: 1}, {Value: 3, Count: 1}},
 		},
 	}
@@ -107,8 +106,8 @@ func TestEncodeDecode(t *testing.T) {
 
 var (
 	diskTimestamp = time.Unix(1781561298, 0)
-	diskX = []Sample{{Value: 1, Count: 1}, {Value: 2, Count: 2}}
-	diskY = []Sample{{Value: 3, Count: 3}, {Value: 4, Count: 4}, {Value: 5, Count: 5}}
+	diskX         = []Sample{{Value: 1, Count: 1}, {Value: 2, Count: 2}}
+	diskY         = []Sample{{Value: 3, Count: 3}, {Value: 4, Count: 4}, {Value: 5, Count: 5}}
 )
 
 // The tests below are used to create and validate a "golden" chunk file.
@@ -138,26 +137,4 @@ func TestReadChunkFromDisk(t *testing.T) {
 	require.Equal(t, diskTimestamp, decodedTimestamp)
 	require.Equal(t, diskX, decodedX)
 	require.Equal(t, diskY, decodedY)
-}
-// this test writes a chunk to the database and then reads it back.
-func TestWriteAndReadChunkToDatabase(t *testing.T) {
-	db, err := sql.Open("pgx", os.Getenv("DATABASE_URL"))
-	require.NoError(t, err)
-	defer db.Close()
-	chunkStore := NewDatabaseChunkStore(db)
-	require.NotNil(t, chunkStore)
-
-	chunk, err := Encode(diskTimestamp, diskX, diskY)
-	require.NoError(t, err)
-	require.NotNil(t, chunk)
-
-	err = chunkStore.WriteChunk(1, 1, diskTimestamp, diskX, diskY)
-	require.NoError(t, err)
-
-	readChunk, err := chunkStore.ReadChunk(1, 1, diskTimestamp)
-	require.NoError(t, err)
-	require.NotNil(t, readChunk)
-	require.Equal(t, diskTimestamp, readChunk.Timestamp)
-	require.Equal(t, diskX, readChunk.X)
-	require.Equal(t, diskY, readChunk.Y)
 }

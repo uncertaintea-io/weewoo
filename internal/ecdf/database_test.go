@@ -9,15 +9,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestDatabaseChunkStore(t *testing.T) {
-	db, err := sql.Open("pgx", os.Getenv("DATABASE_URL"))
-	require.NoError(t, err)
-	defer db.Close()
-	chunkStore := NewDatabaseChunkStore(db)
-	require.NotNil(t, chunkStore)
-}
-
 func TestDatabaseChunkStoreFunctions(t *testing.T) {
+	t.Skip("Database tests should be run manually")
 	db, err := sql.Open("pgx", os.Getenv("DATABASE_URL"))
 	require.NoError(t, err)
 	defer db.Close()

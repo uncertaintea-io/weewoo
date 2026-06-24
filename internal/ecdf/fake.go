@@ -13,29 +13,33 @@ func NewFakeChunkStore() ChunkStore {
 	return &fakeChunkStore{chunks: make(map[int]map[int]map[time.Time]TimeChunk)}
 }
 
-func (c *fakeChunkStore) WriteChunk(service_id int, indicator_id int, timestamp time.Time, x, y []Sample) error {
-	if _, ok := c.chunks[service_id]; !ok {
-		c.chunks[service_id] = make(map[int]map[time.Time]TimeChunk)
+func (c *fakeChunkStore) WriteChunk(service_Id int, indicator_Id int, timestamp time.Time, x, y []Sample) error {
+	if _, ok := c.chunks[service_Id]; !ok {
+		c.chunks[service_Id] = make(map[int]map[time.Time]TimeChunk)
 	}
-	if _, ok := c.chunks[service_id][indicator_id]; !ok {
-		c.chunks[service_id][indicator_id] = make(map[time.Time]TimeChunk)
+	if _, ok := c.chunks[service_Id][indicator_Id]; !ok {
+		c.chunks[service_Id][indicator_Id] = make(map[time.Time]TimeChunk)
 	}
-	c.chunks[service_id][indicator_id][timestamp] = TimeChunk{Timestamp: timestamp, X: x, Y: y}
+	c.chunks[service_Id][indicator_Id][timestamp] = TimeChunk{Timestamp: timestamp, X: x, Y: y}
 	return nil
 }
 
-func (c *fakeChunkStore) ReadChunk(service_id int, indicator_id int, timestamp time.Time) (TimeChunk, error) {
-	indicators, ok := c.chunks[service_id]
+var (
+	ChunkNotFoundError = errors.New("chunk not found")
+)
+
+func (c *fakeChunkStore) ReadChunk(service_Id int, indicator_Id int, timestamp time.Time) (TimeChunk, error) {
+	indicators, ok := c.chunks[service_Id]
 	if !ok {
-		return TimeChunk{}, errors.New("chunk not found")
+		return TimeChunk{}, ChunkNotFoundError
 	}
-	chunks, ok := indicators[indicator_id]
+	chunks, ok := indicators[indicator_Id]
 	if !ok {
-		return TimeChunk{}, errors.New("chunk not found")
+		return TimeChunk{}, ChunkNotFoundError
 	}
 	chunk, ok := chunks[timestamp]
 	if !ok {
-		return TimeChunk{}, errors.New("chunk not found")
+		return TimeChunk{}, ChunkNotFoundError
 	}
 	return chunk, nil
 }
