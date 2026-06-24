@@ -1,6 +1,7 @@
 package ecdf
 
 import (
+	"database/sql"
 	"os"
 	"testing"
 	"time"
@@ -111,16 +112,16 @@ var (
 )
 
 // The tests below are used to create and validate a "golden" chunk file.
-// This file isn't used in the code or these tests, but it is useful for 
+// This file isn't used in the code or these tests, but it is useful for
 // testing compatibility with internal tools written in other languages.
 
 func TestWriteChunkToDisk(t *testing.T) {
 	t.Skip("skipping write to disk")
-	
+
 	chunk, err := Encode(diskTimestamp, diskX, diskY)
 	require.NoError(t, err)
 	require.NotNil(t, chunk)
-	
+
 	err = os.WriteFile("testdata/chunk.bin", chunk, 0644)
 	require.NoError(t, err)
 }
@@ -137,4 +138,26 @@ func TestReadChunkFromDisk(t *testing.T) {
 	require.Equal(t, diskTimestamp, decodedTimestamp)
 	require.Equal(t, diskX, decodedX)
 	require.Equal(t, diskY, decodedY)
+}
+// this test writes a chunk to the database and then reads it back.
+func TestWriteAndReadChunkToDatabase(t *testing.T) {
+	db, err := sql.Open("pgx", os.Getenv("DATABASE_URL"))
+	require.NoError(t, err)
+	defer db.Close()
+	chunkStore := NewDatabaseChunkStore(db)
+	require.NotNil(t, chunkStore)
+
+	chunk, err := Encode(diskTimestamp, diskX, diskY)
+	require.NoError(t, err)
+	require.NotNil(t, chunk)
+
+	err = chunkStore.WriteChunk(1, 1, diskTimestamp, diskX, diskY)
+	require.NoError(t, err)
+
+	readChunk, err := chunkStore.ReadChunk(1, 1, diskTimestamp)
+	require.NoError(t, err)
+	require.NotNil(t, readChunk)
+	require.Equal(t, diskTimestamp, readChunk.Timestamp)
+	require.Equal(t, diskX, readChunk.X)
+	require.Equal(t, diskY, readChunk.Y)
 }
