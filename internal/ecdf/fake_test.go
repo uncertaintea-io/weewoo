@@ -37,7 +37,7 @@ func TestFakeChunkStoreFunctions(t *testing.T) {
 
 	t.Run("ReadMissingChunk", func(t *testing.T) {
 		chunk, err := chunkStore.ReadChunk(1, 1, timestamp.Add(time.Second))
-		require.EqualError(t, err, ChunkNotFoundError.Error())
-		require.Empty(t, chunk)
+		require.ErrorIs(t, err, ChunkNotFoundError)
+		require.Equal(t, TimeChunk{}, chunk)
 	})
 }
