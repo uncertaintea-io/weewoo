@@ -1,6 +1,7 @@
 package collection
 
 import (
+	"fmt"
 	"log"
 	"time"
 )
@@ -18,8 +19,8 @@ var WeeWooService = &Service{
 	Id:            1,
 	Name:          "WeeWoo",
 	PrometheusURL: "http://pc0:9090",
-	LoadQuery:     "sum(delta(process_cpu_seconds_total{app=\"weewoo\"}[2m]))",
-	LatencyQuery:  "sum(delta(weewoo_http_request_duration_seconds_count{app=\"weewoo\"}[2m]))",
+	LoadQuery:     "sum(delta(weewoo_http_request_duration_seconds_count{app=\"weewoo\"}[2m]))",
+	LatencyQuery:  "histogram_quantile(0.99,weewoo_http_request_duration_seconds{app=\"weewoo\"}) or on() vector(0)",
 	Interval:      time.Minute,
 }
 
@@ -28,18 +29,25 @@ const (
 	TimeOfDayIndicator   = 2
 )
 
-func NextCollectionTime(service *Service, now time.Time) time.Time {
-	if service == nil || service.Interval <= 0 {
-		return now
+func NextCollectionTime(service *Service, now time.Time) (time.Time, error) {
+	if service == nil {
+		return now, nil
 	}
-	return now.Truncate(service.Interval).Add(service.Interval)
+	if service.Interval <= 0 {
+		return now, fmt.Errorf("collection interval is not set")
+	}
+	return now.Truncate(service.Interval).Add(service.Interval), nil
 }
 
 func (c *collector) Start() {
 	c.mu.Lock()
 	c.running = true
 	if c.service != nil && c.next.IsZero() {
-		c.next = NextCollectionTime(c.service, time.Now())
+		next, err := NextCollectionTime(c.service, time.Now())
+		if err != nil {
+			log.Printf("next collection time: %v", err)
+		}
+		c.next = next
 	}
 	c.mu.Unlock()
 
@@ -58,7 +66,11 @@ func (c *collector) Stop() {
 func (c *collector) Schedule(service *Service) {
 	c.mu.Lock()
 	c.service = service
-	c.next = NextCollectionTime(service, time.Now())
+	next, err := NextCollectionTime(service, time.Now())
+	if err != nil {
+		log.Printf("next collection time: %v", err)
+	}
+	c.next = next
 	c.mu.Unlock()
 	c.signal()
 }
@@ -70,7 +82,10 @@ func (c *collector) run() {
 		service := c.service
 		next := c.next
 		if running && next.IsZero() {
-			next = NextCollectionTime(service, time.Now())
+			next, err := NextCollectionTime(service, time.Now())
+			if err != nil {
+				log.Printf("next collection time: %v", err)
+			}
 			c.next = next
 		}
 		c.mu.Unlock()
@@ -116,7 +131,11 @@ func (c *collector) run() {
 
 		c.mu.Lock()
 		if c.service == service {
-			c.next = NextCollectionTime(service, now)
+			next, err := NextCollectionTime(service, now)
+			if err != nil {
+				log.Printf("next collection time: %v", err)
+			}
+			c.next = next
 		}
 		c.mu.Unlock()
 	}
