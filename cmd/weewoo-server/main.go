@@ -77,7 +77,7 @@ func observeRequestDuration(next http.Handler) http.Handler {
 
 func main() {
 	//Serve files from static folder
-	http.Handle("/", observeRequestDuration(http.FileServer(http.Dir("./static"))))
+	http.Handle("/", observeRequestDuration(http.FileServer(http.Dir("./ui/dist"))))
 
 	monitorPort := ":5000"
 	appPort := ":8080"
