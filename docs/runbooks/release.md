@@ -23,7 +23,7 @@ pre-commit run --all-files
 TAG="v0.2.0"
 
 # Create a tag for the release and push it.
-# This helps prevent new PRs merged to main from sneaking into the release. 
+# This helps prevent new PRs merged to main from sneaking into the release.
 git tag ${TAG}
 git push origin ${TAG}
 
