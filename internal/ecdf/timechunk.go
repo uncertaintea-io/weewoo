@@ -15,6 +15,18 @@ type Sample struct {
 	Count uint64
 }
 
+type TimeChunk struct {
+	Timestamp time.Time
+	X         []Sample
+	Y         []Sample
+}
+
+type ChunkStore interface {
+	WriteChunk(serviceId int, indicatorId int, timestamp time.Time, x, y []Sample) error
+	ReadChunk(serviceId int, indicatorId int, timestamp time.Time) (TimeChunk, error)
+	// ScanGoodChunks(serviceId int, indicatorId int, start, end time.Time, out chan<- TimeChunk) error
+}
+
 // CountSamples converts float64 values into Samples, counting the number of occurrences of each unique value.
 func CountSamples(samples []float64) []Sample {
 	n := len(samples)
