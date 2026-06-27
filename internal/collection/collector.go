@@ -62,18 +62,21 @@ func (c *collector) Stop() {
 }
 
 func (c *collector) Schedule(service *Service) {
-	c.scheduler.AddCallback(service.Interval, func(start time.Time, end time.Time) {
-		c.collectSamples(service, start, end)
+	c.scheduler.AddCallback(service.Id, service.Interval, func(ctx context.Context, start time.Time, end time.Time) IntervalResult {
+		if err := c.collectSamples(ctx, service, start, end); err != nil {
+			return IntervalRetry(err)
+		}
+		return IntervalSuccess()
 	})
 }
 
 // this collects the samples from the prometheus server and writes them to the chunk store
-func (c *collector) collectSamples(service *Service, start, end time.Time) error {
-	loadValue, err := QueryPrometheusRange(context.Background(), c.client, service.PrometheusURL, service.LoadQuery, start, end)
+func (c *collector) collectSamples(ctx context.Context, service *Service, start, end time.Time) error {
+	loadValue, err := QueryPrometheusRange(ctx, c.client, service.PrometheusURL, service.LoadQuery, start, end)
 	if err != nil {
 		return err
 	}
-	latencyValue, err := QueryPrometheusRange(context.Background(), c.client, service.PrometheusURL, service.LatencyQuery, start, end)
+	latencyValue, err := QueryPrometheusRange(ctx, c.client, service.PrometheusURL, service.LatencyQuery, start, end)
 	if err != nil {
 		return err
 	}
