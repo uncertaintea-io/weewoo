@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"log"
 	"net/http"
@@ -13,6 +14,9 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/uncertaintea-io/weewoo/internal/collection"
+	"github.com/uncertaintea-io/weewoo/internal/config"
+	"github.com/uncertaintea-io/weewoo/internal/ecdf"
 )
 
 func NewMetricshandler() http.Handler {
@@ -49,10 +53,10 @@ func (r *statusRecorder) Write(p []byte) (int, error) {
 // requestDuration tracks total app request latency in seconds.
 var requestDuration = promauto.NewHistogramVec(
 	prometheus.HistogramOpts{
-		Namespace: "weewoo",
-		Subsystem: "http",
-		Name:      "request_duration_seconds",
-		Help:      "HTTP request latency in seconds.",
+		Namespace:                   "weewoo",
+		Subsystem:                   "http",
+		Name:                        "request_duration_seconds",
+		Help:                        "HTTP request latency in seconds.",
 		NativeHistogramBucketFactor: 1.1,
 	},
 	[]string{"status_code"},
@@ -76,6 +80,20 @@ func observeRequestDuration(next http.Handler) http.Handler {
 }
 
 func main() {
+	configfile := flag.String("config", "config.yaml", "Config file")
+	flag.Parse()
+	systemSettings, err := config.ReadSystemSettings(*configfile)
+	if err != nil {
+		log.Fatalf("Failed to read system settings: %v", err)
+	}
+	db, err := systemSettings.OpenDatabase()
+	if err != nil {
+		log.Fatalf("Failed to create database config: %v", err)
+	}
+	collector := collection.NewCollector(http.DefaultClient, ecdf.NewDatabaseChunkStore(db), collection.WeeWooService)
+	collector.Schedule(collection.WeeWooService)
+	defer collector.Stop()
+
 	//Serve files from static folder
 	http.Handle("/", observeRequestDuration(http.FileServer(http.Dir("./ui/dist"))))
 
