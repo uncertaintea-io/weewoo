@@ -51,6 +51,7 @@ const (
 	SchedulerEventCallbackDisabled SchedulerEventKind = "callback_disabled"
 	SchedulerEventCallbackResumed  SchedulerEventKind = "callback_resumed"
 	SchedulerEventSchedulerStopped SchedulerEventKind = "scheduler_stopped"
+	MaxBackoffDelay                time.Duration = time.Hour
 )
 
 type SchedulerEvent struct {
@@ -85,22 +86,22 @@ func (p ExponentialBackoffPolicy) Delay(interval time.Duration, attempt int) tim
 	if multiplier <= 0 {
 		multiplier = 2
 	}
-	maxBackOffDelay := p.Max
-	if maxBackOffDelay <= 0 || maxBackOffDelay > time.Hour {
-		maxBackOffDelay = time.Hour
+	maxDelay := p.Max
+	if maxDelay <= 0 || maxDelay > MaxBackoffDelay {
+		maxDelay = MaxBackoffDelay
 	}
-	if interval > 0 && interval < maxBackOffDelay {
-		maxBackOffDelay = interval
+	if interval > 0 && interval < maxDelay {
+		maxDelay = interval
 	}
 	if attempt <= 1 {
-		if initial > maxBackOffDelay {
-			return maxBackOffDelay
+		if initial > maxDelay {
+			return maxDelay
 		}
 		return initial
 	}
 	delay := float64(initial) * math.Pow(multiplier, float64(attempt-1))
-	if delay >= float64(maxBackOffDelay) {
-		return maxBackOffDelay
+	if delay >= float64(maxDelay) {
+		return maxDelay
 	}
 	return time.Duration(delay)
 }

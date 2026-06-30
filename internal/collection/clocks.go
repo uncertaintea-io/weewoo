@@ -17,6 +17,10 @@ type SchedulerTimer interface {
 
 type realClock struct{}
 
+func NewRealClock() SchedulerClock {
+	return &realClock{}
+}
+
 func (realClock) Now() time.Time {
 	return time.Now()
 }
@@ -41,26 +45,26 @@ func (t realTimer) Stop() bool {
 	return active
 }
 
-type fakeClock struct {
+type FakeClock struct {
 	mu     sync.Mutex
 	now    time.Time
-	timers []*fakeTimer
+	timers []*FakeTimer
 }
 
-func newFakeClock(now time.Time) *fakeClock {
-	return &fakeClock{now: now}
+func NewFakeClock(now time.Time) *FakeClock {
+	return &FakeClock{now: now}
 }
 
-func (c *fakeClock) Now() time.Time {
+func (c *FakeClock) Now() time.Time {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.now
 }
 
-func (c *fakeClock) NewTimer(d time.Duration) SchedulerTimer {
+func (c *FakeClock) NewTimer(d time.Duration) SchedulerTimer {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	timer := &fakeTimer{
+	timer := &FakeTimer{
 		ch:  make(chan time.Time, 1),
 		due: c.now.Add(d),
 	}
@@ -71,11 +75,11 @@ func (c *fakeClock) NewTimer(d time.Duration) SchedulerTimer {
 	return timer
 }
 
-func (c *fakeClock) Advance(d time.Duration) {
+func (c *FakeClock) Advance(d time.Duration) {
 	c.mu.Lock()
 	c.now = c.now.Add(d)
 	now := c.now
-	timers := append([]*fakeTimer(nil), c.timers...)
+	timers := append([]*FakeTimer(nil), c.timers...)
 	c.mu.Unlock()
 
 	for _, timer := range timers {
@@ -83,7 +87,7 @@ func (c *fakeClock) Advance(d time.Duration) {
 	}
 }
 
-type fakeTimer struct {
+type FakeTimer struct {
 	mu      sync.Mutex
 	ch      chan time.Time
 	due     time.Time
@@ -91,11 +95,11 @@ type fakeTimer struct {
 	fired   bool
 }
 
-func (t *fakeTimer) C() <-chan time.Time {
+func (t *FakeTimer) C() <-chan time.Time {
 	return t.ch
 }
 
-func (t *fakeTimer) Stop() bool {
+func (t *FakeTimer) Stop() bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	active := !t.stopped && !t.fired
@@ -103,7 +107,7 @@ func (t *fakeTimer) Stop() bool {
 	return active
 }
 
-func (t *fakeTimer) fireIfDue(now time.Time) {
+func (t *FakeTimer) fireIfDue(now time.Time) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.stopped || t.fired || t.due.After(now) {
@@ -116,7 +120,7 @@ func (t *fakeTimer) fireIfDue(now time.Time) {
 	}
 }
 
-func (t *fakeTimer) fire(now time.Time) {
+func (t *FakeTimer) fire(now time.Time) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.stopped || t.fired {

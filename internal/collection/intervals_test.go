@@ -22,7 +22,7 @@ func (b fixedBackoff) Delay(time.Duration, int) time.Duration {
 	return time.Duration(b)
 }
 
-func newTestScheduler(clock *fakeClock, options ...SchedulerOption) *IntervalScheduler {
+func newTestScheduler(clock *FakeClock, options ...SchedulerOption) *IntervalScheduler {
 	opts := []SchedulerOption{
 		WithSchedulerClock(clock),
 		WithSchedulerEventHandler(nil),
@@ -53,7 +53,7 @@ func assertNoWindow(t *testing.T, windows <-chan testWindow) {
 }
 
 func TestIntervalSchedulerColdStartUsesNextBoundary(t *testing.T) {
-	clock := newFakeClock(time.Date(2026, 1, 1, 12, 0, 30, 0, time.UTC))
+	clock := NewFakeClock(time.Date(2026, 1, 1, 12, 0, 30, 0, time.UTC))
 	scheduler := newTestScheduler(clock)
 	defer scheduler.Stop()
 
@@ -72,7 +72,7 @@ func TestIntervalSchedulerColdStartUsesNextBoundary(t *testing.T) {
 }
 
 func TestIntervalSchedulerRealignsWindowsOnIntervalUpdate(t *testing.T) {
-	clock := newFakeClock(time.Date(2026, 1, 1, 12, 1, 0, 0, time.UTC))
+	clock := NewFakeClock(time.Date(2026, 1, 1, 12, 1, 0, 0, time.UTC))
 	scheduler := newTestScheduler(clock)
 	defer scheduler.Stop()
 
@@ -101,7 +101,7 @@ func TestIntervalSchedulerRealignsWindowsOnIntervalUpdate(t *testing.T) {
 }
 
 func TestIntervalSchedulerRetryDoesNotBlockOtherCallbackIDs(t *testing.T) {
-	clock := newFakeClock(time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC))
+	clock := NewFakeClock(time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC))
 	scheduler := newTestScheduler(clock)
 	defer scheduler.Stop()
 
@@ -143,7 +143,7 @@ func TestIntervalSchedulerRetryDoesNotBlockOtherCallbackIDs(t *testing.T) {
 }
 
 func TestIntervalSchedulerPermanentFailureResumesFromLastEndOnUpdate(t *testing.T) {
-	clock := newFakeClock(time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC))
+	clock := NewFakeClock(time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC))
 	scheduler := newTestScheduler(clock)
 	defer scheduler.Stop()
 
@@ -172,7 +172,7 @@ func TestIntervalSchedulerPermanentFailureResumesFromLastEndOnUpdate(t *testing.
 }
 
 func TestIntervalSchedulerStopCancelsAndWaitsForInFlightCallbacks(t *testing.T) {
-	clock := newFakeClock(time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC))
+	clock := NewFakeClock(time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC))
 	scheduler := newTestScheduler(clock)
 
 	started := make(chan struct{})

@@ -22,14 +22,14 @@ func TestRealTimer(t *testing.T) {
 }
 
 func TestFakeClock(t *testing.T) {
-	clock := newFakeClock(time.Now())
+	clock := NewFakeClock(time.Now())
 	now := clock.Now()
 	assert.True(t, now.After(time.Now().Add(-time.Second)), "now should be after the current time minus one second")
 	assert.True(t, now.Before(time.Now().Add(time.Second)), "now should be before the current time plus one second")
 }
 
 func TestFakeTimer(t *testing.T) {
-	clock := newFakeClock(time.Now())
+	clock := NewFakeClock(time.Now())
 	timer := clock.NewTimer(time.Second)
 	clock.Advance(time.Second)
 	assert.True(t, <-timer.C() != (time.Time{}), "timer should fire after one second")
@@ -37,7 +37,7 @@ func TestFakeTimer(t *testing.T) {
 }
 
 func TestFakeTimerStopBeforeFire(t *testing.T) {
-	clock := newFakeClock(time.Now())
+	clock := NewFakeClock(time.Now())
 	timer := clock.NewTimer(time.Second)
 	assert.True(t, timer.Stop(), "active timer should be stopped")
 	clock.Advance(time.Second)
