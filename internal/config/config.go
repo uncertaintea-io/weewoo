@@ -1,6 +1,7 @@
 package config
 
 import (
+	"database/sql"
 	"net/url"
 	"os"
 	"time"
@@ -12,6 +13,14 @@ import (
 // this struct tells config how to connect to the database using yaml files
 type SystemSettings struct {
 	DatabaseURL string `yaml:"database_url"`
+}
+
+func (s *SystemSettings) OpenDatabase() (*sql.DB, error) {
+	db, err := sql.Open("pgx", s.DatabaseURL)
+	if err != nil {
+		return nil, err
+	}
+	return db, nil
 }
 
 func ReadSystemSettings(filename string) (*SystemSettings, error) {
@@ -36,8 +45,8 @@ type Config interface {
 }
 
 type DataSource struct {
-	Id               int
+	Id              int
 	DataType        string
-	URL              url.URL
+	URL             url.URL
 	PollingInterval time.Duration
 }

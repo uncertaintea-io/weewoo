@@ -2,6 +2,7 @@ package collection
 
 import (
 	"context"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -21,7 +22,7 @@ var WeeWooService = &Service{
 	Id:            1,
 	Name:          "WeeWoo",
 	PrometheusURL: "http://pc0:9090",
-	LoadQuery:     "sum(delta(weewoo_http_request_duration_seconds_count{app=\"weewoo\"}[2m]))",
+	LoadQuery:     "rate(histogram_count(sum by (app) (weewoo_http_request_duration_seconds{app=\"weewoo\"}))[45s:]) * 15",
 	LatencyQuery:  "histogram_quantile(0.99,weewoo_http_request_duration_seconds{app=\"weewoo\"}) or on() vector(0)",
 	Interval:      time.Minute,
 }
@@ -63,6 +64,7 @@ func (c *collector) Stop() {
 
 func (c *collector) Schedule(service *Service) {
 	c.scheduler.AddCallback(service.Id, service.Interval, func(ctx context.Context, start time.Time, end time.Time) IntervalResult {
+		slog.Info("Collecting sample", "service", service.Name, "start", start, "end", end)
 		if err := c.collectSamples(ctx, service, start, end); err != nil {
 			return IntervalRetry(err)
 		}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"math"
 	"net/http"
 	"net/url"
@@ -74,8 +75,8 @@ func QueryPrometheusRange(ctx context.Context, client *http.Client, baseURL, pro
 	var pr promRangeResponse
 	if err := queryPrometheus(ctx, client, baseURL, promRangeEndpoint, url.Values{
 		"query": {promQL},
-		"start": {start.Format(time.RFC3339)},
-		"end":   {end.Format(time.RFC3339)},
+		"start": {strconv.FormatInt(start.Unix(), 10)},
+		"end":   {strconv.FormatInt(end.Unix(), 10)},
 		"step":  {promRangeStep},
 	}, &pr); err != nil {
 		return nil, err
@@ -122,7 +123,7 @@ func queryPrometheus(
 		}
 	}
 	u.RawQuery = q.Encode()
-
+	slog.Info("Querying Prometheus", "url", u.String())
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {
 		return err
@@ -139,10 +140,17 @@ func queryPrometheus(
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		slog.Error("Prometheus query failed", "status", resp.StatusCode)
 		return fmt.Errorf("prometheus returned HTTP %d", resp.StatusCode)
 	}
 
-	return json.NewDecoder(resp.Body).Decode(target)
+	err = json.NewDecoder(resp.Body).Decode(target)
+	if err != nil {
+		slog.Error("Failed to decode Prometheus response", "error", err)
+		return err
+	}
+	slog.Info("Prometheus response decoded", "target", target)
+	return nil
 }
 
 func parsePromSample(sample promSample) (float64, error) {
