@@ -80,8 +80,6 @@ func observeRequestDuration(next http.Handler) http.Handler {
 }
 
 func main() {
-
-	//TODO: add a flag that provides a path for the config file to load
 	configfile := flag.String("config", "config.yaml", "Config file")
 	flag.Parse()
 	systemSettings, err := config.ReadSystemSettings(*configfile)
