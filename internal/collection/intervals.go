@@ -85,22 +85,22 @@ func (p ExponentialBackoffPolicy) Delay(interval time.Duration, attempt int) tim
 	if multiplier <= 0 {
 		multiplier = 2
 	}
-	maxDelay := p.Max
-	if maxDelay <= 0 || maxDelay > time.Minute {
-		maxDelay = time.Minute
+	maxBackOffDelay := p.Max
+	if maxBackOffDelay <= 0 || maxBackOffDelay > time.Hour {
+		maxBackOffDelay = time.Hour
 	}
-	if interval > 0 && interval < maxDelay {
-		maxDelay = interval
+	if interval > 0 && interval < maxBackOffDelay {
+		maxBackOffDelay = interval
 	}
 	if attempt <= 1 {
-		if initial > maxDelay {
-			return maxDelay
+		if initial > maxBackOffDelay {
+			return maxBackOffDelay
 		}
 		return initial
 	}
 	delay := float64(initial) * math.Pow(multiplier, float64(attempt-1))
-	if delay >= float64(maxDelay) {
-		return maxDelay
+	if delay >= float64(maxBackOffDelay) {
+		return maxBackOffDelay
 	}
 	return time.Duration(delay)
 }
@@ -108,12 +108,12 @@ func (p ExponentialBackoffPolicy) Delay(interval time.Duration, attempt int) tim
 type SchedulerOption func(*schedulerOptions)
 
 type schedulerOptions struct {
-	clock   schedulerClock
+	clock   SchedulerClock
 	backoff BackoffPolicy
 	events  SchedulerEventHandler
 }
 
-func WithSchedulerClock(clock schedulerClock) SchedulerOption {
+func WithSchedulerClock(clock SchedulerClock) SchedulerOption {
 	return func(opts *schedulerOptions) {
 		if clock != nil {
 			opts.clock = clock
@@ -147,34 +147,6 @@ func WithLastEnd(t time.Time) CallbackOption {
 		opts.lastEnd = t
 		opts.hasLastEnd = true
 	}
-}
-
-type schedulerClock interface {
-	Now() time.Time
-	NewTimer(time.Duration) schedulerTimer
-}
-
-type schedulerTimer interface {
-	C() <-chan time.Time
-	Stop() bool
-}
-
-type realClock struct{}
-
-func (realClock) Now() time.Time {
-	return time.Now()
-}
-
-func (realClock) NewTimer(d time.Duration) schedulerTimer {
-	return realTimer{Timer: time.NewTimer(d)}
-}
-
-type realTimer struct {
-	*time.Timer
-}
-
-func (t realTimer) C() <-chan time.Time {
-	return t.Timer.C
 }
 
 type IntervalScheduler struct {
@@ -313,7 +285,7 @@ func (s *IntervalScheduler) Stop() {
 func (s *IntervalScheduler) run(opts schedulerOptions) {
 	states := map[int]*callbackState{}
 	var stopReq *stopSchedulerRequest
-	var timer schedulerTimer
+	var timer SchedulerTimer
 	var timerC <-chan time.Time
 	defer func() {
 		if timer != nil {
