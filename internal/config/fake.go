@@ -7,12 +7,13 @@ import (
 
 // a new fake config should be initially empty
 func NewFakeConfig() Config {
-	return &fakeConfig{config: map[string]string{}, dataSources: map[int]*DataSource{}}
+	return &fakeConfig{config: map[string]string{}, dataSources: map[int]*DataSource{}, services: map[int]*Service{}}
 }
 
 type fakeConfig struct {
-	config map[string]string
+	config      map[string]string
 	dataSources map[int]*DataSource
+	services    map[int]*Service
 }
 
 func (c *fakeConfig) GetConfig(key string) (string, error) {
@@ -45,7 +46,23 @@ func (c *fakeConfig) WriteDataSource(dataSource *DataSource) (int, error) {
 	return dataSource.Id, nil
 }
 
+func (c *fakeConfig) WriteService(service *Service) (int, error) {
+	if service.Id == 0 {
+		service.Id = len(c.services) + 1
+	}
+	c.services[service.Id] = service
+	return service.Id, nil
+}
+
+func (c *fakeConfig) ReadService(id int) (*Service, error) {
+	if _, ok := c.services[id]; !ok {
+		return nil, fmt.Errorf("id not found in database")
+	}
+	return c.services[id], nil
+}
+
 func (c *fakeConfig) Close() {
 	c.config = nil
 	c.dataSources = nil
+	c.services = nil
 }

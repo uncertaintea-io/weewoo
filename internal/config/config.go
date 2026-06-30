@@ -41,6 +41,8 @@ type Config interface {
 	SetConfig(key string, value string) error
 	ReadDataSource(id int) (*DataSource, error)
 	WriteDataSource(dataSource *DataSource) (int, error)
+	WriteService(service *Service) (int, error)
+	ReadService(id int) (*Service, error)
 	Close()
 }
 
@@ -49,4 +51,9 @@ type DataSource struct {
 	DataType        string
 	URL             url.URL
 	PollingInterval time.Duration
+}
+
+type Service struct {
+	Id   int
+	Name string
 }

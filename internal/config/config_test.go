@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // this is one testing function that tests both getConfig and setConfig making them deterministic. allowing set to be first and then get to be second.
@@ -63,7 +64,8 @@ func testDataSourceFunctions(t *testing.T, config Config) {
 	// testing readData.
 	t.Run("ReadData", func(t *testing.T) {
 		data, err := config.ReadDataSource(writtenID)
-		assert.NoError(t, err)
+		require.NoError(t, err)
+		require.NotNil(t, data)
 		assert.Equal(t, "test", data.DataType)
 		assert.Equal(t, "https://example.com", data.URL.String())
 		assert.Equal(t, 10*time.Second, data.PollingInterval)
@@ -81,6 +83,44 @@ func testDataSourceFunctions(t *testing.T, config Config) {
 
 		// testing when the id is negative it returns an error.
 		data, err = config.ReadDataSource(-1)
+		assert.Error(t, err)
+		assert.Nil(t, data)
+	})
+}
+
+func testServiceFunctions(t *testing.T, config Config) {
+	var writtenID int
+	name := "test"
+
+	// testing writeService on a counter for the id. also tests what happens when there is no record for the id that was passed in.
+	t.Run("WriteService", func(t *testing.T) {
+		id, err := config.WriteService(&Service{
+			Name: name,
+		})
+		assert.NoError(t, err)
+		assert.NotEqual(t, 0, id)
+		writtenID = id
+	})
+	// testing readService.
+	t.Run("ReadService", func(t *testing.T) {
+		data, err := config.ReadService(writtenID)
+		require.NoError(t, err)
+		require.NotNil(t, data)
+		assert.Equal(t, name, data.Name)
+		// testing when there is no record for the id that was passed in.
+		t.Logf("testing when there is no record for the id that was passed in. id: %d", writtenID+10)
+		data, err = config.ReadService(writtenID + 10)
+		t.Log("error: ", err)
+		t.Log("data: ", data)
+		assert.Error(t, err)
+		assert.Nil(t, data)
+		// testing when the id is 0 it returns a error.
+		data, err = config.ReadService(0)
+		assert.Nil(t, data)
+		assert.Error(t, err)
+
+		// testing when the id is negative it returns an error.
+		data, err = config.ReadService(-1)
 		assert.Error(t, err)
 		assert.Nil(t, data)
 	})

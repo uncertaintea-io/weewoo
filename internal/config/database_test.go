@@ -40,4 +40,5 @@ func TestGetConfigDatabase(t *testing.T) {
 	defer config.Close()
 	testConfigFunctions(t, config)
 	testDataSourceFunctions(t, config)
+	testServiceFunctions(t, config)
 }

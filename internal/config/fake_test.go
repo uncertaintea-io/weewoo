@@ -17,3 +17,10 @@ func TestDataSourceFunctionsFake(t *testing.T) {
 
 	testDataSourceFunctions(t, config)
 }
+
+func TestServiceFunctionsFake(t *testing.T) {
+	config := NewFakeConfig()
+	defer config.Close()
+
+	testServiceFunctions(t, config)
+}

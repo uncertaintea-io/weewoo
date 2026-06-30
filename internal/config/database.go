@@ -114,6 +114,41 @@ func (c *database) WriteDataSource(ds *DataSource) (int, error) {
 	}
 }
 
+// writes a service to the database. if the id is 0 it inserts a new service, otherwise it updates the existing service.
+func (c *database) WriteService(service *Service) (int, error) {
+	// makes sure the id is not inserted at 0. if it is 0, it inserts a new service at a non zero id
+	if service.Id == 0 {
+		err := c.db.QueryRow(`
+			INSERT INTO service (id, "name")
+			VALUES ((SELECT COALESCE(MAX(id), 0) + 1 FROM service), $1)
+			RETURNING id
+		`, service.Name).Scan(&service.Id)
+		if err != nil {
+			return 0, fmt.Errorf("failed to insert service: %w", err)
+		}
+		return service.Id, nil
+	} else {
+		err := c.db.QueryRow("UPDATE service SET \"name\" = $1 WHERE id = $2 RETURNING id", service.Name, service.Id).Scan(&service.Id)
+		if err != nil {
+			return 0, fmt.Errorf("failed to update service: %w", err)
+		}
+		return service.Id, nil
+	}
+}
+
+// reads a service from the database.
+func (c *database) ReadService(id int) (*Service, error) {
+	var service Service
+	if id <= 0 {
+		return nil, fmt.Errorf("id must be greater than 0")
+	}
+	err := c.db.QueryRow("SELECT id, \"name\" FROM service WHERE id = $1", id).Scan(&service.Id, &service.Name)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read service: %w", err)
+	}
+	return &service, nil
+}
+
 func (c *database) Close() {
 	c.db.Close()
 }
