@@ -59,5 +59,5 @@ type Service struct {
 	PrometheusURL   string
 	LoadQuery       string
 	LatencyQuery    string
-	IntervalSeconds int
+	IntervalSeconds time.Duration
 }

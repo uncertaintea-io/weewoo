@@ -65,9 +65,10 @@ func testDataSourceFunctions(t *testing.T, config Config) {
 	})
 	// testing readData.
 	t.Run("ReadData", func(t *testing.T) {
+		require.NotZero(t, writtenID)
 		data, err := config.ReadDataSource(writtenID)
 		assert.NoError(t, err)
-		assert.NotNil(t, data)
+		require.NotNil(t, data)
 		assert.Equal(t, "test", data.DataType)
 		assert.Equal(t, "https://example.com", data.URL.String())
 		assert.Equal(t, 10*time.Second, data.PollingInterval)
@@ -101,7 +102,7 @@ func testServiceFunctions(t *testing.T, config Config) {
 			PrometheusURL:   "http://example.com",
 			LoadQuery:       "load_query",
 			LatencyQuery:    "latency_query",
-			IntervalSeconds: 10,
+			IntervalSeconds: 10 * time.Second,
 		}
 		err := config.WriteService(service)
 		require.NoError(t, err)
@@ -112,12 +113,12 @@ func testServiceFunctions(t *testing.T, config Config) {
 	t.Run("ReadService", func(t *testing.T) {
 		data, err := config.ReadService(writtenID)
 		assert.NoError(t, err)
-		assert.NotNil(t, data)
+		require.NotNil(t, data)
 		assert.Equal(t, name, data.Name)
 		assert.Equal(t, "http://example.com", data.PrometheusURL)
 		assert.Equal(t, "load_query", data.LoadQuery)
 		assert.Equal(t, "latency_query", data.LatencyQuery)
-		assert.Equal(t, 10, data.IntervalSeconds)
+		assert.Equal(t, 10*time.Second, data.IntervalSeconds)
 		// testing when there is no record for the id that was passed in.
 		t.Logf("testing when there is no record for the id that was passed in. id: %d", writtenID+10)
 		data, err = config.ReadService(writtenID + 10)
