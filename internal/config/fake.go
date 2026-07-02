@@ -38,20 +38,20 @@ func (c *fakeConfig) ReadDataSource(id int) (*DataSource, error) {
 	return c.dataSources[id], nil
 }
 
-func (c *fakeConfig) WriteDataSource(dataSource *DataSource) (int, error) {
+func (c *fakeConfig) WriteDataSource(dataSource *DataSource) error {
 	if dataSource.Id == 0 {
 		dataSource.Id = len(c.dataSources) + 1
 	}
 	c.dataSources[dataSource.Id] = dataSource
-	return dataSource.Id, nil
+	return nil
 }
 
-func (c *fakeConfig) WriteService(service *Service) (int, error) {
+func (c *fakeConfig) WriteService(service *Service) error {
 	if service.Id == 0 {
 		service.Id = len(c.services) + 1
 	}
 	c.services[service.Id] = service
-	return service.Id, nil
+	return nil
 }
 
 func (c *fakeConfig) ReadService(id int) (*Service, error) {

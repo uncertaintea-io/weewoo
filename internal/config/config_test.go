@@ -52,20 +52,22 @@ func testDataSourceFunctions(t *testing.T, config Config) {
 
 	// testing writeData on a counter for the id. also tests what happens when there is no record for the id that was passed in.
 	t.Run("WriteData", func(t *testing.T) {
-		id, err := config.WriteDataSource(&DataSource{
+		ds := &DataSource{
 			DataType:        "test",
 			URL:             u,
 			PollingInterval: 10 * time.Second,
-		})
-		assert.NoError(t, err)
-		assert.NotEqual(t, 0, id)
-		writtenID = id
+		}
+
+		err := config.WriteDataSource(ds)
+		require.NoError(t, err)
+		require.NotZero(t, ds.Id)
+		writtenID = ds.Id
 	})
 	// testing readData.
 	t.Run("ReadData", func(t *testing.T) {
 		data, err := config.ReadDataSource(writtenID)
-		require.NoError(t, err)
-		require.NotNil(t, data)
+		assert.NoError(t, err)
+		assert.NotNil(t, data)
 		assert.Equal(t, "test", data.DataType)
 		assert.Equal(t, "https://example.com", data.URL.String())
 		assert.Equal(t, 10*time.Second, data.PollingInterval)
@@ -94,19 +96,28 @@ func testServiceFunctions(t *testing.T, config Config) {
 
 	// testing writeService on a counter for the id. also tests what happens when there is no record for the id that was passed in.
 	t.Run("WriteService", func(t *testing.T) {
-		id, err := config.WriteService(&Service{
-			Name: name,
-		})
-		assert.NoError(t, err)
-		assert.NotEqual(t, 0, id)
-		writtenID = id
+		service := &Service{
+			Name:            name,
+			PrometheusURL:   "http://example.com",
+			LoadQuery:       "load_query",
+			LatencyQuery:    "latency_query",
+			IntervalSeconds: 10,
+		}
+		err := config.WriteService(service)
+		require.NoError(t, err)
+		require.NotZero(t, service.Id)
+		writtenID = service.Id
 	})
 	// testing readService.
 	t.Run("ReadService", func(t *testing.T) {
 		data, err := config.ReadService(writtenID)
-		require.NoError(t, err)
-		require.NotNil(t, data)
+		assert.NoError(t, err)
+		assert.NotNil(t, data)
 		assert.Equal(t, name, data.Name)
+		assert.Equal(t, "http://example.com", data.PrometheusURL)
+		assert.Equal(t, "load_query", data.LoadQuery)
+		assert.Equal(t, "latency_query", data.LatencyQuery)
+		assert.Equal(t, 10, data.IntervalSeconds)
 		// testing when there is no record for the id that was passed in.
 		t.Logf("testing when there is no record for the id that was passed in. id: %d", writtenID+10)
 		data, err = config.ReadService(writtenID + 10)

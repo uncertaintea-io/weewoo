@@ -40,8 +40,8 @@ type Config interface {
 	GetConfig(key string) (string, error)
 	SetConfig(key string, value string) error
 	ReadDataSource(id int) (*DataSource, error)
-	WriteDataSource(dataSource *DataSource) (int, error)
-	WriteService(service *Service) (int, error)
+	WriteDataSource(dataSource *DataSource) error
+	WriteService(service *Service) error
 	ReadService(id int) (*Service, error)
 	Close()
 }
@@ -54,6 +54,10 @@ type DataSource struct {
 }
 
 type Service struct {
-	Id   int
-	Name string
+	Id              int
+	Name            string
+	PrometheusURL   string
+	LoadQuery       string
+	LatencyQuery    string
+	IntervalSeconds int
 }
