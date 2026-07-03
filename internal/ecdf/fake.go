@@ -1,13 +1,14 @@
 package ecdf
 
 import (
+	"context"
 	"slices"
 	"time"
 )
 
 type fakeEntry struct {
-	timestamp   time.Time
-	chunk       []byte
+	timestamp time.Time
+	chunk     []byte
 }
 
 func (c *fakeEntry) Compare(other *fakeEntry) int {
@@ -28,7 +29,7 @@ func (c *fakeChunkStore) WriteChunk(serviceId int, indicatorId int, timestamp ti
 	}
 	entry := &fakeEntry{timestamp: timestamp, chunk: chunk}
 	entries := c.chunks[serviceId][indicatorId]
-	i,found := slices.BinarySearchFunc(entries, entry, (*fakeEntry).Compare)
+	i, found := slices.BinarySearchFunc(entries, entry, (*fakeEntry).Compare)
 	if found {
 		entries[i] = entry
 	} else {
@@ -47,7 +48,7 @@ func (c *fakeChunkStore) ReadChunk(serviceId int, indicatorId int, timestamp tim
 	if !ok {
 		return nil, ChunkNotFoundError
 	}
-	i, found := slices.BinarySearchFunc(entries, timestamp, func (entry *fakeEntry, timestamp time.Time) int {
+	i, found := slices.BinarySearchFunc(entries, timestamp, func(entry *fakeEntry, timestamp time.Time) int {
 		return entry.timestamp.Compare(timestamp)
 	})
 	if !found {
@@ -56,7 +57,7 @@ func (c *fakeChunkStore) ReadChunk(serviceId int, indicatorId int, timestamp tim
 	return entries[i].chunk, nil
 }
 
-func (c *fakeChunkStore) ScanGoodChunks(serviceId int, indicatorId int, start, end time.Time, out chan<- []byte) error {
+func (c *fakeChunkStore) ScanGoodChunks(ctx context.Context, serviceId int, indicatorId int, start, end time.Time, out chan<- []byte) error {
 	indicators, ok := c.chunks[serviceId]
 	if !ok {
 		return nil
@@ -72,7 +73,11 @@ func (c *fakeChunkStore) ScanGoodChunks(serviceId int, indicatorId int, start, e
 		if entry.timestamp.After(end) {
 			break
 		}
-		out <- entry.chunk
+		select {
+		case out <- entry.chunk:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 	}
 	return nil
 }

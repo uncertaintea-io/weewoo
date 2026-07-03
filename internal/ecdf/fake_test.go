@@ -1,6 +1,7 @@
 package ecdf
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -43,7 +44,7 @@ func TestFakeChunkStoreFunctions(t *testing.T) {
 		done <- struct{}{}
 	}()
 
-	err = chunkStore.ScanGoodChunks(1, 1, t1.Add(-time.Second), t2.Add(time.Second), out)
+	err = chunkStore.ScanGoodChunks(context.Background(), 1, 1, t1.Add(-time.Second), t2.Add(time.Second), out)
 	assert.NoError(t, err)
 	close(out)
 	<-done

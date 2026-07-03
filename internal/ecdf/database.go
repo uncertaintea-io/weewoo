@@ -1,6 +1,7 @@
 package ecdf
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"time"
@@ -44,9 +45,9 @@ func (c *database) ReadChunk(serviceId int, indicatorId int, timestamp time.Time
 }
 
 // ScanGoodChunks finds all chunks from "good" samples in a given time range.
-func (c *database) ScanGoodChunks(serviceId int, indicatorId int, start, end time.Time, out chan<- []byte) error {
+func (c *database) ScanGoodChunks(ctx context.Context, serviceId int, indicatorId int, start, end time.Time, out chan<- []byte) error {
 	// TODO: filter by good chunks
-	rows, err := c.db.Query("SELECT chunk FROM time_chunk WHERE service_id = $1 AND indicator_id = $2 AND \"timestamp\" BETWEEN $3 AND $4", serviceId, indicatorId, start, end)
+	rows, err := c.db.QueryContext(ctx, "SELECT chunk FROM time_chunk WHERE service_id = $1 AND indicator_id = $2 AND \"timestamp\" BETWEEN $3 AND $4", serviceId, indicatorId, start, end)
 	if err != nil {
 		return err
 	}
@@ -57,7 +58,14 @@ func (c *database) ScanGoodChunks(serviceId int, indicatorId int, start, end tim
 		if err != nil {
 			return err
 		}
-		out <- chunk
+		select {
+		case out <- chunk:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
 	}
 	return nil
 }
