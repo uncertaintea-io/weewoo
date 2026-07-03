@@ -15,12 +15,8 @@ func NewDatabaseChunkStore(db *sql.DB) ChunkStore {
 }
 
 // WriteChunk writes a time chunk to the database.
-func (c *database) WriteChunk(serviceId int, indicatorId int, timestamp time.Time, x, y []Sample) error {
-	chunk, err := Encode(timestamp, x, y)
-	if err != nil {
-		return err
-	}
-	_, err = c.db.Exec(`
+func (c *database) WriteChunk(serviceId int, indicatorId int, timestamp time.Time, chunk []byte) error {
+	_, err := c.db.Exec(`
 			WITH updated AS (
 				UPDATE time_chunk
 				SET chunk = $1
@@ -38,38 +34,30 @@ func (c *database) WriteChunk(serviceId int, indicatorId int, timestamp time.Tim
 }
 
 // ReadChunk reads a time chunk from the database.
-func (c *database) ReadChunk(serviceId int, indicatorId int, timestamp time.Time) (TimeChunk, error) {
+func (c *database) ReadChunk(serviceId int, indicatorId int, timestamp time.Time) ([]byte, error) {
 	var chunk []byte
 	err := c.db.QueryRow("SELECT chunk FROM time_chunk WHERE service_id = $1 AND indicator_id = $2 AND \"timestamp\" = $3", serviceId, indicatorId, timestamp).Scan(&chunk)
 	if err != nil {
-		return TimeChunk{}, fmt.Errorf("failed to read chunk: %w", err)
+		return nil, fmt.Errorf("failed to read chunk: %w", err)
 	}
-	timestamp, x, y, err := Decode(chunk)
-	if err != nil {
-		return TimeChunk{}, fmt.Errorf("failed to decode chunk: %w", err)
-	}
-	return TimeChunk{Timestamp: timestamp, X: x, Y: y}, nil
+	return chunk, nil
 }
 
-// ScanGoodChunks scans by using readchunks and filtering for good chunks in the database.
-// TODO: not needed yet because we don't have a good way to filter good chunks yet.
-// func (c *database) ScanGoodChunks(serviceId int, indicatorId int, start, end time.Time, out chan<- TimeChunk) error {
-// 	rows, err := c.db.Query("SELECT chunk FROM time_chunk WHERE service_id = $1 AND indicator_id = $2 AND \"timestamp\" BETWEEN $3 AND $4", serviceId, indicatorId, start, end)
-// 	if err != nil {
-// 		return err
-// 	}
-// 	defer rows.Close()
-// 	for rows.Next() {
-// 		var chunk []byte
-// 		err = rows.Scan(&chunk)
-// 		if err != nil {
-// 			return err
-// 		}
-// 		timestamp, x, y, err := Decode(chunk)
-// 		if err != nil {
-// 			return err
-// 		}
-// 		out <- TimeChunk{Timestamp: timestamp, X: x, Y: y}
-// 	}
-// 	return nil
-// }
+// ScanGoodChunks finds all chunks from "good" samples in a given time range.
+func (c *database) ScanGoodChunks(serviceId int, indicatorId int, start, end time.Time, out chan<- []byte) error {
+	// TODO: filter by good chunks
+	rows, err := c.db.Query("SELECT chunk FROM time_chunk WHERE service_id = $1 AND indicator_id = $2 AND \"timestamp\" BETWEEN $3 AND $4", serviceId, indicatorId, start, end)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var chunk []byte
+		err = rows.Scan(&chunk)
+		if err != nil {
+			return err
+		}
+		out <- chunk
+	}
+	return nil
+}
