@@ -6,8 +6,11 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os/exec"
 	"time"
+
+	"golang.org/x/sync/errgroup"
 )
 
 var (
@@ -18,66 +21,47 @@ var (
 	errJECDFExitedEarly = errors.New("jecdf exited before consuming all chunks")
 )
 
-func BuildJointECDF(store ChunkStore, serviceId int, indicatorId int, start, end time.Time) ([]byte, error) {
+// BuildJointECDF builds a joint ECDF from good chunks in the time range.
+func BuildJointECDF(store ChunkStore, serviceId, indicatorId int, start, end time.Time) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), buildTimeout)
 	defer cancel()
 
+	return BuildJointECDFContext(ctx, store, serviceId, indicatorId, start, end)
+}
+
+// BuildJointECDFContext builds a joint ECDF using the supplied context for scanning and subprocess execution.
+func BuildJointECDFContext(ctx context.Context, store ChunkStore, serviceId, indicatorId int, start, end time.Time) ([]byte, error) {
 	chunks := make(chan []byte, 2)
 
-	type buildResult struct {
-		out []byte
-		err error
-	}
-	buildDone := make(chan buildResult, 1)
-	scanDone := make(chan error, 1)
+	group, ctx := errgroup.WithContext(ctx)
 
-	go func() {
+	group.Go(func() error {
 		defer close(chunks)
-		scanDone <- store.ScanGoodChunks(ctx, serviceId, indicatorId, start, end, chunks)
-	}()
-
-	go func() {
-		out, err := buildFromStream(ctx, chunks)
-		buildDone <- buildResult{out: out, err: err}
-	}()
+		err := store.ScanGoodChunks(ctx, serviceId, indicatorId, start, end, chunks)
+		return buildError("failed to scan chunks", err)
+	})
 
 	var out []byte
-	for scanDone != nil || buildDone != nil {
-		select {
-		case err := <-scanDone:
-			scanDone = nil
-			if err != nil {
-				cancel()
-				if errors.Is(err, context.DeadlineExceeded) {
-					return nil, fmt.Errorf("timeout building joint ECDF")
-				}
-				return nil, fmt.Errorf("failed to scan chunks: %w", err)
-			}
-			if buildDone == nil {
-				return out, nil
-			}
-		case result := <-buildDone:
-			buildDone = nil
-			if result.err != nil {
-				cancel()
-				if errors.Is(result.err, context.DeadlineExceeded) {
-					return nil, fmt.Errorf("timeout building joint ECDF")
-				}
-				return nil, fmt.Errorf("failed to build joint ECDF: %w", result.err)
-			}
-			out = result.out
-			if scanDone == nil {
-				return out, nil
-			}
-		case <-ctx.Done():
-			cancel()
-			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-				return nil, fmt.Errorf("timeout building joint ECDF")
-			}
-			return nil, fmt.Errorf("failed to build joint ECDF: %w", ctx.Err())
-		}
+	group.Go(func() error {
+		var err error
+		out, err = buildFromStream(ctx, chunks)
+		return buildError("failed to build joint ECDF", err)
+	})
+
+	if err := group.Wait(); err != nil {
+		return nil, err
 	}
-	return nil, fmt.Errorf("failed to build joint ECDF: missing result")
+	return out, nil
+}
+
+func buildError(prefix string, err error) error {
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return fmt.Errorf("timeout building joint ECDF")
+	}
+	return fmt.Errorf("%s: %w", prefix, err)
 }
 
 func buildFromStream(ctx context.Context, chunks <-chan []byte) ([]byte, error) {
@@ -96,40 +80,17 @@ func buildFromStream(ctx context.Context, chunks <-chan []byte) ([]byte, error) 
 		return nil, fmt.Errorf("failed to start jecdf: %w", err)
 	}
 
-	processDone := make(chan struct{})
+	processExited := make(chan struct{})
 	writeErr := make(chan error, 1)
 	go func() {
-		defer stdin.Close()
-		for {
-			select {
-			case <-ctx.Done():
-				writeErr <- ctx.Err()
-				return
-			case <-processDone:
-				writeErr <- errJECDFExitedEarly
-				return
-			case chunk, ok := <-chunks:
-				if !ok {
-					writeErr <- nil
-					return
-				}
-				for len(chunk) > 0 {
-					n, err := stdin.Write(chunk)
-					if err != nil {
-						writeErr <- err
-						return
-					}
-					chunk = chunk[n:]
-				}
-			}
-		}
+		writeErr <- writeChunks(ctx, stdin, chunks, processExited)
 	}()
 
 	waitErr := cmd.Wait()
 	select {
 	case err = <-writeErr:
 	default:
-		close(processDone)
+		close(processExited)
 		_ = stdin.Close()
 		err = <-writeErr
 	}
@@ -147,4 +108,24 @@ func buildFromStream(ctx context.Context, chunks <-chan []byte) ([]byte, error) 
 		return nil, fmt.Errorf("failed to write chunks to jecdf: %w", err)
 	}
 	return stdout.Bytes(), nil
+}
+
+func writeChunks(ctx context.Context, stdin io.WriteCloser, chunks <-chan []byte, processExited <-chan struct{}) error {
+	defer stdin.Close()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-processExited:
+			return errJECDFExitedEarly
+		case chunk, ok := <-chunks:
+			if !ok {
+				return nil
+			}
+			if _, err := io.Copy(stdin, bytes.NewReader(chunk)); err != nil {
+				return err
+			}
+		}
+	}
 }
