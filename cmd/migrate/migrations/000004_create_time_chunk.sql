@@ -6,7 +6,7 @@ CREATE TABLE time_chunk (
     "timestamp" TIMESTAMP(0) WITH TIME ZONE NOT NULL,
     chunk bytea,
 
-    PRIMARY KEY (service_id, indicator_id, "timestamp"),
+    PRIMARY KEY (service_id, indicator_id, "timestamp")
 
     -- TODO: Add foreign key constraint once the hard-coded WeeWoo service has been added to the database.
     -- FOREIGN KEY (service_id) REFERENCES service(id)
