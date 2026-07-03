@@ -79,13 +79,13 @@ func (c *database) ReadDataSource(id int) (*DataSource, error) {
 		return nil, fmt.Errorf("id must be greater than 0")
 	}
 	//if the id is a valid id and in the database it returns the data source.
-	err := c.db.QueryRow("SELECT id, DataType, URL, PollingInterval FROM data_source WHERE id = $1", id).Scan(&dataSource.Id, &dataSource.DataType, &urlString, &pollingIntervalSeconds)
+	err := c.db.QueryRow("SELECT id, type, url, polling_interval FROM data_source WHERE id = $1", id).Scan(&dataSource.Id, &dataSource.DataType, &urlString, &pollingIntervalSeconds)
 	if err != nil {
 		return nil, err
 	}
 	parsedURL, err := url.Parse(urlString)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse URL string to url.URL: %w", err)
+		return nil, fmt.Errorf("failed to parse URL %q: %w", urlString, err)
 	}
 	dataSource.URL = *parsedURL
 	dataSource.PollingInterval = time.Duration(pollingIntervalSeconds) * time.Second
@@ -96,7 +96,7 @@ func (c *database) WriteDataSource(ds *DataSource) error {
 	pollingIntervalSeconds := int64(ds.PollingInterval / time.Second)
 	if ds.Id == 0 {
 		err := c.db.QueryRow(`
-			INSERT INTO data_source (DataType, URL, PollingInterval)
+			INSERT INTO data_source (type, url, polling_interval)
 			VALUES ($1, $2, $3)
 			RETURNING id
 		`, ds.DataType, ds.URL.String(), pollingIntervalSeconds).Scan(&ds.Id)
@@ -104,7 +104,7 @@ func (c *database) WriteDataSource(ds *DataSource) error {
 			return fmt.Errorf("failed to insert data source: %w", err)
 		}
 	} else {
-		_, err := c.db.Exec("UPDATE data_source SET DataType = $1, URL = $2, PollingInterval = $3 WHERE id = $4", ds.DataType, ds.URL.String(), pollingIntervalSeconds, ds.Id)
+		_, err := c.db.Exec("UPDATE data_source SET type = $1, url = $2, polling_interval = $3 WHERE id = $4", ds.DataType, ds.URL.String(), pollingIntervalSeconds, ds.Id)
 		if err != nil {
 			return fmt.Errorf("failed to update data source: %w", err)
 		}
@@ -117,7 +117,7 @@ func (c *database) WriteService(service *Service) error {
 	// makes sure the id is not inserted at 0. if it is 0, it inserts a new service at a non zero id
 	if service.Id == 0 {
 		err := c.db.QueryRow(`
-			INSERT INTO service ("name", prometheus_url, load_query, latency_query, interval_seconds)
+			INSERT INTO service (name, prometheus_url, load_query, latency_query, interval_seconds)
 			VALUES ($1, $2, $3, $4, $5)
 			RETURNING id
 		`, service.Name, service.PrometheusURL, service.LoadQuery, service.LatencyQuery, service.Interval.Seconds()).Scan(&service.Id)
@@ -125,7 +125,7 @@ func (c *database) WriteService(service *Service) error {
 			return fmt.Errorf("failed to insert service: %w", err)
 		}
 	} else {
-		_, err := c.db.Exec("UPDATE service SET \"name\" = $1, prometheus_url = $2, load_query = $3, latency_query = $4, interval_seconds = $5 WHERE id = $6",
+		_, err := c.db.Exec("UPDATE service SET name = $1, prometheus_url = $2, load_query = $3, latency_query = $4, interval_seconds = $5 WHERE id = $6",
 			service.Name, service.PrometheusURL, service.LoadQuery, service.LatencyQuery, service.Interval.Seconds(), service.Id)
 		if err != nil {
 			return fmt.Errorf("failed to update service: %w", err)
@@ -141,7 +141,7 @@ func (c *database) ReadService(id int) (*Service, error) {
 	if id <= 0 {
 		return nil, fmt.Errorf("id must be greater than 0")
 	}
-	err := c.db.QueryRow("SELECT id, \"name\", prometheus_url, load_query, latency_query, interval_seconds FROM service WHERE id = $1", id).Scan(&service.Id, &service.Name, &service.PrometheusURL, &service.LoadQuery, &service.LatencyQuery, &interval)
+	err := c.db.QueryRow("SELECT id, name, prometheus_url, load_query, latency_query, interval_seconds FROM service WHERE id = $1", id).Scan(&service.Id, &service.Name, &service.PrometheusURL, &service.LoadQuery, &service.LatencyQuery, &interval)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read service: %w", err)
 	}
