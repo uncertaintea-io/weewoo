@@ -1,3 +1,5 @@
+DROP TABLE IF EXISTS verdict;
+
 CREATE TABLE verdict (
     service_id int,
     indicator_id int,

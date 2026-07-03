@@ -20,7 +20,7 @@ func main() {
 	configfile := flag.String("config", "config.yaml", "Config file")
 	flag.Parse()
 
-	if len(os.Args) < 2 {
+	if flag.NArg() < 1 {
 		fmt.Fprintln(os.Stderr, "usage: migrate [up|status]")
 		os.Exit(2)
 	}
@@ -42,7 +42,7 @@ func main() {
 		}
 	}()
 
-	switch os.Args[1] {
+	switch flag.Arg(0) {
 	case "up":
 		if err := Migrate(context.Background(), db); err != nil {
 			slog.Error("failed to apply migrations", slog.Any("error", err))
@@ -72,7 +72,7 @@ func main() {
 		}
 		_ = w.Flush()
 	default:
-		fmt.Fprintf(os.Stderr, "unknown command %q\n", os.Args[1])
+		fmt.Fprintf(os.Stderr, "unknown command %q\n", flag.Arg(0))
 		os.Exit(2)
 	}
 }

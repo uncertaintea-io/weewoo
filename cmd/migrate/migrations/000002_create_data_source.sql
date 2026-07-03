@@ -1,4 +1,6 @@
-CREATE TABLE IF NOT EXISTS data_source (
+DROP TABLE IF EXISTS data_source;
+
+CREATE TABLE data_source (
     id int GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     type varchar,
     url varchar,
