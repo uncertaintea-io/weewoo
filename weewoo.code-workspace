@@ -1,15 +1,29 @@
 {
-	"folders": [
-		{
-			"path": "."
-		}
-	],
-	"settings": {
-		"files.watcherExclude": {
-			".gocache/**": true,
-			".gomodcache/**": true,
-			".venv/**": true,
-			"ui/node_modules/**": true
-		}
-	}
+  "folders": [
+    {
+      "path": "."
+    }
+  ],
+  "settings": {
+    "files.exclude": {
+      "**/.gocache/**": true,
+      "**/.gomodcache/**": true,
+      "**/.venv/**": true,
+      "**/node_modules/**": true
+    },
+    "files.watcherExclude": {
+      "**/.git/objects/**": true,
+      "**/.git/subtree-cache/**": true,
+      "**/.gocache/**": true,
+      "**/.gomodcache/**": true,
+      "**/.venv/**": true,
+      "**/node_modules/**": true
+    },
+    "search.exclude": {
+      "**/.gocache/**": true,
+      "**/.gomodcache/**": true,
+      "**/.venv/**": true,
+      "**/node_modules/**": true
+    }
+  }
 }
