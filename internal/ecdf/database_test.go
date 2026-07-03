@@ -15,6 +15,7 @@ func TestDatabaseChunkStoreFunctions(t *testing.T) {
 	databaseURL := os.Getenv("DATABASE_URL")
 	if databaseURL == "" {
 		t.Skip("DATABASE_URL environment variable is not set, skipping database tests")
+		return
 	}
 	db, err := sql.Open("pgx", databaseURL)
 	require.NoError(t, err)

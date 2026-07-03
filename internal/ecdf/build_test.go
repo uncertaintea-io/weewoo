@@ -10,6 +10,23 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func writeFakeJECDF(t *testing.T, body string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "jecdf")
+	err := os.WriteFile(path, []byte("#!/bin/sh\n"+body), 0755)
+	require.NoError(t, err)
+	return path
+}
+
+func setJECDFTool(t *testing.T, path string) {
+	t.Helper()
+	old := *jecdf
+	*jecdf = path
+	t.Cleanup(func() {
+		*jecdf = old
+	})
+}
+
 func jecdfExists(t *testing.T) bool {
 	t.Helper()
 	info, err := os.Stat(*jecdf)
@@ -33,30 +50,15 @@ func jecdfExists(t *testing.T) bool {
 	return false
 }
 
-func writeFakeJECDF(t *testing.T, body string) string {
-	t.Helper()
-	path := filepath.Join(t.TempDir(), "jecdf")
-	err := os.WriteFile(path, []byte("#!/bin/sh\n"+body), 0755)
-	require.NoError(t, err)
-	return path
-}
-
-func setJECDFTool(t *testing.T, path string) {
-	t.Helper()
-	old := *jecdf
-	*jecdf = path
-	t.Cleanup(func() {
-		*jecdf = old
-	})
-}
-
 func newTestChunk(t time.Time, x, y float64) ([]byte, error) {
 	return Encode(t, []Sample{{x, 1}}, []Sample{{y, 1}})
 }
 
 func TestBuildWithRealTool(t *testing.T) {
+	setJECDFTool(t, "../../jecdf")
 	if  !jecdfExists(t) {
 		t.Skip("jecdf tool not found or not executable, skipping test")
+		return
 	}
 	const (
 		serviceId   = 1

@@ -11,7 +11,7 @@ import (
 )
 
 var (
-	jecdf = flag.String("jecdf", "../../jecdf", "path to the jecdf tool")
+	jecdf = flag.String("jecdf", "jecdf", "path to the jecdf tool")
 
 	buildTimeout = 5 * time.Minute
 
