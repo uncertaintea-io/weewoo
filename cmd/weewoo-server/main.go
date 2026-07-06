@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"database/sql"
 	"flag"
 	"fmt"
 	"log"
@@ -80,35 +79,6 @@ func observeRequestDuration(next http.Handler) http.Handler {
 	})
 }
 
-// this function converts a row from the database to a service object
-func rowsToObject(rows *sql.Rows) (config.Service, error) {
-	var service config.Service
-	var intervalSeconds int
-	err := rows.Scan(&service.Id, &service.Name, &service.PrometheusURL, &service.LoadQuery, &service.LatencyQuery, &intervalSeconds)
-	if err != nil {
-		return config.Service{}, err
-	}
-	service.Interval = time.Duration(intervalSeconds) * time.Second
-	return service, nil
-}
-
-// this function reads all the services from the database and returns them as an array of service objects
-func ReadAllServices(db *sql.DB) ([]*config.Service, error) {
-	rows, err := db.Query("SELECT id, name, prometheus_url, load_query, latency_query, interval_seconds FROM service")
-	if err != nil {
-		return nil, err
-	}
-	services := make([]*config.Service, 0)
-	for rows.Next() {
-		service, err := rowsToObject(rows)
-		if err != nil {
-			return nil, err
-		}
-		services = append(services, &service)
-	}
-	return services, nil
-}
-
 func main() {
 	configfile := flag.String("config", "config.yaml", "Config file")
 	flag.Parse()
@@ -116,25 +86,25 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to read system settings: %v", err)
 	}
-	db, err := systemSettings.OpenDatabase()
+	databaseConfig, err := config.NewDatabaseConfig(systemSettings.DatabaseURL)
 	if err != nil {
 		log.Fatalf("Failed to create database config: %v", err)
 	}
-	//TODO: run readservice function and then the array is searched for a preticular spot in the array and the service object is run through the collector
-	services, err := ReadAllServices(db)
+	defer databaseConfig.Close()
+
+	db, err := systemSettings.OpenDatabase()
+	if err != nil {
+		log.Fatalf("Failed to open database: %v", err)
+	}
+	defer db.Close()
+
+	services, err := databaseConfig.ReadAllServices()
 	if err != nil {
 		log.Fatalf("Failed to read services: %v", err)
 	}
 	for _, service := range services {
 		collector := collection.NewCollector(http.DefaultClient, ecdf.NewDatabaseChunkStore(db))
-		collector.Schedule(&collection.Service{
-			Id:            service.Id,
-			Name:          service.Name,
-			PrometheusURL: service.PrometheusURL,
-			LoadQuery:     service.LoadQuery,
-			LatencyQuery:  service.LatencyQuery,
-			Interval:      service.Interval,
-		})
+		collector.Schedule(service)
 		defer collector.Stop()
 	}
 

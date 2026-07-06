@@ -154,6 +154,35 @@ func (c *database) ReadService(id int) (*Service, error) {
 	return &service, nil
 }
 
+// this function reads all the services from the database and returns them as a slice of service objects
+func (c *database) ReadAllServices() ([]*Service, error) {
+	rows, err := c.db.Query("SELECT id, name, prometheus_url, load_query, latency_query, interval_seconds FROM service")
+	if err != nil {
+		return nil, err
+	}
+	services := make([]*Service, 0)
+	for rows.Next() {
+		service, err := c.RowsToObject(rows)
+		if err != nil {
+			return nil, err
+		}
+		services = append(services, &service)
+	}
+	return services, nil
+}
+
+// this function converts a row from the database to a service object
+func (c *database) RowsToObject(rows *sql.Rows) (Service, error) {
+	var service Service
+	var intervalSeconds int
+	err := rows.Scan(&service.Id, &service.Name, &service.PrometheusURL, &service.LoadQuery, &service.LatencyQuery, &intervalSeconds)
+	if err != nil {
+		return Service{}, err
+	}
+	service.Interval = time.Duration(intervalSeconds) * time.Second
+	return service, nil
+}
+
 func (c *database) Close() {
 	c.db.Close()
 }
