@@ -18,15 +18,6 @@ type Service struct {
 	Interval      time.Duration
 }
 
-var WeeWooService = &Service{
-	Id:            1,
-	Name:          "WeeWoo",
-	PrometheusURL: "http://pc0:9090",
-	LoadQuery:     "rate(histogram_count(sum by (app) (weewoo_http_request_duration_seconds{app=\"weewoo\"}))[45s:]) * 15",
-	LatencyQuery:  "histogram_quantile(0.99,weewoo_http_request_duration_seconds{app=\"weewoo\"}) or on() vector(0)",
-	Interval:      time.Minute,
-}
-
 const (
 	LoadLatencyIndicator = 1
 	TimeOfDayIndicator   = 2

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"flag"
 	"fmt"
 	"log"
@@ -79,6 +80,33 @@ func observeRequestDuration(next http.Handler) http.Handler {
 	})
 }
 
+// this function converts a row from the database to a service object
+func rowsToObject(rows *sql.Rows) (config.Service, error) {
+	var service config.Service
+	err := rows.Scan(&service.Id, &service.Name, &service.PrometheusURL, &service.LoadQuery, &service.LatencyQuery, &service.Interval)
+	if err != nil {
+		return config.Service{}, err
+	}
+	return service, nil
+}
+
+// this function reads all the services from the database and returns them as an array of service objects
+func readServices(db *sql.DB, service *config.Service) ([]*config.Service, error) {
+	rows, err := db.Query("SELECT name, prometheus_url, load_query, latency_query, interval_seconds FROM service WHERE id > $1", service.Id)
+	if err != nil {
+		return nil, err
+	}
+	services := make([]*config.Service, 0)
+	for rows.Next() {
+		service, err := rowsToObject(rows)
+		if err != nil {
+			return nil, err
+		}
+		services = append(services, &service)
+	}
+	return services, nil
+}
+
 func main() {
 	configfile := flag.String("config", "config.yaml", "Config file")
 	flag.Parse()
@@ -90,13 +118,33 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to create database config: %v", err)
 	}
-	collector := collection.NewCollector(http.DefaultClient, ecdf.NewDatabaseChunkStore(db), collection.WeeWooService)
-	collector.Schedule(collection.WeeWooService)
-	defer collector.Stop()
+	//TODO: run readservice function and then the array is searched for a preticular spot in the array and the service object is run through the collector
+	services, err := readServices(db, &config.Service{Id: 0})
+	if err != nil {
+		log.Fatalf("Failed to read services: %v", err)
+	}
+	for _, service := range services {
+		collector := collection.NewCollector(http.DefaultClient, ecdf.NewDatabaseChunkStore(db), &collection.Service{
+			Id:            service.Id,
+			Name:          service.Name,
+			PrometheusURL: service.PrometheusURL,
+			LoadQuery:     service.LoadQuery,
+			LatencyQuery:  service.LatencyQuery,
+			Interval:      service.Interval,
+		})
+		collector.Schedule(&collection.Service{
+			Id:            service.Id,
+			Name:          service.Name,
+			PrometheusURL: service.PrometheusURL,
+			LoadQuery:     service.LoadQuery,
+			LatencyQuery:  service.LatencyQuery,
+			Interval:      service.Interval,
+		})
+		defer collector.Stop()
+	}
 
 	//Serve files from static folder
 	http.Handle("/", observeRequestDuration(http.FileServer(http.Dir("./ui/dist"))))
-
 	monitorPort := ":5000"
 	appPort := ":8080"
 	fmt.Println("Server is running on port" + appPort)
