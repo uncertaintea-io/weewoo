@@ -83,16 +83,18 @@ func observeRequestDuration(next http.Handler) http.Handler {
 // this function converts a row from the database to a service object
 func rowsToObject(rows *sql.Rows) (config.Service, error) {
 	var service config.Service
-	err := rows.Scan(&service.Id, &service.Name, &service.PrometheusURL, &service.LoadQuery, &service.LatencyQuery, &service.Interval)
+	var intervalSeconds int
+	err := rows.Scan(&service.Id, &service.Name, &service.PrometheusURL, &service.LoadQuery, &service.LatencyQuery, &intervalSeconds)
 	if err != nil {
 		return config.Service{}, err
 	}
+	service.Interval = time.Duration(intervalSeconds) * time.Second
 	return service, nil
 }
 
 // this function reads all the services from the database and returns them as an array of service objects
-func readServices(db *sql.DB, service *config.Service) ([]*config.Service, error) {
-	rows, err := db.Query("SELECT name, prometheus_url, load_query, latency_query, interval_seconds FROM service WHERE id > $1", service.Id)
+func ReadAllServices(db *sql.DB) ([]*config.Service, error) {
+	rows, err := db.Query("SELECT id, name, prometheus_url, load_query, latency_query, interval_seconds FROM service")
 	if err != nil {
 		return nil, err
 	}
@@ -119,19 +121,12 @@ func main() {
 		log.Fatalf("Failed to create database config: %v", err)
 	}
 	//TODO: run readservice function and then the array is searched for a preticular spot in the array and the service object is run through the collector
-	services, err := readServices(db, &config.Service{Id: 0})
+	services, err := ReadAllServices(db)
 	if err != nil {
 		log.Fatalf("Failed to read services: %v", err)
 	}
 	for _, service := range services {
-		collector := collection.NewCollector(http.DefaultClient, ecdf.NewDatabaseChunkStore(db), &collection.Service{
-			Id:            service.Id,
-			Name:          service.Name,
-			PrometheusURL: service.PrometheusURL,
-			LoadQuery:     service.LoadQuery,
-			LatencyQuery:  service.LatencyQuery,
-			Interval:      service.Interval,
-		})
+		collector := collection.NewCollector(http.DefaultClient, ecdf.NewDatabaseChunkStore(db))
 		collector.Schedule(&collection.Service{
 			Id:            service.Id,
 			Name:          service.Name,

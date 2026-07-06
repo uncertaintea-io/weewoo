@@ -31,19 +31,17 @@ type Collector interface {
 type collector struct {
 	client    *http.Client
 	store     ecdf.ChunkStore
-	service   *Service
 	scheduler *IntervalScheduler
 }
 
 // this creates a collector that can be used to collect samples from the prometheus server
-func NewCollector(client *http.Client, store ecdf.ChunkStore, service *Service) Collector {
+func NewCollector(client *http.Client, store ecdf.ChunkStore) Collector {
 	if client == nil {
 		client = http.DefaultClient
 	}
 	c := &collector{
 		client:    client,
 		store:     store,
-		service:   service,
 		scheduler: NewIntervalScheduler(),
 	}
 	return c
