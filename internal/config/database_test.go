@@ -1,25 +1,16 @@
 package config
 
 import (
+	"database/sql"
 	"os"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 // this tests that the connect function returns a non-nil value.
 func TestNewDatabaseConfig(t *testing.T) {
-	conn := os.Getenv("DATABASE_URL")
-	if conn == "" {
-		t.Skip("DATABASE_URL is not set")
-	}
-	config, err := NewDatabaseConfig(conn)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer config.Close()
-	assert.NotNil(t, config)
+	newDatabaseConfig(t)
 }
 
 func newDatabaseConfig(t *testing.T) Config {
@@ -27,8 +18,11 @@ func newDatabaseConfig(t *testing.T) Config {
 	if conn == "" {
 		t.Skip("DATABASE_URL is not set")
 	}
-	config, err := NewDatabaseConfig(conn)
-	require.NoError(t, err)
+	db, err := sql.Open("pgx", conn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config := NewDatabaseConfig(db)
 	require.NotNil(t, config)
 	return config
 }

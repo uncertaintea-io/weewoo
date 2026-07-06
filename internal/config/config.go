@@ -43,6 +43,7 @@ type Config interface {
 	WriteDataSource(dataSource *DataSource) error
 	WriteService(service *Service) error
 	ReadService(id int) (*Service, error)
+	ReadAllServices() ([]*Service, error)
 	Close()
 }
 

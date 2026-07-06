@@ -88,15 +88,23 @@ func main() {
 	}
 	db, err := systemSettings.OpenDatabase()
 	if err != nil {
-		log.Fatalf("Failed to create database config: %v", err)
+		log.Fatalf("Failed to open database: %v", err)
 	}
-	collector := collection.NewCollector(http.DefaultClient, ecdf.NewDatabaseChunkStore(db), collection.WeeWooService)
-	collector.Schedule(collection.WeeWooService)
+	databaseConfig := config.NewDatabaseConfig(db)
+	defer databaseConfig.Close()
+
+	services, err := databaseConfig.ReadAllServices()
+	if err != nil {
+		log.Fatalf("Failed to read services: %v", err)
+	}
+	collector := collection.NewCollector(http.DefaultClient, ecdf.NewDatabaseChunkStore(db))
 	defer collector.Stop()
+	for _, service := range services {
+		collector.Schedule(service)
+	}
 
 	//Serve files from static folder
 	http.Handle("/", observeRequestDuration(http.FileServer(http.Dir("./ui/dist"))))
-
 	monitorPort := ":5000"
 	appPort := ":8080"
 	fmt.Println("Server is running on port" + appPort)

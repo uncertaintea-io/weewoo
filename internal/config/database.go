@@ -62,12 +62,8 @@ func (c *database) SetConfig(key string, value string) error {
 }
 
 // opens connection to the database for the functions below to use
-func NewDatabaseConfig(conn string) (Config, error) {
-	connection, err := sql.Open("pgx", conn)
-	if err != nil {
-		return nil, err
-	}
-	return &database{db: connection}, nil
+func NewDatabaseConfig(db *sql.DB) Config {
+	return &database{db: db}
 }
 
 func (c *database) ReadDataSource(id int) (*DataSource, error) {
@@ -114,19 +110,20 @@ func (c *database) WriteDataSource(ds *DataSource) error {
 
 // writes a service to the database. if the id is 0 it inserts a new service, otherwise it updates the existing service.
 func (c *database) WriteService(service *Service) error {
+	intervalSeconds := int64(service.Interval / time.Second)
 	// makes sure the id is not inserted at 0. if it is 0, it inserts a new service at a non zero id
 	if service.Id == 0 {
 		err := c.db.QueryRow(`
 			INSERT INTO service (name, prometheus_url, load_query, latency_query, interval_seconds)
 			VALUES ($1, $2, $3, $4, $5)
 			RETURNING id
-		`, service.Name, service.PrometheusURL, service.LoadQuery, service.LatencyQuery, service.Interval.Seconds()).Scan(&service.Id)
+		`, service.Name, service.PrometheusURL, service.LoadQuery, service.LatencyQuery, intervalSeconds).Scan(&service.Id)
 		if err != nil {
 			return fmt.Errorf("failed to insert service: %w", err)
 		}
 	} else {
 		_, err := c.db.Exec("UPDATE service SET name = $1, prometheus_url = $2, load_query = $3, latency_query = $4, interval_seconds = $5 WHERE id = $6",
-			service.Name, service.PrometheusURL, service.LoadQuery, service.LatencyQuery, service.Interval.Seconds(), service.Id)
+			service.Name, service.PrometheusURL, service.LoadQuery, service.LatencyQuery, intervalSeconds, service.Id)
 		if err != nil {
 			return fmt.Errorf("failed to update service: %w", err)
 		}
@@ -137,20 +134,54 @@ func (c *database) WriteService(service *Service) error {
 // reads a service from the database.
 func (c *database) ReadService(id int) (*Service, error) {
 	var service Service
-	var interval time.Duration
+	var intervalSeconds int64
 	if id <= 0 {
 		return nil, fmt.Errorf("id must be greater than 0")
 	}
-	err := c.db.QueryRow("SELECT id, name, prometheus_url, load_query, latency_query, interval_seconds FROM service WHERE id = $1", id).Scan(&service.Id, &service.Name, &service.PrometheusURL, &service.LoadQuery, &service.LatencyQuery, &interval)
+	err := c.db.QueryRow("SELECT id, name, prometheus_url, load_query, latency_query, interval_seconds FROM service WHERE id = $1", id).Scan(&service.Id, &service.Name, &service.PrometheusURL, &service.LoadQuery, &service.LatencyQuery, &intervalSeconds)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read service: %w", err)
 	}
-	service.Interval = time.Duration(interval) * time.Second
+	service.Interval = time.Duration(intervalSeconds) * time.Second
 	parsedURL, err := url.Parse(service.PrometheusURL)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse URL string to url.URL: %w", err)
 	}
 	service.PrometheusURL = parsedURL.String()
+	return &service, nil
+}
+
+// this function reads all the services from the database and returns them as a slice of service objects
+func (c *database) ReadAllServices() ([]*Service, error) {
+	rows, err := c.db.Query("SELECT id, name, prometheus_url, load_query, latency_query, interval_seconds FROM service")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	services := make([]*Service, 0)
+	for rows.Next() {
+		service, err := c.RowsToObject(rows)
+		if err != nil {
+			return nil, err
+		}
+		services = append(services, service)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return services, nil
+}
+
+// this function converts a row from the database to a service object
+func (c *database) RowsToObject(rows *sql.Rows) (*Service, error) {
+	var service Service
+	var intervalSeconds int64
+	err := rows.Scan(&service.Id, &service.Name, &service.PrometheusURL, &service.LoadQuery, &service.LatencyQuery, &intervalSeconds)
+	if err != nil {
+		return nil, err
+	}
+	service.Interval = time.Duration(intervalSeconds) * time.Second
 	return &service, nil
 }
 

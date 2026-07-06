@@ -61,6 +61,15 @@ func (c *fakeConfig) ReadService(id int) (*Service, error) {
 	return c.services[id], nil
 }
 
+// this function reads all the services from the fake config and returns them as a slice of service objects
+func (c *fakeConfig) ReadAllServices() ([]*Service, error) {
+	services := make([]*Service, 0)
+	for _, service := range c.services {
+		services = append(services, service)
+	}
+	return services, nil
+}
+
 func (c *fakeConfig) Close() {
 	c.config = nil
 	c.dataSources = nil
