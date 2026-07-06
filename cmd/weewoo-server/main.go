@@ -86,26 +86,21 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to read system settings: %v", err)
 	}
-	databaseConfig, err := config.NewDatabaseConfig(systemSettings.DatabaseURL)
-	if err != nil {
-		log.Fatalf("Failed to create database config: %v", err)
-	}
-	defer databaseConfig.Close()
-
 	db, err := systemSettings.OpenDatabase()
 	if err != nil {
 		log.Fatalf("Failed to open database: %v", err)
 	}
-	defer db.Close()
+	databaseConfig := config.NewDatabaseConfig(db)
+	defer databaseConfig.Close()
 
 	services, err := databaseConfig.ReadAllServices()
 	if err != nil {
 		log.Fatalf("Failed to read services: %v", err)
 	}
+	collector := collection.NewCollector(http.DefaultClient, ecdf.NewDatabaseChunkStore(db))
+	defer collector.Stop()
 	for _, service := range services {
-		collector := collection.NewCollector(http.DefaultClient, ecdf.NewDatabaseChunkStore(db))
 		collector.Schedule(service)
-		defer collector.Stop()
 	}
 
 	//Serve files from static folder

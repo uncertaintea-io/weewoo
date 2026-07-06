@@ -1,6 +1,7 @@
 package config
 
 import (
+	"database/sql"
 	"os"
 	"testing"
 
@@ -14,10 +15,11 @@ func TestNewDatabaseConfig(t *testing.T) {
 	if conn == "" {
 		t.Skip("DATABASE_URL is not set")
 	}
-	config, err := NewDatabaseConfig(conn)
+	db, err := sql.Open("pgx", os.Getenv("DATABASE_URL"))
 	if err != nil {
 		t.Fatal(err)
 	}
+	config := NewDatabaseConfig(db)
 	defer config.Close()
 	assert.NotNil(t, config)
 }
@@ -27,8 +29,11 @@ func newDatabaseConfig(t *testing.T) Config {
 	if conn == "" {
 		t.Skip("DATABASE_URL is not set")
 	}
-	config, err := NewDatabaseConfig(conn)
-	require.NoError(t, err)
+	db, err := sql.Open("pgx", os.Getenv("DATABASE_URL"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	config := NewDatabaseConfig(db)
 	require.NotNil(t, config)
 	return config
 }

@@ -1,10 +1,8 @@
 package config
 
 import (
-	"database/sql"
 	"errors"
 	"fmt"
-	"time"
 )
 
 // a new fake config should be initially empty
@@ -70,18 +68,6 @@ func (c *fakeConfig) ReadAllServices() ([]*Service, error) {
 		services = append(services, service)
 	}
 	return services, nil
-}
-
-// this function converts a row from the fake config to a service object
-func (c *fakeConfig) RowsToObject(rows *sql.Rows) (Service, error) {
-	var service Service
-	var intervalSeconds int
-	err := rows.Scan(&service.Id, &service.Name, &service.PrometheusURL, &service.LoadQuery, &service.LatencyQuery, &intervalSeconds)
-	if err != nil {
-		return Service{}, err
-	}
-	service.Interval = time.Duration(intervalSeconds) * time.Second
-	return service, nil
 }
 
 func (c *fakeConfig) Close() {
