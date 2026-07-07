@@ -46,8 +46,20 @@ func (c *database) ReadChunk(serviceId int, indicatorId int, timestamp time.Time
 
 // ScanGoodChunks finds all chunks from "good" samples in a given time range.
 func (c *database) ScanGoodChunks(ctx context.Context, serviceId int, indicatorId int, start, end time.Time, out chan<- []byte) error {
-	// TODO: filter by good chunks
-	rows, err := c.db.QueryContext(ctx, "SELECT chunk FROM time_chunk WHERE service_id = $1 AND indicator_id = $2 AND \"timestamp\" BETWEEN $3 AND $4", serviceId, indicatorId, start, end)
+	rows, err := c.db.QueryContext(ctx, `
+		SELECT tc.chunk
+		FROM time_chunk AS tc
+		WHERE tc.service_id = $1
+		AND tc.indicator_id = $2
+		AND tc."timestamp" BETWEEN $3 AND $4
+		AND NOT EXISTS (
+			SELECT 1
+			FROM verdict AS v
+			WHERE v.service_id = tc.service_id
+				AND v.indicator_id = tc.indicator_id
+				AND v."timestamp" = tc."timestamp"
+				AND v.good = false
+	)`, serviceId, indicatorId, start, end)
 	if err != nil {
 		return err
 	}
