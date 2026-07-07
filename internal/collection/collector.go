@@ -63,5 +63,9 @@ func (c *collector) collectSamples(ctx context.Context, service *config.Service,
 	if err != nil {
 		return err
 	}
-	return c.store.WriteChunk(service.Id, LoadLatencyIndicator, end, ecdf.CountSamples(loadValue), ecdf.CountSamples(latencyValue))
+	chunk, err := ecdf.Encode(end, ecdf.CountSamples(loadValue), ecdf.CountSamples(latencyValue))
+	if err != nil {
+		return err
+	}
+	return c.store.WriteChunk(service.Id, LoadLatencyIndicator, end, chunk)
 }

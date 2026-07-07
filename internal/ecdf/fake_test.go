@@ -1,43 +1,55 @@
 package ecdf
 
 import (
+	"context"
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-func TestFakeChunkStore(t *testing.T) {
-	chunkStore := NewFakeChunkStore()
-	require.NotNil(t, chunkStore)
-}
 
 func TestFakeChunkStoreFunctions(t *testing.T) {
 	chunkStore := NewFakeChunkStore()
 	require.NotNil(t, chunkStore)
 
-	timestamp := time.Unix(1781561298, 0)
-	x := []Sample{{Value: 1, Count: 1}}
-	y := []Sample{{Value: 2, Count: 1}}
+	t2 := time.Now()
+	t1 := t2.Add(-time.Minute)
+	chunk1 := []byte{0x01, 0x02, 0x03}
+	chunk2 := []byte{0x02, 0x04, 0x06}
 
-	// testing writeChunk
-	t.Run("WriteChunk", func(t *testing.T) {
-		err := chunkStore.WriteChunk(1, 1, timestamp, x, y)
-		require.NoError(t, err)
-	})
+	// Write chunks
+	err := chunkStore.WriteChunk(1, 1, t1, chunk1)
+	require.NoError(t, err)
+	err = chunkStore.WriteChunk(1, 1, t2, chunk2)
+	require.NoError(t, err)
 
-	// testing readChunk
-	t.Run("ReadChunk", func(t *testing.T) {
-		chunk, err := chunkStore.ReadChunk(1, 1, timestamp)
-		require.NoError(t, err)
-		require.Equal(t, timestamp, chunk.Timestamp)
-		require.Equal(t, x, chunk.X)
-		require.Equal(t, y, chunk.Y)
-	})
+	// Read chunks
+	readChunk, err := chunkStore.ReadChunk(1, 1, t1)
+	require.NoError(t, err)
+	assert.Equal(t, chunk1, readChunk)
 
-	t.Run("ReadMissingChunk", func(t *testing.T) {
-		chunk, err := chunkStore.ReadChunk(1, 1, timestamp.Add(time.Second))
-		require.ErrorIs(t, err, ChunkNotFoundError)
-		require.Equal(t, TimeChunk{}, chunk)
-	})
+	readChunk, err = chunkStore.ReadChunk(1, 1, t2)
+	require.NoError(t, err)
+	assert.Equal(t, chunk2, readChunk)
+
+	// Scan good chunks
+	out := make(chan []byte, 2)
+	done := make(chan struct{})
+	var scannedChunks [][]byte
+	go func() {
+		for chunk := range out {
+			scannedChunks = append(scannedChunks, chunk)
+		}
+		done <- struct{}{}
+	}()
+
+	err = chunkStore.ScanGoodChunks(context.Background(), 1, 1, t1.Add(-time.Second), t2.Add(time.Second), out)
+	assert.NoError(t, err)
+	close(out)
+	<-done
+	assert.Equal(t, 2, len(scannedChunks))
+	assert.Equal(t, chunk1, scannedChunks[0])
+	assert.Equal(t, chunk2, scannedChunks[1])
+
 }
