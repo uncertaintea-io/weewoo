@@ -21,8 +21,10 @@ func (c *database) WriteChunk(serviceId int, indicatorId int, timestamp time.Tim
 			WITH updated AS (
 				UPDATE time_chunk
 				SET chunk = $1
-				WHERE service_id = $2 AND indicator_id = $3 AND "timestamp" = $4
-				RETURNING chunk
+				WHERE service_id = $2
+				  AND indicator_id = $3
+				  AND "timestamp" = $4::timestamptz(0)
+				RETURNING 1
 			)
 			INSERT INTO time_chunk (service_id, indicator_id, "timestamp", chunk)
 			SELECT $2, $3, $4, $1
@@ -37,7 +39,13 @@ func (c *database) WriteChunk(serviceId int, indicatorId int, timestamp time.Tim
 // ReadChunk reads a time chunk from the database.
 func (c *database) ReadChunk(serviceId int, indicatorId int, timestamp time.Time) ([]byte, error) {
 	var chunk []byte
-	err := c.db.QueryRow("SELECT chunk FROM time_chunk WHERE service_id = $1 AND indicator_id = $2 AND \"timestamp\" = $3", serviceId, indicatorId, timestamp).Scan(&chunk)
+	err := c.db.QueryRow(`
+		SELECT chunk
+		FROM time_chunk
+		WHERE service_id = $1
+		  AND indicator_id = $2
+		  AND "timestamp" = $3::timestamptz(0)
+  	`, serviceId, indicatorId, timestamp).Scan(&chunk)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read chunk: %w", err)
 	}
@@ -50,15 +58,15 @@ func (c *database) ScanGoodChunks(ctx context.Context, serviceId int, indicatorI
 		SELECT tc.chunk
 		FROM time_chunk AS tc
 		WHERE tc.service_id = $1
-		AND tc.indicator_id = $2
-		AND tc."timestamp" BETWEEN $3 AND $4
+		  AND tc.indicator_id = $2
+		  AND tc."timestamp" BETWEEN $3 AND $4
 		AND NOT EXISTS (
 			SELECT 1
 			FROM verdict AS v
 			WHERE v.service_id = tc.service_id
-				AND v.indicator_id = tc.indicator_id
-				AND v."timestamp" = tc."timestamp"
-				AND v.good = false
+			  AND v.indicator_id = tc.indicator_id
+			  AND v."timestamp" = tc."timestamp"
+			  AND v.good = false
 	)`, serviceId, indicatorId, start, end)
 	if err != nil {
 		return err
