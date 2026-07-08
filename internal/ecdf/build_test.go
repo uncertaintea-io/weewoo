@@ -1,6 +1,7 @@
 package ecdf
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"testing"
@@ -56,7 +57,7 @@ func newTestChunk(t time.Time, x, y float64) ([]byte, error) {
 
 func TestBuildWithRealTool(t *testing.T) {
 	setJECDFTool(t, "../../jecdf")
-	if  !jecdfExists(t) {
+	if !jecdfExists(t) {
 		t.Skip("jecdf tool not found or not executable, skipping test")
 		return
 	}
@@ -79,10 +80,11 @@ func TestBuildWithRealTool(t *testing.T) {
 	err = store.WriteChunk(serviceId, indicatorId, t2, chunk2)
 	require.NoError(t, err)
 
-	out, err := BuildJointECDF(store, serviceId, indicatorId, t1.Add(-time.Second), t2.Add(time.Second))
+	var out bytes.Buffer
+	err = BuildJointECDF(store, serviceId, indicatorId, &out)
 	require.NoError(t, err)
 	assert.NotNil(t, out)
-	assert.Greater(t, len(out), 20)
+	assert.Greater(t, out.Len(), 20)
 }
 
 func TestBuildWithFakeTool(t *testing.T) {
@@ -112,10 +114,11 @@ echo -n 'fake-ecdf-output'
 	err = store.WriteChunk(serviceId, indicatorId, t2, chunk2)
 	require.NoError(t, err)
 
-	out, err := BuildJointECDF(store, serviceId, indicatorId, t1.Add(-time.Second), t2.Add(time.Second))
+	var out bytes.Buffer
+	err = BuildJointECDF(store, serviceId, indicatorId, &out)
 	require.NoError(t, err)
 	assert.NotNil(t, out)
-	assert.Equal(t, "fake-ecdf-output", string(out))
+	assert.Equal(t, "fake-ecdf-output", out.String())
 }
 
 func TestBuildReturnsWhenToolStopsConsuming(t *testing.T) {
@@ -135,14 +138,15 @@ func TestBuildReturnsWhenToolStopsConsuming(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		_, err := BuildJointECDF(store, serviceId, indicatorId, start.Add(-time.Second), start.Add(10*time.Second))
+		var out bytes.Buffer
+		err := BuildJointECDF(store, serviceId, indicatorId, &out)
 		done <- err
 	}()
 
 	select {
 	case err := <-done:
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "failed to build joint ECDF")
+		assert.Contains(t, err.Error(), "jecdf failed")
 	case <-time.After(2 * time.Second):
 		t.Fatal("BuildJointECDF did not return after jecdf exited")
 	}

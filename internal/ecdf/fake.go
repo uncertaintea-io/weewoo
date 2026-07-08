@@ -57,7 +57,7 @@ func (c *fakeChunkStore) ReadChunk(serviceId int, indicatorId int, timestamp tim
 	return entries[i].chunk, nil
 }
 
-func (c *fakeChunkStore) ScanGoodChunks(ctx context.Context, serviceId int, indicatorId int, start, end time.Time, out chan<- []byte) error {
+func (c *fakeChunkStore) ScanGoodChunks(ctx context.Context, serviceId int, indicatorId int, out chan<- []byte) error {
 	indicators, ok := c.chunks[serviceId]
 	if !ok {
 		return nil
@@ -67,12 +67,6 @@ func (c *fakeChunkStore) ScanGoodChunks(ctx context.Context, serviceId int, indi
 		return nil
 	}
 	for _, entry := range entries {
-		if entry.timestamp.Before(start) {
-			continue
-		}
-		if entry.timestamp.After(end) {
-			break
-		}
 		select {
 		case out <- entry.chunk:
 		case <-ctx.Done():

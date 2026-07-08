@@ -22,36 +22,30 @@ var (
 )
 
 // BuildJointECDF builds a joint ECDF from good chunks in the time range.
-func BuildJointECDF(store ChunkStore, serviceId, indicatorId int, start, end time.Time) ([]byte, error) {
+func BuildJointECDF(store ChunkStore, serviceId, indicatorId int, writer io.Writer) error {
 	ctx, cancel := context.WithTimeout(context.Background(), buildTimeout)
 	defer cancel()
 
-	return BuildJointECDFContext(ctx, store, serviceId, indicatorId, start, end)
+	return BuildJointECDFContext(ctx, store, serviceId, indicatorId, writer)
 }
 
 // BuildJointECDFContext builds a joint ECDF using the supplied context for scanning and subprocess execution.
-func BuildJointECDFContext(ctx context.Context, store ChunkStore, serviceId, indicatorId int, start, end time.Time) ([]byte, error) {
+func BuildJointECDFContext(ctx context.Context, store ChunkStore, serviceId, indicatorId int, writer io.Writer) error {
 	chunks := make(chan []byte, 2)
 
 	group, ctx := errgroup.WithContext(ctx)
 
 	group.Go(func() error {
 		defer close(chunks)
-		err := store.ScanGoodChunks(ctx, serviceId, indicatorId, start, end, chunks)
+		err := store.ScanGoodChunks(ctx, serviceId, indicatorId, chunks)
 		return buildError("failed to scan chunks", err)
 	})
 
-	var out []byte
 	group.Go(func() error {
-		var err error
-		out, err = buildFromStream(ctx, chunks)
-		return buildError("failed to build joint ECDF", err)
+		return buildFromStream(ctx, chunks, writer)
 	})
 
-	if err := group.Wait(); err != nil {
-		return nil, err
-	}
-	return out, nil
+	return group.Wait()
 }
 
 func buildError(prefix string, err error) error {
@@ -64,20 +58,19 @@ func buildError(prefix string, err error) error {
 	return fmt.Errorf("%s: %w", prefix, err)
 }
 
-func buildFromStream(ctx context.Context, chunks <-chan []byte) ([]byte, error) {
+func buildFromStream(ctx context.Context, chunks <-chan []byte, writer io.Writer) error {
 	cmd := exec.CommandContext(ctx, *jecdf, "build")
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
-		return nil, fmt.Errorf("failed to open jecdf stdin: %w", err)
+		return fmt.Errorf("failed to open jecdf stdin: %w", err)
 	}
 
-	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	cmd.Stdout = &stdout
+	cmd.Stdout = writer
 	cmd.Stderr = &stderr
 
 	if err := cmd.Start(); err != nil {
-		return nil, fmt.Errorf("failed to start jecdf: %w", err)
+		return fmt.Errorf("failed to start jecdf: %w", err)
 	}
 
 	processExited := make(chan struct{})
@@ -96,18 +89,18 @@ func buildFromStream(ctx context.Context, chunks <-chan []byte) ([]byte, error) 
 	}
 
 	if ctx.Err() != nil {
-		return nil, ctx.Err()
+		return ctx.Err()
 	}
 	if waitErr != nil {
 		if stderr.Len() > 0 {
-			return nil, fmt.Errorf("jecdf failed: %w: %s", waitErr, stderr.String())
+			return fmt.Errorf("jecdf failed: %w: %s", waitErr, stderr.String())
 		}
-		return nil, fmt.Errorf("jecdf failed: %w", waitErr)
+		return fmt.Errorf("jecdf failed: %w", waitErr)
 	}
 	if err != nil {
-		return nil, fmt.Errorf("failed to write chunks to jecdf: %w", err)
+		return fmt.Errorf("failed to write chunks to jecdf: %w", err)
 	}
-	return stdout.Bytes(), nil
+	return nil
 }
 
 func writeChunks(ctx context.Context, stdin io.WriteCloser, chunks <-chan []byte, processExited <-chan struct{}) error {
