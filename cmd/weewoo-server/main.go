@@ -79,6 +79,7 @@ func observeRequestDuration(next http.Handler) http.Handler {
 	})
 }
 
+// todo adding startecdf builder to the main function
 func main() {
 	configfile := flag.String("config", "config.yaml", "Config file")
 	flag.Parse()
@@ -101,6 +102,14 @@ func main() {
 	defer collector.Stop()
 	for _, service := range services {
 		collector.Schedule(service)
+	}
+
+	// Start ECDF builder
+	scheduler := collection.NewIntervalScheduler(collection.WithSchedulerEventHandler(nil))
+	defer scheduler.Stop()
+	err = collection.StartECDFBuilder(ecdf.NewDatabaseChunkStore(db), databaseConfig, scheduler)
+	if err != nil {
+		log.Fatalf("Failed to start ECDF builder: %v", err)
 	}
 
 	//Serve files from static folder
