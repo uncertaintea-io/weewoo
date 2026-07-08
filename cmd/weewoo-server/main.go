@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
@@ -23,6 +24,52 @@ func NewMetricshandler() http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", promhttp.Handler())
 	return mux
+}
+
+type serviceResponse struct {
+	ID              int    `json:"id"`
+	Name            string `json:"name"`
+	PrometheusURL   string `json:"prometheusUrl"`
+	LoadQuery       string `json:"loadQuery"`
+	LatencyQuery    string `json:"latencyQuery"`
+	IntervalSeconds int64  `json:"intervalSeconds"`
+}
+
+func newServiceResponse(service *config.Service) serviceResponse {
+	return serviceResponse{
+		ID:              service.Id,
+		Name:            service.Name,
+		PrometheusURL:   service.PrometheusURL,
+		LoadQuery:       service.LoadQuery,
+		LatencyQuery:    service.LatencyQuery,
+		IntervalSeconds: int64(service.Interval / time.Second),
+	}
+}
+
+func NewListAllServicesHandler(cfg config.Config) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			w.Header().Set("Allow", http.MethodGet)
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		services, err := cfg.ReadAllServices()
+		if err != nil {
+			http.Error(w, "failed to read services", http.StatusInternalServerError)
+			return
+		}
+
+		response := make([]serviceResponse, 0, len(services))
+		for _, service := range services {
+			response = append(response, newServiceResponse(service))
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(response); err != nil {
+			log.Printf("failed to encode services response: %v", err)
+		}
+	})
 }
 
 type statusRecorder struct {
@@ -103,8 +150,9 @@ func main() {
 		collector.Schedule(service)
 	}
 
-	//Serve files from static folder
-	http.Handle("/", observeRequestDuration(http.FileServer(http.Dir("./ui/dist"))))
+	appMux := http.NewServeMux()
+	appMux.Handle("/api/services", observeRequestDuration(NewListAllServicesHandler(databaseConfig)))
+	appMux.Handle("/", observeRequestDuration(http.FileServer(http.Dir("./ui/dist"))))
 	monitorPort := ":5000"
 	appPort := ":8080"
 	fmt.Println("Server is running on port" + appPort)
@@ -112,7 +160,7 @@ func main() {
 
 	appServer := &http.Server{
 		Addr:           appPort,
-		Handler:        nil,
+		Handler:        appMux,
 		ReadTimeout:    10 * time.Second,
 		WriteTimeout:   10 * time.Second,
 		MaxHeaderBytes: 1 << 20,
