@@ -1,19 +1,8 @@
 import './index.scss'
-import { ListAllServices, type Service } from './api';
+import { ListAllServices, ServicesApiError, type Service } from './api';
+import { escapeHtml, renderServiceUrl } from './rendering';
 
 const app = document.querySelector<HTMLDivElement>('#app');
-
-function escapeHtml(value: string): string {
-  const entityMap: Record<string, string> = {
-    '&': '&amp;',
-    '<': '&lt;',
-    '>': '&gt;',
-    '"': '&quot;',
-    "'": '&#39;',
-  };
-
-  return value.replace(/[&<>"']/g, (character) => entityMap[character] ?? character);
-}
 
 function formatInterval(seconds: number): string {
   if (seconds < 60) {
@@ -31,7 +20,7 @@ function serviceInitial(service: Service): string {
   return service.name.trim().charAt(0).toUpperCase() || 'S';
 }
 
-function renderShell(content: string): void {
+function renderShell(content: string, apiResponse = 'Loading'): void {
   if (app === null) {
     return;
   }
@@ -92,7 +81,7 @@ function renderShell(content: string): void {
               </div>
               <div>
                 <span>Response</span>
-                <strong class="api-response">404 Not Found</strong>
+                <strong class="api-response">${escapeHtml(apiResponse)}</strong>
               </div>
             </article>
           </section>
@@ -151,7 +140,7 @@ function renderLoading(): void {
         <div class="skeleton-row"></div>
       </div>
     </section>
-  `);
+  `, 'Loading');
 }
 
 function renderEmpty(): void {
@@ -168,12 +157,20 @@ function renderEmpty(): void {
         <p>Add services to the configuration database and they will appear here.</p>
       </div>
     </section>
-  `);
+  `, '200 OK');
   setServiceCount(0);
 }
 
+function apiResponseForError(error: unknown): string {
+  if (error instanceof ServicesApiError) {
+    return `${String(error.status)}${error.statusText === '' ? '' : ` ${error.statusText}`}`;
+  }
+
+  return 'Request Failed';
+}
+
 function renderError(error: unknown): void {
-  void error;
+  const apiResponse = apiResponseForError(error);
   renderShell(`
     <section class="summary-grid" aria-label="Service summary">
       ${renderSummaryCard('Total Services', 0, 'total')}
@@ -182,13 +179,13 @@ function renderError(error: unknown): void {
       ${renderSummaryCard('Unavailable', 0, 'unavailable')}
     </section>
     <section class="error-panel" aria-live="polite">
-      <strong class="error-code">404</strong>
-      <span class="error-badge">404 Not Found</span>
+      <strong class="error-code">${escapeHtml(apiResponse)}</strong>
+      <span class="error-badge">${escapeHtml(apiResponse)}</span>
       <h2>Unable to load services</h2>
-      <p>The API returned 404. Check that the service configuration endpoint exists and is routed correctly.</p>
+      <p>The API returned ${escapeHtml(apiResponse)}. Check that the service configuration endpoint exists and is routed correctly.</p>
       <button id="retry-services" class="retry-button" type="button">Retry</button>
     </section>
-  `);
+  `, apiResponse);
   document.querySelector('#retry-services')?.addEventListener('click', () => {
     void boot();
   });
@@ -215,7 +212,7 @@ function renderServices(services: Service[]): void {
               <h2>${escapeHtml(service.name)}</h2>
               <span class="service-id">#${String(service.id)}</span>
             </div>
-            <a class="service-url" href="${escapeHtml(service.prometheusUrl)}" target="_blank" rel="noreferrer">${escapeHtml(service.prometheusUrl)}</a>
+            ${renderServiceUrl(service.prometheusUrl)}
           </div>
         </div>
         <span class="status-pill status-pill--healthy">Healthy</span>
@@ -251,7 +248,7 @@ function renderServices(services: Service[]): void {
         ${serviceRows}
       </div>
     </section>
-  `);
+  `, '200 OK');
   setServiceCount(services.length);
 }
 

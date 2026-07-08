@@ -9,6 +9,19 @@ export interface Service {
 
 type Fetcher = typeof fetch;
 
+export class ServicesApiError extends Error {
+  public readonly status: number;
+  public readonly statusText: string;
+
+  public constructor(status: number, statusText: string) {
+    const responseLabel = `${String(status)}${statusText === '' ? '' : ` ${statusText}`}`;
+    super(`Unable to load services. Server returned ${responseLabel}.`);
+    this.name = 'ServicesApiError';
+    this.status = status;
+    this.statusText = statusText;
+  }
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
 }
@@ -50,7 +63,7 @@ export async function ListAllServices(fetcher: Fetcher = fetch): Promise<Service
   });
 
   if (!response.ok) {
-    throw new Error(`Unable to load services. Server returned ${String(response.status)}.`);
+    throw new ServicesApiError(response.status, response.statusText);
   }
 
   const responseBody: unknown = await response.json();
