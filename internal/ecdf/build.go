@@ -21,7 +21,7 @@ var (
 	errJECDFExitedEarly = errors.New("jecdf exited before consuming all chunks")
 )
 
-// BuildJointECDF builds a joint ECDF from good chunks in the time range.
+// BuildJointECDF builds a joint ECDF from "good" chunks.
 func BuildJointECDF(store ChunkStore, serviceId, indicatorId int, writer io.Writer) error {
 	ctx, cancel := context.WithTimeout(context.Background(), buildTimeout)
 	defer cancel()
@@ -29,7 +29,7 @@ func BuildJointECDF(store ChunkStore, serviceId, indicatorId int, writer io.Writ
 	return BuildJointECDFContext(ctx, store, serviceId, indicatorId, writer)
 }
 
-// BuildJointECDFContext builds a joint ECDF using the supplied context for scanning and subprocess execution.
+// BuildJointECDFContext builds a joint ECDF using the supplied context.
 func BuildJointECDFContext(ctx context.Context, store ChunkStore, serviceId, indicatorId int, writer io.Writer) error {
 	chunks := make(chan []byte, 2)
 
