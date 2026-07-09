@@ -1,6 +1,7 @@
 package collection
 
 import (
+	"bytes"
 	"context"
 	"flag"
 	"os"
@@ -31,17 +32,17 @@ echo -n 'fake-ecdf-output'
 		require.NoError(t, flag.Set("jecdf", oldJECDF))
 	})
 
-	start := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
-	end := start.Add(time.Hour)
-	chunk, err := ecdf.Encode(start.Add(time.Minute), []ecdf.Sample{{Value: 1, Count: 1}}, []ecdf.Sample{{Value: 2, Count: 1}})
+	timestamp := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	chunk, err := ecdf.Encode(timestamp, []ecdf.Sample{{Value: 1, Count: 1}}, []ecdf.Sample{{Value: 2, Count: 1}})
 	require.NoError(t, err)
 
 	chunkStore := ecdf.NewFakeChunkStore()
-	require.NoError(t, chunkStore.WriteChunk(1, LoadLatencyIndicator, start.Add(time.Minute), chunk))
+	require.NoError(t, chunkStore.WriteChunk(1, LoadLatencyIndicator, timestamp, chunk))
 
-	out, err := ecdf.BuildJointECDFContext(context.Background(), chunkStore, 1, LoadLatencyIndicator, start, end)
+	var out bytes.Buffer
+	err = ecdf.BuildJointECDFContext(context.Background(), chunkStore, 1, LoadLatencyIndicator, &out)
 	require.NoError(t, err)
-	assert.Equal(t, "fake-ecdf-output", string(out))
+	assert.Equal(t, "fake-ecdf-output", out.String())
 }
 
 func TestBuildECDFUsesContext(t *testing.T) {
@@ -67,7 +68,8 @@ sleep 10
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	_, err = ecdf.BuildJointECDFContext(ctx, chunkStore, 1, LoadLatencyIndicator, start, start.Add(time.Hour))
+	var out bytes.Buffer
+	err = ecdf.BuildJointECDFContext(ctx, chunkStore, 1, LoadLatencyIndicator, &out)
 	require.ErrorIs(t, err, context.Canceled)
 }
 
