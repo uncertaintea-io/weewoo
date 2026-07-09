@@ -54,6 +54,7 @@ func StartECDFBuilder(chunkStore ecdf.ChunkStore, cfg config.Config, scheduler *
 		err = scheduler.AddCallback(target.CallbackID, serviceInterval, func(ctx context.Context, start time.Time, end time.Time) IntervalResult {
 			out, err := ecdf.BuildJointECDFContext(ctx, chunkStore, target.ServiceID, LoadLatencyIndicator, start, end)
 			if err != nil {
+				slog.Error("failed to build joint ECDF", "service_id", target.ServiceID, "indicator_id", LoadLatencyIndicator, "start", start, "end", end, "error", err)
 				return IntervalRetry(err)
 			}
 			slog.Info("built joint ECDF", "service_id", target.ServiceID, "indicator_id", LoadLatencyIndicator, "start", start, "end", end, "bytes", len(out))

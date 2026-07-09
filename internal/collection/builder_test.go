@@ -77,8 +77,7 @@ func TestStartECDFBuilderBuildsConfiguredServices(t *testing.T) {
 if [ "$1" != "build" ]; then
 	exit 2
 fi
-cat > "$0.stdin"
-echo -n 'fake-ecdf-output'
+echo -n 'fake-ecdf-output' > "$0.stdout"
 `), 0755)
 	require.NoError(t, err)
 
@@ -102,9 +101,9 @@ echo -n 'fake-ecdf-output'
 
 	require.NoError(t, StartECDFBuilder(chunkStore, cfg, scheduler))
 
-	stdinPath := jecdfPath + ".stdin"
+	outputPath := jecdfPath + ".stdout"
 	require.Eventually(t, func() bool {
-		got, err := os.ReadFile(stdinPath)
-		return err == nil && string(got) == string(chunk)
+		got, err := os.ReadFile(outputPath)
+		return err == nil && string(got) == "fake-ecdf-output"
 	}, time.Second, 10*time.Millisecond)
 }

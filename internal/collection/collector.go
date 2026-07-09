@@ -27,14 +27,14 @@ type collector struct {
 }
 
 // this creates a collector that can be used to collect samples from the prometheus server
-func NewCollector(client *http.Client, store ecdf.ChunkStore) Collector {
+func NewCollector(client *http.Client, store ecdf.ChunkStore, scheduler *IntervalScheduler) Collector {
 	if client == nil {
 		client = http.DefaultClient
 	}
 	c := &collector{
 		client:    client,
 		store:     store,
-		scheduler: NewIntervalScheduler(),
+		scheduler: scheduler,
 	}
 	return c
 }

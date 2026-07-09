@@ -55,10 +55,10 @@ type DataSource struct {
 }
 
 type Service struct {
-	Id              int
-	Name            string
-	PrometheusURL   string
-	LoadQuery       string
-	LatencyQuery    string
-	Interval time.Duration
+	Id            int
+	Name          string
+	PrometheusURL string
+	LoadQuery     string
+	LatencyQuery  string
+	Interval      time.Duration
 }

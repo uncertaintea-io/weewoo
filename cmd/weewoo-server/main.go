@@ -126,7 +126,6 @@ func observeRequestDuration(next http.Handler) http.Handler {
 	})
 }
 
-// todo adding startecdf builder to the main function
 func main() {
 	configfile := flag.String("config", "config.yaml", "Config file")
 	flag.Parse()
@@ -145,15 +144,15 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to read services: %v", err)
 	}
-	collector := collection.NewCollector(http.DefaultClient, ecdf.NewDatabaseChunkStore(db))
+	scheduler := collection.NewIntervalScheduler(collection.WithSchedulerEventHandler(nil))
+	defer scheduler.Stop()
+	collector := collection.NewCollector(http.DefaultClient, ecdf.NewDatabaseChunkStore(db), scheduler)
 	defer collector.Stop()
 	for _, service := range services {
 		collector.Schedule(service)
 	}
 
 	// Start ECDF builder
-	scheduler := collection.NewIntervalScheduler(collection.WithSchedulerEventHandler(nil))
-	defer scheduler.Stop()
 	err = collection.StartECDFBuilder(ecdf.NewDatabaseChunkStore(db), databaseConfig, scheduler)
 	if err != nil {
 		log.Fatalf("Failed to start ECDF builder: %v", err)
@@ -163,7 +162,7 @@ func main() {
 	appMux.Handle("/api/services", observeRequestDuration(NewListAllServicesHandler(databaseConfig)))
   //Serve files from static folder
 	appMux.Handle("/", observeRequestDuration(http.FileServer(http.Dir("./ui/dist"))))
-  
+
 	monitorPort := ":5000"
 	appPort := ":8080"
 	fmt.Println("Server is running on port" + appPort)
