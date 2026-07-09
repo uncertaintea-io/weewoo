@@ -1,9 +1,9 @@
 package collection
 
 import (
-	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"time"
 
@@ -12,7 +12,7 @@ import (
 )
 
 type ecdfBuilderTarget struct {
-	ServiceID int
+	ServiceID  int
 	CallbackID int
 }
 
@@ -37,7 +37,6 @@ func getTargets(cfg config.Config) ([]ecdfBuilderTarget, error) {
 	return targets, nil
 }
 
-// TODO make sure the generated ecdf is stored somewhere
 // StartECDFBuilder schedules one hourly builder callback. The scheduler owns the
 // timer loop and runs callbacks in goroutines when their window is due.
 func StartECDFBuilder(chunkStore ecdf.ChunkStore, cfg config.Config, scheduler *IntervalScheduler) error {
@@ -51,15 +50,21 @@ func StartECDFBuilder(chunkStore ecdf.ChunkStore, cfg config.Config, scheduler *
 	if err != nil {
 		return fmt.Errorf("failed to get service IDs: %w", err)
 	}
+	outputRoot, err := cfg.GetConfig(ECDFOutputDirConfigKey)
+	if err != nil {
+		return fmt.Errorf("failed to read ECDF output directory config: %w", err)
+	}
 	for _, target := range targets {
 		err = scheduler.AddCallback(target.CallbackID, serviceInterval, func(ctx context.Context, start time.Time, end time.Time) IntervalResult {
-			var out bytes.Buffer
-			err := ecdf.BuildJointECDFContext(ctx, chunkStore, target.ServiceID, LoadLatencyIndicator, &out)
+			fileStore := newJointECDFFileStore(outputRoot, target.ServiceID, LoadLatencyIndicator)
+			bytesWritten, err := fileStore.publish(func(out io.Writer) error {
+				return ecdf.BuildJointECDFContext(ctx, chunkStore, target.ServiceID, LoadLatencyIndicator, out)
+			})
 			if err != nil {
-				slog.Error("failed to build joint ECDF", "service_id", target.ServiceID, "indicator_id", LoadLatencyIndicator, "error", err)
+				slog.Error("failed to publish joint ECDF", "service_id", target.ServiceID, "indicator_id", LoadLatencyIndicator, "error", err)
 				return IntervalRetry(err)
 			}
-			slog.Info("built joint ECDF", "service_id", target.ServiceID, "indicator_id", LoadLatencyIndicator, "start", start, "end", end, "bytes", out.Len())
+			slog.Info("built joint ECDF", "service_id", target.ServiceID, "indicator_id", LoadLatencyIndicator, "start", start, "end", end, "bytes", bytesWritten, "path", fileStore.outputPath())
 			return IntervalSuccess()
 		}, WithLastEnd(time.Now().Add(-serviceInterval)))
 		if err != nil {
