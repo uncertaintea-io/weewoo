@@ -1,6 +1,7 @@
 package collection
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"log/slog"
@@ -52,12 +53,13 @@ func StartECDFBuilder(chunkStore ecdf.ChunkStore, cfg config.Config, scheduler *
 	}
 	for _, target := range targets {
 		err = scheduler.AddCallback(target.CallbackID, serviceInterval, func(ctx context.Context, start time.Time, end time.Time) IntervalResult {
-			out, err := ecdf.BuildJointECDFContext(ctx, chunkStore, target.ServiceID, LoadLatencyIndicator, start, end)
+			var out bytes.Buffer
+			err := ecdf.BuildJointECDFContext(ctx, chunkStore, target.ServiceID, LoadLatencyIndicator, &out)
 			if err != nil {
-				slog.Error("failed to build joint ECDF", "service_id", target.ServiceID, "indicator_id", LoadLatencyIndicator, "start", start, "end", end, "error", err)
+				slog.Error("failed to build joint ECDF", "service_id", target.ServiceID, "indicator_id", LoadLatencyIndicator, "error", err)
 				return IntervalRetry(err)
 			}
-			slog.Info("built joint ECDF", "service_id", target.ServiceID, "indicator_id", LoadLatencyIndicator, "start", start, "end", end, "bytes", len(out))
+			slog.Info("built joint ECDF", "service_id", target.ServiceID, "indicator_id", LoadLatencyIndicator, "start", start, "end", end, "bytes", out.Len())
 			return IntervalSuccess()
 		}, WithLastEnd(time.Now().Add(-serviceInterval)))
 		if err != nil {
