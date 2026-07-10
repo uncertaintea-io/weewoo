@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "service_id": 1,
+  "indicator_id": 1,
+  "status": "complete",
+  "current": {
+    "version": 1,
+    "file": "joint-ecdf-000001.bin",
+    "bytes": 2429,
+    "sha256": "3fad9bfde5f5041f83dce65b321c4c81bfb0531b2827c530dc7926ac33ea3747",
+    "created_at": "2026-07-10T13:41:22.888525217Z"
+  },
+  "updated_at": "2026-07-10T13:41:22.894830461Z"
+}

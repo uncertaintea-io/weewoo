@@ -1,6 +1,8 @@
 package collection
 
 import (
+	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -9,11 +11,13 @@ import (
 	"hash"
 	"io"
 	"io/fs"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -27,18 +31,28 @@ const (
 	ecdfUploadFile           = "joint-ecdf.uploading"
 	ecdfVersionFileFormat    = "joint-ecdf-%06d.bin"
 
-	ecdfManifestSchemaVersion = 1
-	ecdfRetainedVersions      = 5
-	ecdfManifestLockTTL       = 15 * time.Minute
-
+	ecdfManifestSchemaVersion  = 1
+	ecdfRetainedVersions       = 5
 	ecdfManifestStatusComplete = "complete"
 	ecdfManifestStatusRecovery = "recovery"
+
+	defaultECDFManifestLockWaitTimeout = time.Minute
+	ecdfManifestLockRetryInterval      = 225 * time.Millisecond
+	ecdfManifestLockWaitLogThreshold   = 5 * time.Second
+	ecdfManifestLockWaitLogInterval    = 15 * time.Second
+	ecdfManifestLockLongHoldThreshold  = 5 * time.Minute
+)
+
+var (
+	errECDFManifestLockTimeout  = errors.New("ECDF manifest lock wait timed out")
+	errECDFManifestLockCanceled = errors.New("ECDF manifest lock wait canceled")
 )
 
 type jointECDFFileStore struct {
-	dir         string
-	serviceID   int
-	indicatorID int
+	dir             string
+	serviceID       int
+	indicatorID     int
+	lockWaitTimeout time.Duration
 }
 
 type jointECDFManifest struct {
@@ -60,9 +74,11 @@ type jointECDFFileInfo struct {
 }
 
 type jointECDFManifestLock struct {
-	PID       int       `json:"pid"`
-	CreatedAt time.Time `json:"created_at"`
-	ExpiresAt time.Time `json:"expires_at"`
+	Token      string    `json:"token"`
+	PID        int       `json:"pid"`
+	CreatedAt  time.Time `json:"created_at"`
+	file       *os.File
+	acquiredAt time.Time
 }
 
 type countingHashWriter struct {
@@ -76,15 +92,16 @@ func newJointECDFFileStore(root string, serviceID int, indicatorID int) jointECD
 		root = defaultECDFOutputDir
 	}
 	return jointECDFFileStore{
-		dir:         filepath.Join(root, fmt.Sprintf("service-%d", serviceID), fmt.Sprintf("indicator-%d", indicatorID)),
-		serviceID:   serviceID,
-		indicatorID: indicatorID,
+		dir:             filepath.Join(root, fmt.Sprintf("service-%d", serviceID), fmt.Sprintf("indicator-%d", indicatorID)),
+		serviceID:       serviceID,
+		indicatorID:     indicatorID,
+		lockWaitTimeout: defaultECDFManifestLockWaitTimeout,
 	}
 }
 
 func ReadCurrentJointECDF(root string, serviceID int, indicatorID int) ([]byte, error) {
 	store := newJointECDFFileStore(root, serviceID, indicatorID)
-	return store.readCurrent()
+	return store.readCurrent(context.Background())
 }
 
 func RecoverJointECDFOutputDir(root string) error {
@@ -106,7 +123,7 @@ func RecoverJointECDFOutputDir(root string) error {
 			return nil
 		}
 		store := jointECDFFileStore{dir: path, serviceID: serviceID, indicatorID: indicatorID}
-		return store.recover()
+		return store.recover(context.Background())
 	})
 }
 
@@ -150,90 +167,149 @@ func (s jointECDFFileStore) recoveryPath() string {
 	return s.recoveryManifestPath()
 }
 
-func (s jointECDFFileStore) withManifestLock(fn func() error) error {
+// The lock file is intentionally persistent: its presence does not mean the
+// kernel lock is held. It must never be deleted, renamed, replaced, rotated, or
+// cleaned up while an application instance may be running. Stale age and PID
+// metadata must never be used to break the lock. Correctness requires every
+// writer to open this exact underlying file on a filesystem with reliable flock
+// semantics; local flock does not coordinate independent filesystems.
+// Callbacks must not recursively enter another locking method for the same
+// store; flock is not treated as reentrant here.
+func (s jointECDFFileStore) withManifestLock(ctx context.Context, fn func() error) (err error) {
 	if err := os.MkdirAll(s.dir, 0755); err != nil {
 		return fmt.Errorf("failed to create ECDF output directory: %w", err)
 	}
-	if err := s.acquireManifestLock(); err != nil {
+	lock, err := s.acquireManifestLock(ctx)
+	if err != nil {
 		return err
 	}
-	defer s.releaseManifestLock()
+	defer func() {
+		err = errors.Join(err, s.releaseManifestLock(lock))
+	}()
 	return fn()
 }
 
-func (s jointECDFFileStore) acquireManifestLock() error {
-	now := time.Now().UTC()
-	lock := jointECDFManifestLock{
-		PID:       os.Getpid(),
-		CreatedAt: now,
-		ExpiresAt: now.Add(ecdfManifestLockTTL),
+func (s jointECDFFileStore) acquireManifestLock(ctx context.Context) (*jointECDFManifestLock, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	waitTimeout := s.lockWaitTimeout
+	if waitTimeout <= 0 {
+		waitTimeout = defaultECDFManifestLockWaitTimeout
+	}
+	waitCtx, cancel := context.WithTimeout(ctx, waitTimeout)
+	defer cancel()
+	waitStarted := time.Now()
+	nextWaitLog := ecdfManifestLockWaitLogThreshold
+
+	tokenBytes := make([]byte, 16)
+	if _, err := rand.Read(tokenBytes); err != nil {
+		return nil, fmt.Errorf("failed to create ECDF manifest lock token: %w", err)
+	}
+	file, err := os.OpenFile(s.lockPath(), os.O_CREATE|os.O_RDWR, 0644)
+	if err != nil {
+		slog.Error("failed to open ECDF manifest lock", "service_id", s.serviceID, "indicator_id", s.indicatorID, "lock_path", s.lockPath(), "pid", os.Getpid(), "error", err)
+		return nil, fmt.Errorf("failed to open ECDF manifest lock: %w", err)
+	}
+	closeWithError := func(primary error) error {
+		if closeErr := file.Close(); closeErr != nil {
+			return errors.Join(primary, fmt.Errorf("failed to close unacquired ECDF manifest lock: %w", closeErr))
+		}
+		return primary
+	}
+	for {
+		err = syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+		if err == nil {
+			break
+		}
+		if !errors.Is(err, syscall.EWOULDBLOCK) && !errors.Is(err, syscall.EAGAIN) {
+			slog.Error("unexpected ECDF manifest flock failure", "service_id", s.serviceID, "indicator_id", s.indicatorID, "lock_path", s.lockPath(), "pid", os.Getpid(), "error", err)
+			return nil, closeWithError(fmt.Errorf("failed to acquire ECDF manifest lock: %w", err))
+		}
+		waited := time.Since(waitStarted)
+		if waited >= nextWaitLog {
+			slog.Warn("waiting for ECDF manifest lock", "service_id", s.serviceID, "indicator_id", s.indicatorID, "lock_path", s.lockPath(), "pid", os.Getpid(), "wait_duration", waited)
+			nextWaitLog += ecdfManifestLockWaitLogInterval
+		}
+		timer := time.NewTimer(ecdfManifestLockRetryInterval)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			waited = time.Since(waitStarted)
+			slog.Warn("ECDF manifest lock acquisition canceled", "service_id", s.serviceID, "indicator_id", s.indicatorID, "lock_path", s.lockPath(), "pid", os.Getpid(), "wait_duration", waited, "error", ctx.Err())
+			return nil, closeWithError(fmt.Errorf("%w after %s: %w", errECDFManifestLockCanceled, waited, ctx.Err()))
+		case <-waitCtx.Done():
+			timer.Stop()
+			if ctx.Err() != nil {
+				waited = time.Since(waitStarted)
+				slog.Warn("ECDF manifest lock acquisition canceled", "service_id", s.serviceID, "indicator_id", s.indicatorID, "lock_path", s.lockPath(), "pid", os.Getpid(), "wait_duration", waited, "error", ctx.Err())
+				return nil, closeWithError(fmt.Errorf("%w after %s: %w", errECDFManifestLockCanceled, waited, ctx.Err()))
+			}
+			waited = time.Since(waitStarted)
+			slog.Warn("ECDF manifest lock acquisition timed out", "service_id", s.serviceID, "indicator_id", s.indicatorID, "lock_path", s.lockPath(), "pid", os.Getpid(), "wait_duration", waited, "timeout", waitTimeout)
+			return nil, closeWithError(fmt.Errorf("%w after %s", errECDFManifestLockTimeout, waited))
+		case <-timer.C:
+		}
+	}
+	acquiredAt := time.Now()
+	lock := &jointECDFManifestLock{
+		Token:      hex.EncodeToString(tokenBytes),
+		PID:        os.Getpid(),
+		CreatedAt:  time.Now().UTC(),
+		file:       file,
+		acquiredAt: acquiredAt,
 	}
 	body, err := json.MarshalIndent(lock, "", "  ")
 	if err != nil {
-		return fmt.Errorf("failed to encode ECDF manifest lock: %w", err)
+		return nil, errors.Join(fmt.Errorf("failed to encode ECDF manifest lock: %w", err), s.releaseManifestLock(lock))
 	}
-
-	for {
-		file, err := os.OpenFile(s.lockPath(), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0644)
-		if err == nil {
-			if _, err := file.Write(body); err != nil {
-				_ = file.Close()
-				_ = os.Remove(s.lockPath())
-				return fmt.Errorf("failed to write ECDF manifest lock: %w", err)
-			}
-			if err := file.Sync(); err != nil {
-				_ = file.Close()
-				_ = os.Remove(s.lockPath())
-				return fmt.Errorf("failed to sync ECDF manifest lock: %w", err)
-			}
-			if err := file.Close(); err != nil {
-				_ = os.Remove(s.lockPath())
-				return fmt.Errorf("failed to close ECDF manifest lock: %w", err)
-			}
-			return syncDir(s.dir)
-		}
-		if !errors.Is(err, os.ErrExist) {
-			return fmt.Errorf("failed to create ECDF manifest lock: %w", err)
-		}
-		stale, err := s.manifestLockIsStale(now)
-		if err != nil {
-			return err
-		}
-		if !stale {
-			return fmt.Errorf("ECDF manifest is locked")
-		}
-		if err := os.Remove(s.lockPath()); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("failed to remove stale ECDF manifest lock: %w", err)
-		}
+	if err := file.Truncate(0); err != nil {
+		return nil, errors.Join(fmt.Errorf("failed to truncate ECDF manifest lock: %w", err), s.releaseManifestLock(lock))
 	}
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		return nil, errors.Join(fmt.Errorf("failed to seek ECDF manifest lock: %w", err), s.releaseManifestLock(lock))
+	}
+	if _, err := file.Write(body); err != nil {
+		return nil, errors.Join(fmt.Errorf("failed to write ECDF manifest lock: %w", err), s.releaseManifestLock(lock))
+	}
+	if err := file.Sync(); err != nil {
+		return nil, errors.Join(fmt.Errorf("failed to sync ECDF manifest lock: %w", err), s.releaseManifestLock(lock))
+	}
+	slog.Debug("acquired ECDF manifest lock", "service_id", s.serviceID, "indicator_id", s.indicatorID, "lock_path", s.lockPath(), "pid", os.Getpid(), "wait_duration", acquiredAt.Sub(waitStarted))
+	return lock, nil
 }
 
-func (s jointECDFFileStore) manifestLockIsStale(now time.Time) (bool, error) {
-	body, err := os.ReadFile(s.lockPath())
-	if errors.Is(err, os.ErrNotExist) {
-		return true, nil
+func (s jointECDFFileStore) releaseManifestLock(lock *jointECDFManifestLock) error {
+	if lock == nil || lock.file == nil {
+		return nil
 	}
-	if err != nil {
-		return false, fmt.Errorf("failed to read ECDF manifest lock: %w", err)
+	holdDuration := time.Since(lock.acquiredAt)
+	var releaseErr error
+	if err := syscall.Flock(int(lock.file.Fd()), syscall.LOCK_UN); err != nil {
+		slog.Error("failed to unlock ECDF manifest lock", "service_id", s.serviceID, "indicator_id", s.indicatorID, "lock_path", s.lockPath(), "pid", os.Getpid(), "error", err)
+		releaseErr = errors.Join(releaseErr, fmt.Errorf("failed to unlock ECDF manifest lock: %w", err))
 	}
-	var lock jointECDFManifestLock
-	if err := json.Unmarshal(body, &lock); err != nil {
-		return true, nil
+	if err := lock.file.Close(); err != nil {
+		slog.Error("failed to close ECDF manifest lock", "service_id", s.serviceID, "indicator_id", s.indicatorID, "lock_path", s.lockPath(), "pid", os.Getpid(), "error", err)
+		releaseErr = errors.Join(releaseErr, fmt.Errorf("failed to close ECDF manifest lock: %w", err))
 	}
-	return !lock.ExpiresAt.After(now), nil
+	lock.file = nil
+	if holdDuration >= ecdfManifestLockLongHoldThreshold {
+		slog.Warn("released long-held ECDF manifest lock", "service_id", s.serviceID, "indicator_id", s.indicatorID, "lock_path", s.lockPath(), "pid", os.Getpid(), "hold_duration", holdDuration)
+	} else {
+		slog.Debug("released ECDF manifest lock", "service_id", s.serviceID, "indicator_id", s.indicatorID, "lock_path", s.lockPath(), "pid", os.Getpid(), "hold_duration", holdDuration)
+	}
+	return releaseErr
 }
 
-func (s jointECDFFileStore) releaseManifestLock() {
-	_ = os.Remove(s.lockPath())
-	_ = syncDir(s.dir)
-}
-
-func (s jointECDFFileStore) recover() error {
-	return s.withManifestLock(s.recoverLocked)
+func (s jointECDFFileStore) recover(ctx context.Context) error {
+	return s.withManifestLock(ctx, s.recoverLocked)
 }
 
 func (s jointECDFFileStore) recoverLocked() error {
-	_ = os.Remove(s.uploadPath())
+	if err := s.cleanupIncompleteFilesLocked(); err != nil {
+		return err
+	}
 
 	manifest, _, err := s.readOptionalManifest(s.manifestPath())
 	if err != nil {
@@ -284,6 +360,31 @@ func (s jointECDFFileStore) recoverLocked() error {
 	return nil
 }
 
+func (s jointECDFFileStore) cleanupIncompleteFilesLocked() error {
+	patterns := []string{
+		s.uploadPath(),
+		filepath.Join(s.dir, ecdfUploadFile+"-*"),
+		filepath.Join(s.dir, ecdfManifestFile+".uploading-*"),
+		filepath.Join(s.dir, ecdfRecoveryManifestFile+".uploading-*"),
+	}
+	for _, pattern := range patterns {
+		matches := []string{pattern}
+		if strings.Contains(pattern, "*") {
+			var err error
+			matches, err = filepath.Glob(pattern)
+			if err != nil {
+				return fmt.Errorf("failed to find incomplete ECDF files: %w", err)
+			}
+		}
+		for _, path := range matches {
+			if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+				return fmt.Errorf("failed to remove incomplete ECDF file %s: %w", filepath.Base(path), err)
+			}
+		}
+	}
+	return nil
+}
+
 func currentOrPrevious(current *jointECDFFileInfo, previous *jointECDFFileInfo) *jointECDFFileInfo {
 	if current != nil {
 		return current
@@ -291,9 +392,9 @@ func currentOrPrevious(current *jointECDFFileInfo, previous *jointECDFFileInfo) 
 	return previous
 }
 
-func (s jointECDFFileStore) publish(build func(io.Writer) error) (int64, error) {
+func (s jointECDFFileStore) publish(ctx context.Context, build func(io.Writer) error) (int64, error) {
 	var bytesWritten int64
-	err := s.withManifestLock(func() error {
+	err := s.withManifestLock(ctx, func() error {
 		if err := s.recoverLocked(); err != nil {
 			return err
 		}
@@ -307,9 +408,9 @@ func (s jointECDFFileStore) publish(build func(io.Writer) error) (int64, error) 
 	return bytesWritten, err
 }
 
-func (s jointECDFFileStore) writeRecovery(build func(io.Writer) error) (int64, error) {
+func (s jointECDFFileStore) writeRecovery(ctx context.Context, build func(io.Writer) error) (int64, error) {
 	var bytesWritten int64
-	err := s.withManifestLock(func() error {
+	err := s.withManifestLock(ctx, func() error {
 		if err := s.recoverLocked(); err != nil {
 			return err
 		}
@@ -320,7 +421,7 @@ func (s jointECDFFileStore) writeRecovery(build func(io.Writer) error) (int64, e
 	return bytesWritten, err
 }
 
-func (s jointECDFFileStore) writeRecoveryLocked(build func(io.Writer) error) (int64, error) {
+func (s jointECDFFileStore) writeRecoveryLocked(build func(io.Writer) error) (bytesWritten int64, err error) {
 	manifest, _, err := s.readOptionalManifest(s.manifestPath())
 	if err != nil {
 		return 0, err
@@ -332,29 +433,43 @@ func (s jointECDFFileStore) writeRecoveryLocked(build func(io.Writer) error) (in
 		nextVersion = diskVersion + 1
 	}
 
-	_ = os.Remove(s.uploadPath())
-	file, err := os.OpenFile(s.uploadPath(), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0644)
+	file, err := os.CreateTemp(s.dir, ecdfUploadFile+"-*")
 	if err != nil {
 		return 0, fmt.Errorf("failed to create ECDF upload file: %w", err)
+	}
+	tmpPath := file.Name()
+	closed := false
+	published := false
+	defer func() {
+		if !closed {
+			if closeErr := file.Close(); closeErr != nil {
+				err = errors.Join(err, fmt.Errorf("failed to close incomplete ECDF upload file: %w", closeErr))
+			}
+			closed = true
+		}
+		if !published {
+			if removeErr := os.Remove(tmpPath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+				err = errors.Join(err, fmt.Errorf("failed to remove incomplete ECDF upload file: %w", removeErr))
+			}
+		}
+	}()
+	if err := file.Chmod(0644); err != nil {
+		return 0, fmt.Errorf("failed to set ECDF upload file permissions: %w", err)
 	}
 
 	counter := &countingHashWriter{writer: file, hash: sha256.New()}
 	if err := build(counter); err != nil {
-		_ = file.Close()
-		_ = os.Remove(s.uploadPath())
 		return 0, err
 	}
 	if err := file.Sync(); err != nil {
-		_ = file.Close()
-		_ = os.Remove(s.uploadPath())
 		return 0, fmt.Errorf("failed to sync ECDF upload file: %w", err)
 	}
 	if err := file.Close(); err != nil {
-		_ = os.Remove(s.uploadPath())
+		closed = true
 		return 0, fmt.Errorf("failed to close ECDF upload file: %w", err)
 	}
+	closed = true
 	if counter.bytes == 0 {
-		_ = os.Remove(s.uploadPath())
 		return 0, fmt.Errorf("built ECDF is empty")
 	}
 
@@ -365,10 +480,10 @@ func (s jointECDFFileStore) writeRecoveryLocked(build func(io.Writer) error) (in
 		SHA256:    hex.EncodeToString(counter.hash.Sum(nil)),
 		CreatedAt: time.Now().UTC(),
 	}
-	if err := os.Rename(s.uploadPath(), s.versionPath(nextVersion)); err != nil {
-		_ = os.Remove(s.uploadPath())
+	if err := os.Rename(tmpPath, s.versionPath(nextVersion)); err != nil {
 		return 0, fmt.Errorf("failed to publish ECDF version file: %w", err)
 	}
+	published = true
 	if err := syncDir(s.dir); err != nil {
 		return 0, err
 	}
@@ -382,8 +497,8 @@ func (s jointECDFFileStore) writeRecoveryLocked(build func(io.Writer) error) (in
 	return counter.bytes, nil
 }
 
-func (s jointECDFFileStore) promoteRecovery() error {
-	return s.withManifestLock(func() error {
+func (s jointECDFFileStore) promoteRecovery(ctx context.Context) error {
+	return s.withManifestLock(ctx, func() error {
 		return s.promoteRecoveryLocked()
 	})
 }
@@ -410,28 +525,84 @@ func (s jointECDFFileStore) promoteRecoveryLocked() error {
 	return s.cleanupOldVersions()
 }
 
-func (s jointECDFFileStore) readCurrent() ([]byte, error) {
-	if err := s.recover(); err != nil {
-		return nil, err
+func (s jointECDFFileStore) readCurrent(ctx context.Context) ([]byte, error) {
+	body, err := s.readCommittedCurrent()
+	if err == nil {
+		return body, nil
 	}
+	locked, lockErr := s.manifestLockIsHeld()
+	if lockErr != nil {
+		return nil, lockErr
+	}
+	if locked {
+		previous, previousErr := s.readCommittedPrevious()
+		if previousErr == nil {
+			return previous, nil
+		}
+		return nil, errors.Join(err, previousErr)
+	}
+	if recoverErr := s.recover(ctx); recoverErr != nil {
+		return nil, recoverErr
+	}
+	return s.readCommittedCurrent()
+}
+
+func (s jointECDFFileStore) manifestLockIsHeld() (held bool, err error) {
+	file, err := os.OpenFile(s.lockPath(), os.O_CREATE|os.O_RDWR, 0644)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("failed to open ECDF manifest lock: %w", err)
+	}
+	defer func() {
+		if closeErr := file.Close(); closeErr != nil {
+			err = errors.Join(err, fmt.Errorf("failed to close inspected ECDF manifest lock: %w", closeErr))
+		}
+	}()
+	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_SH|syscall.LOCK_NB); err != nil {
+		if errors.Is(err, syscall.EWOULDBLOCK) || errors.Is(err, syscall.EAGAIN) {
+			return true, nil
+		}
+		return false, fmt.Errorf("failed to inspect ECDF manifest lock: %w", err)
+	}
+	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_UN); err != nil {
+		return false, fmt.Errorf("failed to release inspected ECDF manifest lock: %w", err)
+	}
+	return false, nil
+}
+
+func (s jointECDFFileStore) readCommittedCurrent() ([]byte, error) {
 	manifest, err := s.readManifest(s.manifestPath())
 	if err != nil {
 		return nil, err
 	}
-	current := s.validEntry(manifest.Current)
-	if current == nil {
-		return nil, fmt.Errorf("ECDF manifest does not point at a valid current version")
-	}
-	body, err := os.ReadFile(filepath.Join(s.dir, current.File))
+	return s.readCommittedEntry(manifest.Current, "current")
+}
+
+func (s jointECDFFileStore) readCommittedPrevious() ([]byte, error) {
+	manifest, err := s.readManifest(s.manifestPath())
 	if err != nil {
-		return nil, fmt.Errorf("failed to read current ECDF file: %w", err)
+		return nil, err
 	}
-	if int64(len(body)) != current.Bytes {
-		return nil, fmt.Errorf("current ECDF file size mismatch")
+	return s.readCommittedEntry(manifest.Previous, "previous")
+}
+
+func (s jointECDFFileStore) readCommittedEntry(entry *jointECDFFileInfo, label string) ([]byte, error) {
+	valid := s.validEntry(entry)
+	if valid == nil {
+		return nil, fmt.Errorf("ECDF manifest does not point at a valid %s version", label)
+	}
+	body, err := os.ReadFile(filepath.Join(s.dir, valid.File))
+	if err != nil {
+		return nil, fmt.Errorf("failed to read %s ECDF file: %w", label, err)
+	}
+	if int64(len(body)) != valid.Bytes {
+		return nil, fmt.Errorf("%s ECDF file size mismatch", label)
 	}
 	sum := sha256.Sum256(body)
-	if hex.EncodeToString(sum[:]) != current.SHA256 {
-		return nil, fmt.Errorf("current ECDF file checksum mismatch")
+	if hex.EncodeToString(sum[:]) != valid.SHA256 {
+		return nil, fmt.Errorf("%s ECDF file checksum mismatch", label)
 	}
 	return body, nil
 }
@@ -479,36 +650,50 @@ func (s jointECDFFileStore) newManifest(status string, current *jointECDFFileInf
 	}
 }
 
-func (s jointECDFFileStore) writeManifest(manifest jointECDFManifest, path string) error {
+func (s jointECDFFileStore) writeManifest(manifest jointECDFManifest, path string) (err error) {
 	body, err := json.MarshalIndent(manifest, "", "  ")
 	if err != nil {
 		return fmt.Errorf("failed to encode ECDF manifest: %w", err)
 	}
 	body = append(body, '\n')
-	tmp := path + ".uploading"
-	_ = os.Remove(tmp)
-	file, err := os.OpenFile(tmp, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0644)
+	file, err := os.CreateTemp(s.dir, filepath.Base(path)+".uploading-*")
 	if err != nil {
 		return fmt.Errorf("failed to create ECDF manifest upload file: %w", err)
 	}
+	tmp := file.Name()
+	closed := false
+	published := false
+	defer func() {
+		if !closed {
+			if closeErr := file.Close(); closeErr != nil {
+				err = errors.Join(err, fmt.Errorf("failed to close incomplete ECDF manifest file: %w", closeErr))
+			}
+			closed = true
+		}
+		if !published {
+			if removeErr := os.Remove(tmp); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+				err = errors.Join(err, fmt.Errorf("failed to remove incomplete ECDF manifest file: %w", removeErr))
+			}
+		}
+	}()
+	if err := file.Chmod(0644); err != nil {
+		return fmt.Errorf("failed to set ECDF manifest upload file permissions: %w", err)
+	}
 	if _, err := file.Write(body); err != nil {
-		_ = file.Close()
-		_ = os.Remove(tmp)
 		return fmt.Errorf("failed to write ECDF manifest: %w", err)
 	}
 	if err := file.Sync(); err != nil {
-		_ = file.Close()
-		_ = os.Remove(tmp)
 		return fmt.Errorf("failed to sync ECDF manifest: %w", err)
 	}
 	if err := file.Close(); err != nil {
-		_ = os.Remove(tmp)
+		closed = true
 		return fmt.Errorf("failed to close ECDF manifest: %w", err)
 	}
+	closed = true
 	if err := os.Rename(tmp, path); err != nil {
-		_ = os.Remove(tmp)
 		return fmt.Errorf("failed to publish ECDF manifest: %w", err)
 	}
+	published = true
 	return syncDir(s.dir)
 }
 

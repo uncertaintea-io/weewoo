@@ -2,9 +2,13 @@ package collection
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
+	"path/filepath"
+	"strconv"
 	"time"
 
 	"github.com/uncertaintea-io/weewoo/internal/config"
@@ -19,6 +23,11 @@ type ecdfBuilderTarget struct {
 const (
 	serviceInterval             = time.Hour
 	ecdfBuilderCallbackIDOffset = 1000
+
+	ECDFManifestLockWaitTimeoutConfigKey = "ecdf_manifest_lock_wait_timeout"
+	ECDFScheduledBuildTimeoutConfigKey   = "ecdf_scheduled_build_timeout"
+	ECDFPublisherEnabledEnv              = "ECDF_PUBLISHER_ENABLED"
+	defaultECDFScheduledBuildTimeout     = 5 * time.Minute
 )
 
 // Gets the ID if the service from the config object
@@ -46,22 +55,63 @@ func StartECDFBuilder(chunkStore ecdf.ChunkStore, cfg config.Config, scheduler *
 	if cfg == nil {
 		return fmt.Errorf("nil config")
 	}
-	targets, err := getTargets(cfg)
-	if err != nil {
-		return fmt.Errorf("failed to get service IDs: %w", err)
-	}
 	outputRoot, err := cfg.GetConfig(ECDFOutputDirConfigKey)
 	if err != nil {
 		return fmt.Errorf("failed to read ECDF output directory config: %w", err)
 	}
+	if outputRoot == "" {
+		outputRoot = defaultECDFOutputDir
+	}
+	absOutputRoot, err := filepath.Abs(outputRoot)
+	if err != nil {
+		return fmt.Errorf("failed to resolve ECDF output directory: %w", err)
+	}
+	hostname, hostnameErr := os.Hostname()
+	if hostnameErr != nil {
+		hostname = "unknown"
+	}
+	publisherEnabled, err := ecdfPublisherEnabled()
+	if err != nil {
+		return err
+	}
+	slog.Info("ECDF publisher startup configuration", "enabled", publisherEnabled, "ecdf_output_dir", absOutputRoot, "hostname", hostname, "pid", os.Getpid(), "coordination_mode", "local_flock", "independent_filesystems_coordinated", false)
+	if !publisherEnabled {
+		return nil
+	}
+	outputRoot = absOutputRoot
+	slog.Warn("ECDF publication uses local flock coordination; independent filesystems are not coordinated", "ecdf_output_dir", absOutputRoot, "hostname", hostname, "pid", os.Getpid())
+
+	lockWaitTimeout, err := configuredDuration(cfg, ECDFManifestLockWaitTimeoutConfigKey, defaultECDFManifestLockWaitTimeout)
+	if err != nil {
+		return err
+	}
+	buildTimeout, err := configuredDuration(cfg, ECDFScheduledBuildTimeoutConfigKey, defaultECDFScheduledBuildTimeout)
+	if err != nil {
+		return err
+	}
+	targets, err := getTargets(cfg)
+	if err != nil {
+		return fmt.Errorf("failed to get service IDs: %w", err)
+	}
 	for _, target := range targets {
 		err = scheduler.AddCallback(target.CallbackID, serviceInterval, func(ctx context.Context, start time.Time, end time.Time) IntervalResult {
+			buildCtx, cancel := context.WithTimeout(ctx, buildTimeout)
+			defer cancel()
 			fileStore := newJointECDFFileStore(outputRoot, target.ServiceID, LoadLatencyIndicator)
-			bytesWritten, err := fileStore.publish(func(out io.Writer) error {
-				return ecdf.BuildJointECDFContext(ctx, chunkStore, target.ServiceID, LoadLatencyIndicator, out)
+			fileStore.lockWaitTimeout = lockWaitTimeout
+			bytesWritten, err := fileStore.publish(buildCtx, func(out io.Writer) error {
+				if err := ecdf.BuildJointECDFContext(buildCtx, chunkStore, target.ServiceID, LoadLatencyIndicator, out); err != nil {
+					return fmt.Errorf("ECDF generation failed: %w", err)
+				}
+				return nil
 			})
 			if err != nil {
-				slog.Error("failed to publish joint ECDF", "service_id", target.ServiceID, "indicator_id", LoadLatencyIndicator, "error", err)
+				stage := "publication"
+				if buildCtx.Err() != nil {
+					stage = "scheduled build deadline"
+					err = fmt.Errorf("%s failed: %w", stage, errors.Join(err, buildCtx.Err()))
+				}
+				slog.Error("failed to publish joint ECDF", "service_id", target.ServiceID, "indicator_id", LoadLatencyIndicator, "stage", stage, "error", err)
 				return IntervalRetry(err)
 			}
 			slog.Info("built joint ECDF", "service_id", target.ServiceID, "indicator_id", LoadLatencyIndicator, "start", start, "end", end, "bytes", bytesWritten, "path", fileStore.outputPath())
@@ -72,4 +122,31 @@ func StartECDFBuilder(chunkStore ecdf.ChunkStore, cfg config.Config, scheduler *
 		}
 	}
 	return nil
+}
+
+func configuredDuration(cfg config.Config, key string, fallback time.Duration) (time.Duration, error) {
+	value, err := cfg.GetConfig(key)
+	if err != nil {
+		return 0, fmt.Errorf("failed to read %s: %w", key, err)
+	}
+	if value == "" {
+		return fallback, nil
+	}
+	duration, err := time.ParseDuration(value)
+	if err != nil || duration <= 0 {
+		return 0, fmt.Errorf("invalid %s %q: must be a positive duration", key, value)
+	}
+	return duration, nil
+}
+
+func ecdfPublisherEnabled() (bool, error) {
+	value, ok := os.LookupEnv(ECDFPublisherEnabledEnv)
+	if !ok || value == "" {
+		return true, nil
+	}
+	enabled, err := strconv.ParseBool(value)
+	if err != nil {
+		return false, fmt.Errorf("invalid %s %q: %w", ECDFPublisherEnabledEnv, value, err)
+	}
+	return enabled, nil
 }
