@@ -12,6 +12,7 @@ import (
 
 type database struct {
 	db *sql.DB
+	alertManagerURL string
 }
 
 // gets the value for a given key from the config table and returns the value. If the key is not found it returns an error, if the key is empty it returns an error.
@@ -62,8 +63,12 @@ func (c *database) SetConfig(key string, value string) error {
 }
 
 // opens connection to the database for the functions below to use
-func NewDatabaseConfig(db *sql.DB) Config {
-	return &database{db: db}
+func NewDatabaseConfig(db *sql.DB, alertManagerURL string) Config {
+	return &database{db: db, alertManagerURL: alertManagerURL}
+}
+
+func (c *database) AlertManagerURL() string {
+	return c.alertManagerURL
 }
 
 func (c *database) ReadDataSource(id int) (*DataSource, error) {

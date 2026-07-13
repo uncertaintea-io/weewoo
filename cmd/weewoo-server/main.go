@@ -137,10 +137,10 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to open database: %v", err)
 	}
-	databaseConfig := config.NewDatabaseConfig(db)
-	defer databaseConfig.Close()
+	cfg := config.NewFakeConfig()
+	defer cfg.Close()
 
-	services, err := databaseConfig.ReadAllServices()
+	services, err := cfg.ReadAllServices()
 	if err != nil {
 		log.Fatalf("Failed to read services: %v", err)
 	}
@@ -153,14 +153,14 @@ func main() {
 	}
 
 	// Start ECDF builder
-	err = collection.StartECDFBuilder(ecdf.NewDatabaseChunkStore(db), databaseConfig, scheduler)
+	err = collection.StartECDFBuilder(ecdf.NewDatabaseChunkStore(db), cfg, scheduler)
 	if err != nil {
 		log.Fatalf("Failed to start ECDF builder: %v", err)
 	}
 
 	appMux := http.NewServeMux()
-	appMux.Handle("/api/services", observeRequestDuration(NewListAllServicesHandler(databaseConfig)))
-  //Serve files from static folder
+	appMux.Handle("/api/services", observeRequestDuration(NewListAllServicesHandler(cfg)))
+	//Serve files from static folder
 	appMux.Handle("/", observeRequestDuration(http.FileServer(http.Dir("./ui/dist"))))
 
 	monitorPort := ":5000"

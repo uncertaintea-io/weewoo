@@ -14,25 +14,43 @@ import (
 	amclient "github.com/prometheus/alertmanager/api/v2/client"
 	"github.com/prometheus/alertmanager/api/v2/client/alert"
 	"github.com/prometheus/alertmanager/api/v2/models"
+	"github.com/uncertaintea-io/weewoo/internal/config"
 )
 
-func SendIt() error {
-	// configure the transport to use the alertmanager API
-	cfg := amclient.DefaultTransportConfig().WithHost("pc0:9093")
-	api := amclient.NewHTTPClientWithConfig(strfmt.Default, cfg)
+type AlertingOptions struct {
+	Service      string
+	Serverity    string
+	Indicator    string
+	AlertName    string
+	Summary      string
+	Description  string
+	Annotations  map[string]string
+	GeneratorURL string
+}
 
-	slog.Debug("sending alert to alertmanager", "url", cfg.Host)
+func SendIt(cfg config.Config, options AlertingOptions) error {
+	// configure the transport to use the alertmanager API
+	transportConfig := amclient.DefaultTransportConfig().WithHost(cfg.AlertManagerURL())
+	api := amclient.NewHTTPClientWithConfig(strfmt.Default, transportConfig)
+
+	slog.Debug("sending alert to alertmanager", "url", cfg.AlertManagerURL())
 	// build the alert payload
 	alertPayload := models.PostableAlerts{
 		&models.PostableAlert{
 			StartsAt: strfmt.DateTime(time.Now()),
 			Alert: models.Alert{
-				GeneratorURL: "http://localhost:9093/alerts",
+				GeneratorURL: strfmt.URI(options.GeneratorURL),
 				Labels: models.LabelSet{
-					"alertname": "test",
-					"severity":  "critical",
-					"instance":  "pc0:9093",
+					"alertname": options.AlertName,
+					"severity":  options.Serverity,
+					"instance":  options.GeneratorURL,
+					"service":   options.Service,
+					"indicator": options.Indicator,
 				},
+			},
+			Annotations: models.LabelSet{
+				"description": options.Description,
+				"summary":     options.Summary,
 			},
 		},
 	}

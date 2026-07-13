@@ -42,7 +42,7 @@ func printTargets(promURL string) {
 	}
 }
 
-func monitorCpu(config config.Config) {
+func monitorCpu(cfg config.Config) {
 	promURL := "http://pc0:9090"
 	//threshold := flag.Float64("threshold", 0.25, "Threshold percent")
 	//overFor := flag.Duration("duration", 5*time.Minute, "Time over threshold to trigger error")
@@ -73,12 +73,12 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to read system settings: %v", err)
 	}
-	db, err := systemSettings.OpenDatabase()
+	_, err = systemSettings.OpenDatabase()
 	if err != nil {
 		log.Fatalf("Failed to open database: %v", err)
 	}
-	databaseConfig := config.NewDatabaseConfig(db)
-	defer databaseConfig.Close()
-	monitorCpu(databaseConfig)
+	cfg := config.NewFakeConfig()
+	defer cfg.Close()
+	monitorCpu(cfg)
 
 }
