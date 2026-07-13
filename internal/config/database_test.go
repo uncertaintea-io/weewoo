@@ -22,7 +22,7 @@ func newDatabaseConfig(t *testing.T) Config {
 	if err != nil {
 		t.Fatal(err)
 	}
-	config := NewDatabaseConfig(db, "http://localhost:9093")
+	config := NewDatabaseConfig(db)
 	require.NotNil(t, config)
 	return config
 }

@@ -7,14 +7,13 @@ import (
 
 // a new fake config should be initially empty
 func NewFakeConfig() Config {
-	return &fakeConfig{config: map[string]string{}, dataSources: map[int]*DataSource{}, services: map[int]*Service{}, alertManagerURL: "http://localhost:9093"}
+	return &fakeConfig{config: map[string]string{}, dataSources: map[int]*DataSource{}, services: map[int]*Service{}}
 }
 
 type fakeConfig struct {
 	config      map[string]string
 	dataSources map[int]*DataSource
 	services    map[int]*Service
-	alertManagerURL string
 }
 
 func (c *fakeConfig) GetConfig(key string) (string, error) {
@@ -69,10 +68,6 @@ func (c *fakeConfig) ReadAllServices() ([]*Service, error) {
 		services = append(services, service)
 	}
 	return services, nil
-}
-
-func (c *fakeConfig) AlertManagerURL() string {
-	return c.alertManagerURL
 }
 
 func (c *fakeConfig) Close() {

@@ -13,7 +13,6 @@ import (
 // this struct tells config how to connect to the database using yaml files
 type SystemSettings struct {
 	DatabaseURL string `yaml:"database_url"`
-	AlertManagerURL string `yaml:"alertmanager_url"`
 }
 
 func (s *SystemSettings) OpenDatabase() (*sql.DB, error) {
@@ -45,7 +44,6 @@ type Config interface {
 	WriteService(service *Service) error
 	ReadService(id int) (*Service, error)
 	ReadAllServices() ([]*Service, error)
-	AlertManagerURL() string
 	Close()
 }
 

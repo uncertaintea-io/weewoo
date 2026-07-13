@@ -4,6 +4,7 @@ package alerting
 // It will be used to send alerts to the user when the system is not working as expected.
 
 import (
+	"maps"
 	"context"
 	"fmt"
 	"log/slog"
@@ -29,11 +30,25 @@ type AlertingOptions struct {
 }
 
 func SendIt(cfg config.Config, options AlertingOptions) error {
+	alertmanagerHost, err := cfg.GetConfig("alertmanager_host")
+	if err != nil {
+		return fmt.Errorf("failed to get alertmanager host: %w", err)
+	}
+
 	// configure the transport to use the alertmanager API
-	transportConfig := amclient.DefaultTransportConfig().WithHost(cfg.AlertManagerURL())
+	transportConfig := amclient.DefaultTransportConfig().WithHost(alertmanagerHost)
 	api := amclient.NewHTTPClientWithConfig(strfmt.Default, transportConfig)
 
-	slog.Debug("sending alert to alertmanager", "url", cfg.AlertManagerURL())
+	slog.Debug("sending alert to alertmanager", "url", alertmanagerHost)
+
+	annotations := models.LabelSet{
+		"description": options.Description,
+		"summary":     options.Summary,
+	}
+	if options.Annotations != nil {
+		maps.Copy(annotations, options.Annotations)
+	}
+
 	// build the alert payload
 	alertPayload := models.PostableAlerts{
 		&models.PostableAlert{
@@ -48,10 +63,7 @@ func SendIt(cfg config.Config, options AlertingOptions) error {
 					"indicator": options.Indicator,
 				},
 			},
-			Annotations: models.LabelSet{
-				"description": options.Description,
-				"summary":     options.Summary,
-			},
+			Annotations: annotations,
 		},
 	}
 	// prepare the request parameters
@@ -59,7 +71,7 @@ func SendIt(cfg config.Config, options AlertingOptions) error {
 
 	slog.Debug("params", "params", params)
 	// send the alerts over HTTP v2 API
-	_, err := api.Alert.PostAlerts(params)
+	_, err = api.Alert.PostAlerts(params)
 	if err != nil {
 		return fmt.Errorf("failed to send alert: %w", err)
 	}

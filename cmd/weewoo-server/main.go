@@ -137,7 +137,8 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to open database: %v", err)
 	}
-	cfg := config.NewFakeConfig()
+
+	cfg := config.NewDatabaseConfig(db)
 	defer cfg.Close()
 
 	services, err := cfg.ReadAllServices()
