@@ -6,7 +6,7 @@ package alerting
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -16,13 +16,12 @@ import (
 	"github.com/prometheus/alertmanager/api/v2/models"
 )
 
-func SendIt() {
+func SendIt() error {
 	// configure the transport to use the alertmanager API
 	cfg := amclient.DefaultTransportConfig().WithHost("pc0:9093")
 	api := amclient.NewHTTPClientWithConfig(strfmt.Default, cfg)
 
-	fmt.Println("sending alert to alertmanager")
-	fmt.Println("alertmanager URL: ", cfg.Host)
+	slog.Debug("sending alert to alertmanager", "url", cfg.Host)
 	// build the alert payload
 	alertPayload := models.PostableAlerts{
 		&models.PostableAlert{
@@ -37,17 +36,17 @@ func SendIt() {
 			},
 		},
 	}
-	fmt.Println("alert payload: ", alertPayload)
 	// prepare the request parameters
 	params := alert.NewPostAlertsParams().WithContext(context.Background()).WithHTTPClient(http.DefaultClient).WithAlerts(alertPayload)
 
-	fmt.Println("params: ", params)
+	slog.Debug("params", "params", params)
 	// send the alerts over HTTP v2 API
 	_, err := api.Alert.PostAlerts(params)
 	if err != nil {
-		log.Fatalf("failed to send alert: %v", err)
+		return fmt.Errorf("failed to send alert: %w", err)
 	}
 
 	// print the response
-	fmt.Println("alert sent successfully")
+	slog.Debug("alert sent successfully")
+	return nil
 }
