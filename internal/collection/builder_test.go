@@ -147,7 +147,6 @@ func TestStartECDFBuilderPublishesConfiguredServices(t *testing.T) {
 }
 
 func TestECDFPublisherDisabledSkipsScheduling(t *testing.T) {
-	t.Setenv(ECDFPublisherEnabledEnv, "false")
 	cfg := config.NewFakeConfig()
 	require.NoError(t, cfg.WriteService(&config.Service{Id: 7, Name: "api"}))
 	joint := newRecordingJointStore()

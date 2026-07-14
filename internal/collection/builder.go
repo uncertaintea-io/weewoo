@@ -22,7 +22,6 @@ const (
 	ecdfBuilderCallbackIDOffset = 1000
 
 	ECDFScheduledBuildTimeoutConfigKey = "ecdf_scheduled_build_timeout"
-	ECDFPublisherEnabledEnv            = "ECDF_PUBLISHER_ENABLED"
 	defaultECDFScheduledBuildTimeout   = 5 * time.Minute
 )
 
@@ -89,7 +88,7 @@ func StartECDFBuilder(chunkStore ecdf.ChunkStore, jointStore ecdf.JointStore, cf
 			}
 			slog.Info("built joint ECDF", "service_id", target.ServiceID, "indicator_id", LoadLatencyIndicator, "start", start, "end", end, "bytes", bytesWritten)
 			return IntervalSuccess()
-		})
+		}, WithLastEnd(time.Now().UTC().Truncate(serviceInterval).Add(-serviceInterval)))
 		if err != nil {
 			return fmt.Errorf("failed to add callback for service %d: %w", target.ServiceID, err)
 		}

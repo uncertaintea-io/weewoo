@@ -25,6 +25,3 @@ Configuration:
 
 - `ecdf_scheduled_build_timeout`: complete scheduled invocation timeout;
   defaults to `5m`.
-- `ECDF_PUBLISHER_ENABLED`: defaults to `true`. Setting it to `false` disables
-  scheduled publication on that instance; committed database reads remain
-  available.
