@@ -39,7 +39,7 @@ func SendIt(cfg config.Config, options AlertingOptions) error {
 	transportConfig := amclient.DefaultTransportConfig().WithHost(alertmanagerHost)
 	api := amclient.NewHTTPClientWithConfig(strfmt.Default, transportConfig)
 
-	slog.Debug("sending alert to alertmanager", "url", alertmanagerHost)
+	slog.Debug("sending alert to alertmanager", "host", alertmanagerHost)
 
 	annotations := models.LabelSet{
 		"description": options.Description,

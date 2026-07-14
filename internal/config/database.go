@@ -11,7 +11,7 @@ import (
 )
 
 type database struct {
-	db              *sql.DB
+	db *sql.DB
 }
 
 // gets the value for a given key from the config table and returns the value. If the key is not found it returns an error, if the key is empty it returns an error.

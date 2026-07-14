@@ -31,10 +31,9 @@ func TestSendIt(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 
-	cfg := testConfig{
-		Config:          config.NewFakeConfig(),
-		alertManagerURL: server.Listener.Addr().String(),
-	}
+	cfg := config.NewFakeConfig()
+	cfg.SetConfig("alertmanager_host", server.Listener.Addr().String())
+
 	err := SendIt(cfg, AlertingOptions{
 		Service:     "test",
 		Indicator:   "test",

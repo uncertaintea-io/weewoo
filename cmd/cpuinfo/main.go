@@ -77,7 +77,12 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to open database: %v", err)
 	}
-	cfg := config.NewFakeConfig()
+	db, err := systemSettings.OpenDatabase()
+	if err != nil {
+		log.Fatalf("Failed to open database: %v", err)
+	}
+	defer db.Close()
+	cfg := config.NewDatabaseConfig(db)
 	defer cfg.Close()
 	monitorCpu(cfg)
 
