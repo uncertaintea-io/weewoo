@@ -4,6 +4,7 @@ package alerting
 // It will be used to send alerts to the user when the system is not working as expected.
 
 import (
+	"maps"
 	"context"
 	"fmt"
 	"log/slog"
@@ -14,26 +15,55 @@ import (
 	amclient "github.com/prometheus/alertmanager/api/v2/client"
 	"github.com/prometheus/alertmanager/api/v2/client/alert"
 	"github.com/prometheus/alertmanager/api/v2/models"
+	"github.com/uncertaintea-io/weewoo/internal/config"
 )
 
-func SendIt() error {
-	// configure the transport to use the alertmanager API
-	cfg := amclient.DefaultTransportConfig().WithHost("pc0:9093")
-	api := amclient.NewHTTPClientWithConfig(strfmt.Default, cfg)
+type AlertingOptions struct {
+	Service      string
+	Serverity    string
+	Indicator    string
+	AlertName    string
+	Summary      string
+	Description  string
+	Annotations  map[string]string
+	GeneratorURL string
+}
 
-	slog.Debug("sending alert to alertmanager", "url", cfg.Host)
+func SendIt(cfg config.Config, options AlertingOptions) error {
+	alertmanagerHost, err := cfg.GetConfig("alertmanager_host")
+	if err != nil {
+		return fmt.Errorf("failed to get alertmanager host: %w", err)
+	}
+
+	// configure the transport to use the alertmanager API
+	transportConfig := amclient.DefaultTransportConfig().WithHost(alertmanagerHost)
+	api := amclient.NewHTTPClientWithConfig(strfmt.Default, transportConfig)
+
+	slog.Debug("sending alert to alertmanager", "host", alertmanagerHost)
+
+	annotations := models.LabelSet{
+		"description": options.Description,
+		"summary":     options.Summary,
+	}
+	if options.Annotations != nil {
+		maps.Copy(annotations, options.Annotations)
+	}
+
 	// build the alert payload
 	alertPayload := models.PostableAlerts{
 		&models.PostableAlert{
 			StartsAt: strfmt.DateTime(time.Now()),
 			Alert: models.Alert{
-				GeneratorURL: "http://localhost:9093/alerts",
+				GeneratorURL: strfmt.URI(options.GeneratorURL),
 				Labels: models.LabelSet{
-					"alertname": "test",
-					"severity":  "critical",
-					"instance":  "pc0:9093",
+					"alertname": options.AlertName,
+					"severity":  options.Serverity,
+					"instance":  options.GeneratorURL,
+					"service":   options.Service,
+					"indicator": options.Indicator,
 				},
 			},
+			Annotations: annotations,
 		},
 	}
 	// prepare the request parameters
@@ -41,7 +71,7 @@ func SendIt() error {
 
 	slog.Debug("params", "params", params)
 	// send the alerts over HTTP v2 API
-	_, err := api.Alert.PostAlerts(params)
+	_, err = api.Alert.PostAlerts(params)
 	if err != nil {
 		return fmt.Errorf("failed to send alert: %w", err)
 	}
