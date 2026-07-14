@@ -4,21 +4,15 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"flag"
 	"fmt"
 	"io"
-	"os/exec"
 	"time"
 
 	"golang.org/x/sync/errgroup"
 )
 
 var (
-	jecdf = flag.String("jecdf", "./jecdf", "path to the jecdf tool")
-
 	buildTimeout = 5 * time.Minute
-
-	errJECDFExitedEarly = errors.New("jecdf exited before consuming all chunks")
 )
 
 // BuildJointECDF builds a joint ECDF from "good" chunks.
@@ -59,59 +53,22 @@ func buildError(prefix string, err error) error {
 }
 
 func buildFromStream(ctx context.Context, chunks <-chan []byte, writer io.Writer) error {
-	cmd := exec.CommandContext(ctx, *jecdf, "build")
-	stdin, err := cmd.StdinPipe()
-	if err != nil {
-		return fmt.Errorf("failed to open jecdf stdin: %w", err)
-	}
-
-	var stderr bytes.Buffer
-	cmd.Stdout = writer
-	cmd.Stderr = &stderr
-
-	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("failed to start jecdf: %w", err)
-	}
-
-	processExited := make(chan struct{})
-	writeErr := make(chan error, 1)
-	go func() {
-		writeErr <- writeChunks(ctx, stdin, chunks, processExited)
-	}()
-
-	waitErr := cmd.Wait()
-	select {
-	case err = <-writeErr:
-	default:
-		close(processExited)
-		_ = stdin.Close()
-		err = <-writeErr
-	}
-
-	if ctx.Err() != nil {
-		return ctx.Err()
-	}
-	if waitErr != nil {
-		if stderr.Len() > 0 {
-			return fmt.Errorf("jecdf failed: %w: %s", waitErr, stderr.String())
+	return runJECDF(ctx, "build", func(ctx context.Context, stdin io.Writer) error {
+		if err := writeChunks(ctx, stdin, chunks); err != nil {
+			return fmt.Errorf("failed to write chunks to jecdf: %w", err)
 		}
-		return fmt.Errorf("jecdf failed: %w", waitErr)
-	}
-	if err != nil {
-		return fmt.Errorf("failed to write chunks to jecdf: %w", err)
-	}
-	return nil
+		return nil
+	}, writer)
 }
 
-func writeChunks(ctx context.Context, stdin io.WriteCloser, chunks <-chan []byte, processExited <-chan struct{}) error {
-	defer stdin.Close()
-
+func writeChunks(ctx context.Context, stdin io.Writer, chunks <-chan []byte) error {
 	for {
 		select {
 		case <-ctx.Done():
+			if errors.Is(context.Cause(ctx), errJECDFInputClosed) {
+				return errors.New("jecdf exited before consuming all chunks")
+			}
 			return ctx.Err()
-		case <-processExited:
-			return errJECDFExitedEarly
 		case chunk, ok := <-chunks:
 			if !ok {
 				return nil
