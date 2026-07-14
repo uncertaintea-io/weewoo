@@ -1,36 +1,25 @@
 # ECDF publication deployment contract
 
-The currently supported publication topology is one active ECDF publisher on
-one computer, or multiple local processes that all access the same underlying
-local filesystem. Many clients and read-only server instances may use the
-service without changing this invariant.
+Generated joint ECDFs are stored in PostgreSQL. Every publisher and reader must
+use the same database. No shared filesystem or ECDF output directory is needed.
 
-ECDF writers coordinate through a persistent `joint-ecdf.lock.json` file and
-the filesystem's kernel `flock` implementation. Every local writer must resolve
-the same `ecdf_output_dir` and open the same underlying lock file. The backing
-filesystem must provide reliable `flock` behavior.
+The `ecdf` table retains the five newest versions for each
+`(service_id, indicator_id)` pair. A publication computes and stores the byte
+length and SHA-256 checksum with the binary body. Insertion of the new version
+and deletion of versions outside the retention window happen in one database
+transaction, so readers continue to see the previous committed version until
+the new one is complete. Reads verify the stored length and SHA-256 checksum
+and fall back through retained versions if a newer row fails verification.
 
-The lock file intentionally remains on disk. Its presence does not mean the
-lock is held. It must never be deleted, renamed, replaced, rotated, or cleaned
-up while any application instance may be running. File age and PID metadata
-must never be used to break or steal the kernel lock.
+Publishers coordinate with a PostgreSQL advisory lock keyed by service and
+indicator. If another process already holds that lock, the scheduled invocation
+is skipped successfully. This permits multiple server instances to run the
+scheduler without generating the same ECDF concurrently.
 
-Local `flock` does not coordinate machines, pods, or containers with independent
-filesystems. Until a distributed publication architecture is implemented,
-operators deploying multiple server instances may set
-`ECDF_PUBLISHER_ENABLED=false` on every instance except one designated
-publisher. This is a transition strategy, not high availability or leader
-election.
+Configuration:
 
-Runtime configuration keys:
-
-- `ecdf_output_dir`: ECDF artifact and lock root.
-- `ecdf_manifest_lock_wait_timeout`: maximum lock wait; defaults to `1m`.
 - `ecdf_scheduled_build_timeout`: complete scheduled invocation timeout;
   defaults to `5m`.
-
-`ECDF_PUBLISHER_ENABLED` defaults to `true`. Setting it to `false` disables only
-scheduled publication; committed ECDF reads remain available.
-
-Multi-node publication requires a separately reviewed coordination and shared
-artifact-storage architecture.
+- `ECDF_PUBLISHER_ENABLED`: defaults to `true`. Setting it to `false` disables
+  scheduled publication on that instance; committed database reads remain
+  available.

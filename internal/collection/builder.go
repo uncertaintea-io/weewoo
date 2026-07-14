@@ -7,7 +7,6 @@ import (
 	"io"
 	"log/slog"
 	"os"
-	"path/filepath"
 	"strconv"
 	"time"
 
@@ -24,10 +23,9 @@ const (
 	serviceInterval             = time.Hour
 	ecdfBuilderCallbackIDOffset = 1000
 
-	ECDFManifestLockWaitTimeoutConfigKey = "ecdf_manifest_lock_wait_timeout"
-	ECDFScheduledBuildTimeoutConfigKey   = "ecdf_scheduled_build_timeout"
-	ECDFPublisherEnabledEnv              = "ECDF_PUBLISHER_ENABLED"
-	defaultECDFScheduledBuildTimeout     = 5 * time.Minute
+	ECDFScheduledBuildTimeoutConfigKey = "ecdf_scheduled_build_timeout"
+	ECDFPublisherEnabledEnv            = "ECDF_PUBLISHER_ENABLED"
+	defaultECDFScheduledBuildTimeout   = 5 * time.Minute
 )
 
 // Gets the ID if the service from the config object
@@ -48,42 +46,23 @@ func getTargets(cfg config.Config) ([]ecdfBuilderTarget, error) {
 
 // StartECDFBuilder schedules one hourly builder callback. The scheduler owns the
 // timer loop and runs callbacks in goroutines when their window is due.
-func StartECDFBuilder(chunkStore ecdf.ChunkStore, cfg config.Config, scheduler *IntervalScheduler) error {
+func StartECDFBuilder(chunkStore ecdf.ChunkStore, jointStore ecdf.JointStore, cfg config.Config, scheduler *IntervalScheduler) error {
 	if scheduler == nil {
 		return fmt.Errorf("nil interval scheduler")
 	}
 	if cfg == nil {
 		return fmt.Errorf("nil config")
 	}
-	outputRoot, err := cfg.GetConfig(ECDFOutputDirConfigKey)
-	if err != nil {
-		return fmt.Errorf("failed to read ECDF output directory config: %w", err)
-	}
-	if outputRoot == "" {
-		outputRoot = defaultECDFOutputDir
-	}
-	absOutputRoot, err := filepath.Abs(outputRoot)
-	if err != nil {
-		return fmt.Errorf("failed to resolve ECDF output directory: %w", err)
-	}
-	hostname, hostnameErr := os.Hostname()
-	if hostnameErr != nil {
-		hostname = "unknown"
+	if jointStore == nil {
+		return fmt.Errorf("nil joint ECDF store")
 	}
 	publisherEnabled, err := ecdfPublisherEnabled()
 	if err != nil {
 		return err
 	}
-	slog.Info("ECDF publisher startup configuration", "enabled", publisherEnabled, "ecdf_output_dir", absOutputRoot, "hostname", hostname, "pid", os.Getpid(), "coordination_mode", "local_flock", "independent_filesystems_coordinated", false)
+	slog.Info("ECDF publisher startup configuration", "enabled", publisherEnabled, "coordination_mode", "postgres_advisory_lock")
 	if !publisherEnabled {
 		return nil
-	}
-	outputRoot = absOutputRoot
-	slog.Warn("ECDF publication uses local flock coordination; independent filesystems are not coordinated", "ecdf_output_dir", absOutputRoot, "hostname", hostname, "pid", os.Getpid())
-
-	lockWaitTimeout, err := configuredDuration(cfg, ECDFManifestLockWaitTimeoutConfigKey, defaultECDFManifestLockWaitTimeout)
-	if err != nil {
-		return err
 	}
 	buildTimeout, err := configuredDuration(cfg, ECDFScheduledBuildTimeoutConfigKey, defaultECDFScheduledBuildTimeout)
 	if err != nil {
@@ -97,9 +76,7 @@ func StartECDFBuilder(chunkStore ecdf.ChunkStore, cfg config.Config, scheduler *
 		err = scheduler.AddCallback(target.CallbackID, serviceInterval, func(ctx context.Context, start time.Time, end time.Time) IntervalResult {
 			buildCtx, cancel := context.WithTimeout(ctx, buildTimeout)
 			defer cancel()
-			fileStore := newJointECDFFileStore(outputRoot, target.ServiceID, LoadLatencyIndicator)
-			fileStore.lockWaitTimeout = lockWaitTimeout
-			bytesWritten, err := fileStore.publish(buildCtx, func(out io.Writer) error {
+			bytesWritten, published, err := jointStore.Publish(buildCtx, target.ServiceID, LoadLatencyIndicator, func(out io.Writer) error {
 				if err := ecdf.BuildJointECDFContext(buildCtx, chunkStore, target.ServiceID, LoadLatencyIndicator, out); err != nil {
 					return fmt.Errorf("ECDF generation failed: %w", err)
 				}
@@ -114,7 +91,11 @@ func StartECDFBuilder(chunkStore ecdf.ChunkStore, cfg config.Config, scheduler *
 				slog.Error("failed to publish joint ECDF", "service_id", target.ServiceID, "indicator_id", LoadLatencyIndicator, "stage", stage, "error", err)
 				return IntervalRetry(err)
 			}
-			slog.Info("built joint ECDF", "service_id", target.ServiceID, "indicator_id", LoadLatencyIndicator, "start", start, "end", end, "bytes", bytesWritten, "path", fileStore.outputPath())
+			if !published {
+				slog.Info("skipped joint ECDF build because another publisher holds the database lock", "service_id", target.ServiceID, "indicator_id", LoadLatencyIndicator)
+				return IntervalSuccess()
+			}
+			slog.Info("built joint ECDF", "service_id", target.ServiceID, "indicator_id", LoadLatencyIndicator, "start", start, "end", end, "bytes", bytesWritten)
 			return IntervalSuccess()
 		}, WithLastEnd(time.Now().Add(-serviceInterval)))
 		if err != nil {
