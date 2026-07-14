@@ -80,11 +80,17 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to read system settings: %v", err)
 	}
+	_, err = systemSettings.OpenDatabase()
+	if err != nil {
+		log.Fatalf("Failed to open database: %v", err)
+	}
 	db, err := systemSettings.OpenDatabase()
 	if err != nil {
 		log.Fatalf("Failed to open database: %v", err)
 	}
+	defer db.Close()
 	cfg := config.NewDatabaseConfig(db)
 	defer cfg.Close()
 	monitorCpu(cfg)
+
 }
