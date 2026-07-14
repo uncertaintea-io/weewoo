@@ -9,6 +9,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
+	"time"
 )
 
 const retainedJointECDFVersions = 5
@@ -21,9 +23,12 @@ func NewDatabaseJointStore(db *sql.DB) JointStore {
 	return &databaseJointStore{db: db}
 }
 
-func (s *databaseJointStore) Publish(ctx context.Context, serviceID, indicatorID int, build func(io.Writer) error) (bytesWritten int64, published bool, err error) {
+func (s *databaseJointStore) Publish(ctx context.Context, serviceID, indicatorID int, intervalEnd time.Time, build func(io.Writer) error) (bytesWritten int64, published bool, err error) {
 	if build == nil {
 		return 0, false, errors.New("nil ECDF build function")
+	}
+	if intervalEnd.IsZero() {
+		return 0, false, errors.New("zero ECDF build interval end")
 	}
 	conn, err := s.db.Conn(ctx)
 	if err != nil {
@@ -36,6 +41,12 @@ func (s *databaseJointStore) Publish(ctx context.Context, serviceID, indicatorID
 		return 0, false, fmt.Errorf("acquire ECDF publication lock: %w", err)
 	}
 	if !acquired {
+		slog.Info(
+			"ECDF publication skipped because PostgreSQL advisory lock is held",
+			"service_id", serviceID,
+			"indicator_id", indicatorID,
+			"coordination_mode", "postgres_advisory_lock",
+		)
 		return 0, false, nil
 	}
 	defer func() {
@@ -48,6 +59,19 @@ func (s *databaseJointStore) Publish(ctx context.Context, serviceID, indicatorID
 			err = errors.Join(err, fmt.Errorf("release ECDF publication lock: %w", unlockErr))
 		}
 	}()
+
+	var alreadyPublished bool
+	if err := conn.QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM ecdf
+			WHERE service_id = $1 AND indicator_id = $2 AND interval_end = $3
+		)
+	`, serviceID, indicatorID, intervalEnd).Scan(&alreadyPublished); err != nil {
+		return 0, false, fmt.Errorf("check ECDF build interval: %w", err)
+	}
+	if alreadyPublished {
+		return 0, false, nil
+	}
 
 	var body bytes.Buffer
 	if err := build(&body); err != nil {
@@ -73,9 +97,9 @@ func (s *databaseJointStore) Publish(ctx context.Context, serviceID, indicatorID
 	}
 	sum := sha256.Sum256(body.Bytes())
 	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO ecdf (service_id, indicator_id, version, body, bytes, sha256)
-		VALUES ($1, $2, $3, $4, $5, $6)
-	`, serviceID, indicatorID, version, body.Bytes(), body.Len(), hex.EncodeToString(sum[:])); err != nil {
+		INSERT INTO ecdf (service_id, indicator_id, version, interval_end, body, bytes, sha256)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
+	`, serviceID, indicatorID, version, intervalEnd, body.Bytes(), body.Len(), hex.EncodeToString(sum[:])); err != nil {
 		return 0, false, fmt.Errorf("insert ECDF version: %w", err)
 	}
 	if _, err := tx.ExecContext(ctx, `

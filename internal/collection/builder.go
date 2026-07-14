@@ -72,11 +72,13 @@ func StartECDFBuilder(chunkStore ecdf.ChunkStore, jointStore ecdf.JointStore, cf
 	if err != nil {
 		return fmt.Errorf("failed to get service IDs: %w", err)
 	}
+	lastCompletedBoundary := time.Now().UTC().Truncate(serviceInterval)
 	for _, target := range targets {
 		err = scheduler.AddCallback(target.CallbackID, serviceInterval, func(ctx context.Context, start time.Time, end time.Time) IntervalResult {
 			buildCtx, cancel := context.WithTimeout(ctx, buildTimeout)
 			defer cancel()
-			bytesWritten, published, err := jointStore.Publish(buildCtx, target.ServiceID, LoadLatencyIndicator, func(out io.Writer) error {
+
+			bytesWritten, published, err := jointStore.Publish(buildCtx, target.ServiceID, LoadLatencyIndicator, end, func(out io.Writer) error {
 				if err := ecdf.BuildJointECDFContext(buildCtx, chunkStore, target.ServiceID, LoadLatencyIndicator, out); err != nil {
 					return fmt.Errorf("ECDF generation failed: %w", err)
 				}
@@ -92,17 +94,29 @@ func StartECDFBuilder(chunkStore ecdf.ChunkStore, jointStore ecdf.JointStore, cf
 				return IntervalRetry(err)
 			}
 			if !published {
-				slog.Info("skipped joint ECDF build because another publisher holds the database lock", "service_id", target.ServiceID, "indicator_id", LoadLatencyIndicator)
+				slog.Info("this is being handled by another publisher", "service_id", target.ServiceID, "indicator_id", LoadLatencyIndicator)
 				return IntervalSuccess()
 			}
 			slog.Info("built joint ECDF", "service_id", target.ServiceID, "indicator_id", LoadLatencyIndicator, "start", start, "end", end, "bytes", bytesWritten)
 			return IntervalSuccess()
-		}, WithLastEnd(time.Now().Add(-serviceInterval)))
+		}, WithLastEnd(lastCompletedBoundary.Add(-serviceInterval)))
 		if err != nil {
 			return fmt.Errorf("failed to add callback for service %d: %w", target.ServiceID, err)
 		}
 	}
 	return nil
+}
+
+func ecdfPublisherEnabled() (bool, error) {
+	value, ok := os.LookupEnv(ECDFPublisherEnabledEnv)
+	if !ok || value == "" {
+		return true, nil
+	}
+	enabled, err := strconv.ParseBool(value)
+	if err != nil {
+		return false, fmt.Errorf("invalid %s %q: %w", ECDFPublisherEnabledEnv, value, err)
+	}
+	return enabled, nil
 }
 
 func configuredDuration(cfg config.Config, key string, fallback time.Duration) (time.Duration, error) {
@@ -118,16 +132,4 @@ func configuredDuration(cfg config.Config, key string, fallback time.Duration) (
 		return 0, fmt.Errorf("invalid %s %q: must be a positive duration", key, value)
 	}
 	return duration, nil
-}
-
-func ecdfPublisherEnabled() (bool, error) {
-	value, ok := os.LookupEnv(ECDFPublisherEnabledEnv)
-	if !ok || value == "" {
-		return true, nil
-	}
-	enabled, err := strconv.ParseBool(value)
-	if err != nil {
-		return false, fmt.Errorf("invalid %s %q: %w", ECDFPublisherEnabledEnv, value, err)
-	}
-	return enabled, nil
 }

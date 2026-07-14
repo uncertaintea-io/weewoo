@@ -43,7 +43,14 @@ func printTargets(promURL string) {
 }
 
 func monitorCpu(cfg config.Config) {
-	promURL := "http://pc0:9090"
+	services, err := cfg.ReadAllServices()
+	if err != nil {
+		log.Fatalf("Failed to read services: %v", err)
+	}
+	if len(services) == 0 {
+		log.Fatal("No services configured")
+	}
+	promURL := services[0].PrometheusURL
 	//threshold := flag.Float64("threshold", 0.25, "Threshold percent")
 	//overFor := flag.Duration("duration", 5*time.Minute, "Time over threshold to trigger error")
 	//interval := flag.Duration("interval", 15*time.Second, "Polling interval")
@@ -73,17 +80,11 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to read system settings: %v", err)
 	}
-	_, err = systemSettings.OpenDatabase()
-	if err != nil {
-		log.Fatalf("Failed to open database: %v", err)
-	}
 	db, err := systemSettings.OpenDatabase()
 	if err != nil {
 		log.Fatalf("Failed to open database: %v", err)
 	}
-	defer db.Close()
 	cfg := config.NewDatabaseConfig(db)
 	defer cfg.Close()
 	monitorCpu(cfg)
-
 }

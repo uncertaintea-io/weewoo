@@ -21,6 +21,6 @@ type ChunkStore interface {
 // returns published=false when another process is already publishing the same
 // service and indicator.
 type JointStore interface {
-	Publish(ctx context.Context, serviceID, indicatorID int, build func(io.Writer) error) (bytesWritten int64, published bool, err error)
+	Publish(ctx context.Context, serviceID, indicatorID int, intervalEnd time.Time, build func(io.Writer) error) (bytesWritten int64, published bool, err error)
 	ReadCurrent(ctx context.Context, serviceID, indicatorID int) ([]byte, error)
 }

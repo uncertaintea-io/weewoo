@@ -16,6 +16,11 @@ indicator. If another process already holds that lock, the scheduled invocation
 is skipped successfully. This permits multiple server instances to run the
 scheduler without generating the same ECDF concurrently.
 
+Each publication also records the scheduler's aligned `interval_end`. After a
+publisher acquires the advisory lock, it skips the build if that service and
+indicator already have a version for the same interval. A unique database index
+provides a final safeguard that at most one version is stored per interval.
+
 Configuration:
 
 - `ecdf_scheduled_build_timeout`: complete scheduled invocation timeout;
