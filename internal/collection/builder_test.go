@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"flag"
+	"io"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -15,97 +17,145 @@ import (
 	"github.com/uncertaintea-io/weewoo/internal/ecdf"
 )
 
+type recordingJointStore struct {
+	mu          sync.Mutex
+	body        []byte
+	serviceID   int
+	indicatorID int
+	intervalEnd time.Time
+	intervals   map[time.Time]struct{}
+	buildCount  int
+	published   chan struct{}
+}
+
+func newRecordingJointStore() *recordingJointStore {
+	return &recordingJointStore{
+		intervals: make(map[time.Time]struct{}),
+		published: make(chan struct{}, 1),
+	}
+}
+
+func (s *recordingJointStore) Publish(ctx context.Context, serviceID, indicatorID int, intervalEnd time.Time, build func(io.Writer) error) (int64, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, exists := s.intervals[intervalEnd]; exists {
+		return 0, false, nil
+	}
+	var body bytes.Buffer
+	if err := build(&body); err != nil {
+		return 0, false, err
+	}
+	s.body = append([]byte(nil), body.Bytes()...)
+	s.serviceID = serviceID
+	s.indicatorID = indicatorID
+	s.intervalEnd = intervalEnd
+	s.intervals[intervalEnd] = struct{}{}
+	s.buildCount++
+	select {
+	case s.published <- struct{}{}:
+	default:
+	}
+	return int64(body.Len()), true, nil
+}
+
+func TestStartECDFBuilderBuildsIntervalOnceAcrossReplicas(t *testing.T) {
+	setFakeJECDF(t, "#!/bin/sh\ncat >/dev/null\necho -n 'fake-ecdf-output'\n")
+	cfg := config.NewFakeConfig()
+	require.NoError(t, cfg.WriteService(&config.Service{Id: 7, Name: "api"}))
+	joint := newRecordingJointStore()
+	schedulerA := NewIntervalScheduler(WithSchedulerEventHandler(nil))
+	schedulerB := NewIntervalScheduler(WithSchedulerEventHandler(nil))
+	defer schedulerA.Stop()
+	defer schedulerB.Stop()
+
+	require.NoError(t, StartECDFBuilder(ecdf.NewFakeChunkStore(), joint, cfg, schedulerA))
+	require.NoError(t, StartECDFBuilder(ecdf.NewFakeChunkStore(), joint, cfg, schedulerB))
+	select {
+	case <-joint.published:
+	case <-time.After(time.Second):
+		t.Fatal("scheduled ECDF was not published")
+	}
+	time.Sleep(50 * time.Millisecond)
+
+	joint.mu.Lock()
+	defer joint.mu.Unlock()
+	assert.Equal(t, 1, joint.buildCount)
+	assert.Len(t, joint.intervals, 1)
+}
+
+func (s *recordingJointStore) ReadCurrent(context.Context, int, int) ([]byte, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]byte(nil), s.body...), nil
+}
+
+func setFakeJECDF(t *testing.T, script string) {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "jecdf")
+	require.NoError(t, os.WriteFile(path, []byte(script), 0755))
+	old := flag.Lookup("jecdf").Value.String()
+	require.NoError(t, flag.Set("jecdf", path))
+	t.Cleanup(func() { require.NoError(t, flag.Set("jecdf", old)) })
+}
+
 func TestBuildJointECDF(t *testing.T) {
-	jecdfPath := filepath.Join(t.TempDir(), "jecdf")
-	err := os.WriteFile(jecdfPath, []byte(`#!/bin/sh
-if [ "$1" != "build" ]; then
-	exit 2
-fi
-cat >/dev/null
-echo -n 'fake-ecdf-output'
-`), 0755)
-	require.NoError(t, err)
-
-	oldJECDF := flag.Lookup("jecdf").Value.String()
-	require.NoError(t, flag.Set("jecdf", jecdfPath))
-	t.Cleanup(func() {
-		require.NoError(t, flag.Set("jecdf", oldJECDF))
-	})
-
+	setFakeJECDF(t, "#!/bin/sh\ncat >/dev/null\necho -n 'fake-ecdf-output'\n")
 	timestamp := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 	chunk, err := ecdf.Encode(timestamp, []ecdf.Sample{{Value: 1, Count: 1}}, []ecdf.Sample{{Value: 2, Count: 1}})
 	require.NoError(t, err)
-
-	chunkStore := ecdf.NewFakeChunkStore()
-	require.NoError(t, chunkStore.WriteChunk(1, LoadLatencyIndicator, timestamp, chunk))
+	chunks := ecdf.NewFakeChunkStore()
+	require.NoError(t, chunks.WriteChunk(1, LoadLatencyIndicator, timestamp, chunk))
 
 	var out bytes.Buffer
-	err = ecdf.BuildJointECDFContext(context.Background(), chunkStore, 1, LoadLatencyIndicator, &out)
-	require.NoError(t, err)
+	require.NoError(t, ecdf.BuildJointECDFContext(context.Background(), chunks, 1, LoadLatencyIndicator, &out))
 	assert.Equal(t, "fake-ecdf-output", out.String())
 }
 
 func TestBuildECDFUsesContext(t *testing.T) {
-	jecdfPath := filepath.Join(t.TempDir(), "jecdf")
-	err := os.WriteFile(jecdfPath, []byte(`#!/bin/sh
-sleep 10
-`), 0755)
-	require.NoError(t, err)
-
-	oldJECDF := flag.Lookup("jecdf").Value.String()
-	require.NoError(t, flag.Set("jecdf", jecdfPath))
-	t.Cleanup(func() {
-		require.NoError(t, flag.Set("jecdf", oldJECDF))
-	})
-
-	start := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
-	chunk, err := ecdf.Encode(start.Add(time.Minute), []ecdf.Sample{{Value: 1, Count: 1}}, []ecdf.Sample{{Value: 2, Count: 1}})
-	require.NoError(t, err)
-
-	chunkStore := ecdf.NewFakeChunkStore()
-	require.NoError(t, chunkStore.WriteChunk(1, LoadLatencyIndicator, start.Add(time.Minute), chunk))
-
+	setFakeJECDF(t, "#!/bin/sh\nsleep 10\n")
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-
-	var out bytes.Buffer
-	err = ecdf.BuildJointECDFContext(ctx, chunkStore, 1, LoadLatencyIndicator, &out)
+	err := ecdf.BuildJointECDFContext(ctx, ecdf.NewFakeChunkStore(), 1, LoadLatencyIndicator, &bytes.Buffer{})
 	require.ErrorIs(t, err, context.Canceled)
 }
 
-func TestStartECDFBuilderBuildsConfiguredServices(t *testing.T) {
-	jecdfPath := filepath.Join(t.TempDir(), "jecdf")
-	err := os.WriteFile(jecdfPath, []byte(`#!/bin/sh
-if [ "$1" != "build" ]; then
-	exit 2
-fi
-echo -n 'fake-ecdf-output' > "$0.stdout"
-`), 0755)
-	require.NoError(t, err)
-
-	oldJECDF := flag.Lookup("jecdf").Value.String()
-	require.NoError(t, flag.Set("jecdf", jecdfPath))
-	t.Cleanup(func() {
-		require.NoError(t, flag.Set("jecdf", oldJECDF))
-	})
-
+func TestStartECDFBuilderPublishesConfiguredServices(t *testing.T) {
+	setFakeJECDF(t, "#!/bin/sh\ncat >/dev/null\necho -n 'fake-ecdf-output'\n")
 	cfg := config.NewFakeConfig()
 	require.NoError(t, cfg.WriteService(&config.Service{Id: 7, Name: "api"}))
-
-	chunkStore := ecdf.NewFakeChunkStore()
+	chunks := ecdf.NewFakeChunkStore()
 	chunkTime := time.Now().Add(-30 * time.Minute)
 	chunk, err := ecdf.Encode(chunkTime, []ecdf.Sample{{Value: 1, Count: 1}}, []ecdf.Sample{{Value: 2, Count: 1}})
 	require.NoError(t, err)
-	require.NoError(t, chunkStore.WriteChunk(7, LoadLatencyIndicator, chunkTime, chunk))
-
+	require.NoError(t, chunks.WriteChunk(7, LoadLatencyIndicator, chunkTime, chunk))
+	joint := newRecordingJointStore()
 	scheduler := NewIntervalScheduler(WithSchedulerEventHandler(nil))
 	defer scheduler.Stop()
 
-	require.NoError(t, StartECDFBuilder(chunkStore, cfg, scheduler))
+	require.NoError(t, StartECDFBuilder(chunks, joint, cfg, scheduler))
+	select {
+	case <-joint.published:
+	case <-time.After(time.Second):
+		t.Fatal("scheduled ECDF was not published")
+	}
+	joint.mu.Lock()
+	defer joint.mu.Unlock()
+	assert.Equal(t, 7, joint.serviceID)
+	assert.Equal(t, LoadLatencyIndicator, joint.indicatorID)
+	assert.Equal(t, "fake-ecdf-output", string(joint.body))
+	assert.Equal(t, joint.intervalEnd.Truncate(serviceInterval), joint.intervalEnd)
+}
 
-	outputPath := jecdfPath + ".stdout"
-	require.Eventually(t, func() bool {
-		got, err := os.ReadFile(outputPath)
-		return err == nil && string(got) == "fake-ecdf-output"
-	}, time.Second, 10*time.Millisecond)
+func TestECDFPublisherDisabledSkipsScheduling(t *testing.T) {
+	cfg := config.NewFakeConfig()
+	require.NoError(t, cfg.WriteService(&config.Service{Id: 7, Name: "api"}))
+	joint := newRecordingJointStore()
+	scheduler := NewIntervalScheduler(WithSchedulerEventHandler(nil))
+	defer scheduler.Stop()
+	require.NoError(t, StartECDFBuilder(ecdf.NewFakeChunkStore(), joint, cfg, scheduler))
+	select {
+	case <-joint.published:
+		t.Fatal("disabled publisher ran")
+	case <-time.After(50 * time.Millisecond):
+	}
 }
