@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"os"
-	"strconv"
 	"time"
 
 	"github.com/uncertaintea-io/weewoo/internal/config"
@@ -56,24 +54,16 @@ func StartECDFBuilder(chunkStore ecdf.ChunkStore, jointStore ecdf.JointStore, cf
 	if jointStore == nil {
 		return fmt.Errorf("nil joint ECDF store")
 	}
-	publisherEnabled, err := ecdfPublisherEnabled()
-	if err != nil {
-		return err
-	}
-	slog.Info("ECDF publisher startup configuration", "enabled", publisherEnabled, "coordination_mode", "postgres_advisory_lock")
-	if !publisherEnabled {
-		return nil
-	}
-	buildTimeout, err := configuredDuration(cfg, ECDFScheduledBuildTimeoutConfigKey, defaultECDFScheduledBuildTimeout)
-	if err != nil {
-		return err
-	}
 	targets, err := getTargets(cfg)
 	if err != nil {
 		return fmt.Errorf("failed to get service IDs: %w", err)
 	}
-	lastCompletedBoundary := time.Now().UTC().Truncate(serviceInterval)
+	slog.Info("ECDF publisher startup configuration")
 	for _, target := range targets {
+		buildTimeout, err := configuredDuration(cfg, ECDFScheduledBuildTimeoutConfigKey, defaultECDFScheduledBuildTimeout)
+		if err != nil {
+			return fmt.Errorf("failed to get build timeout: %w", err)
+		}
 		err = scheduler.AddCallback(target.CallbackID, serviceInterval, func(ctx context.Context, start time.Time, end time.Time) IntervalResult {
 			buildCtx, cancel := context.WithTimeout(ctx, buildTimeout)
 			defer cancel()
@@ -99,24 +89,12 @@ func StartECDFBuilder(chunkStore ecdf.ChunkStore, jointStore ecdf.JointStore, cf
 			}
 			slog.Info("built joint ECDF", "service_id", target.ServiceID, "indicator_id", LoadLatencyIndicator, "start", start, "end", end, "bytes", bytesWritten)
 			return IntervalSuccess()
-		}, WithLastEnd(lastCompletedBoundary.Add(-serviceInterval)))
+		})
 		if err != nil {
 			return fmt.Errorf("failed to add callback for service %d: %w", target.ServiceID, err)
 		}
 	}
 	return nil
-}
-
-func ecdfPublisherEnabled() (bool, error) {
-	value, ok := os.LookupEnv(ECDFPublisherEnabledEnv)
-	if !ok || value == "" {
-		return true, nil
-	}
-	enabled, err := strconv.ParseBool(value)
-	if err != nil {
-		return false, fmt.Errorf("invalid %s %q: %w", ECDFPublisherEnabledEnv, value, err)
-	}
-	return enabled, nil
 }
 
 func configuredDuration(cfg config.Config, key string, fallback time.Duration) (time.Duration, error) {
