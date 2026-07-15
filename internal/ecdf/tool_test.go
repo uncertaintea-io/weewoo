@@ -59,11 +59,10 @@ fi
 cat
 `))
 
-	ctx := context.Background()
 	input := []byte{0, 1, 2, 3, 255}
 	var output bytes.Buffer
 	err := runJECDF(
-		ctx,
+		context.Background(),
 		[]string{"query", "--mode=test"},
 		func(_ context.Context, stdin io.Writer) error {
 			_, err := stdin.Write(input)
