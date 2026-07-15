@@ -10,15 +10,17 @@ import (
 
 // Query finds the ECDF for an independent variable in a Joint ECDF given the value of the dependent variable.
 func Query(ctx context.Context, jointECDF []byte, x float64) ([]float64, []float64, error) {
-	send := func(ctx context.Context, stdin io.Writer) error {
-		if _, err := io.Copy(stdin, bytes.NewReader(jointECDF)); err != nil {
-			return err
-		}
-		return nil
-	}
-
 	var points bytes.Buffer
-	err := runJECDF(ctx, "query", send, &points, strconv.FormatFloat(x, 'g', -1, 64))
+	err := runJECDF(
+		ctx,
+		[]string{"query", strconv.FormatFloat(x, 'g', -1, 64)},
+		func(ctx context.Context, stdin io.Writer) error {
+			if _, err := io.Copy(stdin, bytes.NewReader(jointECDF)); err != nil {
+				return err
+			}
+			return nil
+		},
+		&points)
 	if err != nil {
 		return nil, nil, err
 	}

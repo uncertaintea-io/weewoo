@@ -53,12 +53,16 @@ func buildError(prefix string, err error) error {
 }
 
 func buildFromStream(ctx context.Context, chunks <-chan []byte, writer io.Writer) error {
-	return runJECDF(ctx, "build", func(ctx context.Context, stdin io.Writer) error {
-		if err := writeChunks(ctx, stdin, chunks); err != nil {
-			return fmt.Errorf("failed to write chunks to jecdf: %w", err)
-		}
-		return nil
-	}, writer)
+	return runJECDF(
+		ctx,
+		[]string{"build"},
+		func(ctx context.Context, stdin io.Writer) error {
+			if err := writeChunks(ctx, stdin, chunks); err != nil {
+				return fmt.Errorf("failed to write chunks to jecdf: %w", err)
+			}
+			return nil
+		},
+		writer)
 }
 
 func writeChunks(ctx context.Context, stdin io.Writer, chunks <-chan []byte) error {

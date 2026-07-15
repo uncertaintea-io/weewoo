@@ -59,12 +59,17 @@ fi
 cat
 `))
 
+	ctx := context.Background()
 	input := []byte{0, 1, 2, 3, 255}
 	var output bytes.Buffer
-	err := runJECDF(context.Background(), "query", func(_ context.Context, stdin io.Writer) error {
-		_, err := stdin.Write(input)
-		return err
-	}, &output, "--mode=test")
+	err := runJECDF(
+		ctx,
+		[]string{"query", "--mode=test"},
+		func(_ context.Context, stdin io.Writer) error {
+			_, err := stdin.Write(input)
+			return err
+		},
+		&output)
 
 	require.NoError(t, err)
 	assert.Equal(t, input, output.Bytes())

@@ -18,9 +18,8 @@ var (
 
 type jecdfInputWriter func(context.Context, io.Writer) error
 
-func runJECDF(ctx context.Context, command string, input jecdfInputWriter, output io.Writer, args ...string) error {
-	cmdArgs := append([]string{command}, args...)
-	cmd := exec.CommandContext(ctx, *jecdf, cmdArgs...)
+func runJECDF(ctx context.Context, args []string, input jecdfInputWriter, output io.Writer) error {
+	cmd := exec.CommandContext(ctx, *jecdf, args...)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return fmt.Errorf("failed to open jecdf stdin: %w", err)
