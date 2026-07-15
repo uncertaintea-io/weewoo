@@ -56,6 +56,12 @@ func readPoints(reader *bytes.Buffer) ([]float64, []float64, error) {
 	if err != nil {
 		return nil, nil, err
 	}
+	if n > uint64(reader.Len() / 16) {
+		// Each point has two float64s, 8 bytes each. If the tool claims we need
+		// more memory than what was actually read, it means something is wrong.
+		// Catching this now is important for safely allocating memory buffers.
+		return nil, nil, errors.New("truncated or corrupt response")
+	}
 	xs := make([]float64, n)
 	ys := make([]float64, n)
 	for i := range n {
