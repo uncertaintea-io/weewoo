@@ -8,8 +8,13 @@ import (
 	"strconv"
 )
 
-// Query finds the ECDF for the dependent variable in a Joint ECDF given the value of the independent variable.
-func Query(ctx context.Context, jointECDF []byte, x float64) ([]float64, []float64, error) {
+// CDF is a Cumulative Distribution Function, a native Go function
+// that accepts all finite floating-point values, and returns the
+// cumulative probability expressed as a float in the range [0,1].
+type CDF func(float64) float64
+
+// Query finds the CDF for the dependent variable in a Joint ECDF given the value of the independent variable.
+func Query(ctx context.Context, jointECDF []byte, x float64) (CDF, error) {
 	var points bytes.Buffer
 	err := runJECDF(
 		ctx,
@@ -22,11 +27,21 @@ func Query(ctx context.Context, jointECDF []byte, x float64) ([]float64, []float
 		},
 		&points)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	return readPoints(&points)
+	xs, ys, err := readPoints(&points)
+	if err != nil {
+		return nil, err
+	}
+	return linearInterpolation(xs, ys), nil
 }
 
+// readPoints is a helper function that reads a series of coordinates
+// for an empirical distribution from the jecdf tool.
+// It returns two arrays:
+//   * x values, which are samples of the dependent variable,
+//   * y values, which are cumulative probabiltiies of each sample,
+//     expressed as a float in the range [0, 1].
 func readPoints(reader *bytes.Buffer) ([]float64, []float64, error) {
 	// Read the number of points in the result:
 	n, err := binary.ReadUvarint(reader)

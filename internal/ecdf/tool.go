@@ -18,6 +18,8 @@ var (
 
 type jecdfInputWriter func(context.Context, io.Writer) error
 
+// runJECDF runs the jecdf tool with the given args, handling the details of I/O and failure.
+// It uses the provided input function to stream input to stdin, and copies stdout to output.
 func runJECDF(ctx context.Context, args []string, input jecdfInputWriter, output io.Writer) error {
 	cmd := exec.CommandContext(ctx, *jecdf, args...)
 	stdin, err := cmd.StdinPipe()

@@ -24,8 +24,11 @@ func TestQueryWithRealTool(t *testing.T) {
 	defer cancel()
 
 	const value = 1.5
-	xs, ys, err := Query(ctx, sampleJointECDF, value)
+	cdf, err := Query(ctx, sampleJointECDF, value)
 	require.NoError(t, err)
-	assert.NotEmpty(t, xs)
-	assert.NotEmpty(t, ys)
+	assert.NotNil(t, cdf)
+	assert.Equal(t, 0.0, cdf(-1000))
+	assert.Equal(t, 1.0, cdf(1000))
+	assert.Greater(t, cdf(3), 0.0)
+	assert.Less(t, cdf(3), 1.0)
 }
