@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"errors"
 	"io"
+	"slices"
 	"strconv"
 )
 
@@ -33,14 +35,20 @@ func Query(ctx context.Context, jointECDF []byte, x float64) (CDF, error) {
 	if err != nil {
 		return nil, err
 	}
+	if !(slices.IsSorted(xs) && slices.IsSorted(ys)) {
+		return nil, errors.New("data points not monotonically increasing")
+	}
+	if ys[0] < 0.0 || ys[len(ys)-1] > 1.0 {
+		return nil, errors.New("cumulative probability not bounded to [0,1]")
+	}
 	return linearInterpolation(xs, ys)
 }
 
 // readPoints is a helper function that reads a series of coordinates
 // for an empirical distribution from the jecdf tool.
 // It returns two arrays:
-//   * x values, which are samples of the dependent variable,
-//   * y values, which are cumulative probabiltiies of each sample,
+//   - x values, which are samples of the dependent variable,
+//   - y values, which are cumulative probabiltiies of each sample,
 //     expressed as a float in the range [0, 1].
 func readPoints(reader *bytes.Buffer) ([]float64, []float64, error) {
 	// Read the number of points in the result:

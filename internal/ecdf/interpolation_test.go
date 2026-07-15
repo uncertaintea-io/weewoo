@@ -8,15 +8,15 @@ import (
 )
 
 func TestLinearInterpolation(t *testing.T) {
-	xs := []float64{1, 2}
-	ys := []float64{0.1, 0.2}
+	xs := []float64{1, 2, 10}
+	ys := []float64{0.1, 0.2, 1}
 	f, err := linearInterpolation(xs, ys)
 	require.NoError(t, err)
 
 	for _, tc := range []struct{ x, y float64 }{
 		{-1, 0},
 		{0, 0},
-		{0.625, 0.0625},
+		{0.5, 0},
 		{1, 0.1},
 		{1.25, 0.125},
 		{2, 0.2},
@@ -28,4 +28,12 @@ func TestLinearInterpolation(t *testing.T) {
 		got := f(tc.x)
 		assert.Equal(t, tc.y, got, "f(%f): want %f, got %f", tc.x, tc.y, got)
 	}
+}
+
+func TestLinearTooFew(t *testing.T) {
+	xs := []float64{1}
+	ys := []float64{1}
+	f, err := linearInterpolation(xs, ys)
+	assert.Nil(t, f)
+	require.Error(t, err)
 }

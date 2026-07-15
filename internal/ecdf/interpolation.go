@@ -24,12 +24,15 @@ func linearPoly(x1, y1, x2, y2 float64) Polynomial {
 	return []float64{M, B}
 }
 
+// linearInterpolation performs linear interpolation between the given points,
+// producing a continuous function over finite float values.
+// The code assumes y is zero when x < xs[0], and 1 when x > xs[n-1].
 func linearInterpolation(xs, ys []float64) (func(float64) float64, error) {
 	// The xs define the boundaries of piecewise polynomials used to interpolate between the points.
 	// They are laid out as follows:
 	//
-	// xs :=      xs[0]         xs[1]         xs[2]
-	// fs := head   |   poly[0]   |   poly[1]   |   tail
+	// xs := xs[0]         xs[1]         xs[2]
+	// fs :=   |   poly[0]   |   poly[1]   |
 	//
 	n := len(xs)
 	if n < 2 {
@@ -42,17 +45,9 @@ func linearInterpolation(xs, ys []float64) (func(float64) float64, error) {
 		poly[i] = linearPoly(xs[i], ys[i], xs[j], ys[j])
 	}
 
-	// Extend the first polynomial so that the CDF is 0 at the first x
-	m := poly[0][0]
-	xs[0] -= ys[0] / m
-
-	// Extend the last polynomial so that the CDF is 1 at the last x
-	m = poly[n-2][0]
-	xs[n-1] += (1 - ys[n-1]) / m
-
 	// Return a function that finds the correct piecewise polynomial and evaluates it:
 	return func(x float64) float64 {
-		if x <= xs[0] {
+		if x < xs[0] {
 			return 0
 		}
 		for i, xx := range xs[1:] {
