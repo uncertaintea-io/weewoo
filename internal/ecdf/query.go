@@ -33,7 +33,7 @@ func Query(ctx context.Context, jointECDF []byte, x float64) (CDF, error) {
 	if err != nil {
 		return nil, err
 	}
-	return linearInterpolation(xs, ys), nil
+	return linearInterpolation(xs, ys)
 }
 
 // readPoints is a helper function that reads a series of coordinates

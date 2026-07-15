@@ -1,6 +1,7 @@
 package ecdf
 
 import (
+	"errors"
 	"math"
 )
 
@@ -23,7 +24,7 @@ func linearPoly(x1, y1, x2, y2 float64) Polynomial {
 	return []float64{M, B}
 }
 
-func linearInterpolation(xs, ys []float64) func(float64) float64 {
+func linearInterpolation(xs, ys []float64) (func(float64) float64, error) {
 	// The xs define the boundaries of piecewise polynomials used to interpolate between the points.
 	// They are laid out as follows:
 	//
@@ -31,6 +32,10 @@ func linearInterpolation(xs, ys []float64) func(float64) float64 {
 	// fs := head   |   poly[0]   |   poly[1]   |   tail
 	//
 	n := len(xs)
+	if n < 2 {
+		// You need at least two points to interpolate
+		return nil, errors.New("too few data points")
+	}
 	poly := make([]Polynomial, n-1)
 	for i := range n - 1 {
 		j := i + 1
@@ -56,5 +61,5 @@ func linearInterpolation(xs, ys []float64) func(float64) float64 {
 			}
 		}
 		return 1
-	}
+	}, nil
 }
