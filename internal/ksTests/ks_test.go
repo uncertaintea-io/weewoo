@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/uncertaintea-io/weewoo/internal/ecdf"
@@ -19,7 +20,7 @@ func TestKsTest(t *testing.T) {
 		serviceID   = 1
 		indicatorID = 1
 		fixedLoad   = 1.5
-		alpha       = 0.05
+		alpha       = 0.001
 	)
 
 	jecdfPath := "../../jecdf"
@@ -46,8 +47,8 @@ func TestKsTest(t *testing.T) {
 		timestamp := start.Add(time.Duration(i) * time.Minute)
 		chunk, err := ecdf.Encode(
 			timestamp,
-			ecdf.CountSamples(append([]float64(nil), loads...)),
-			ecdf.CountSamples(append([]float64(nil), latencies...)),
+			ecdf.CountSamples(loads),
+			ecdf.CountSamples(latencies),
 		)
 		require.NoError(t, err)
 		require.NoError(t, chunkStore.WriteChunk(serviceID, indicatorID, timestamp, chunk))
@@ -59,8 +60,10 @@ func TestKsTest(t *testing.T) {
 	cdf, err := ecdf.Query(ctx, jointECDF.Bytes(), fixedLoad)
 	require.NoError(t, err)
 
-	sample := append([]float64(nil), latencies...)
-	result := KsTest(t, cdf, sample, alpha)
-	slog.Info("KS test result", "passed", result, "samples", len(sample), "load", fixedLoad)
-	require.True(t, result, "expected sample to match queried ECDF")
+	p := KsTest(cdf, latencies)
+	t.Logf("Probability sample was drawn from distribution: %f", p)
+	p = 1.0 - p
+	passed := p <= alpha
+	slog.Info("KS test result", "passed", passed, "samples", len(latencies), "load", fixedLoad)
+	assert.True(t, passed, "expected sample to match queried ECDF with p-value of %f, was %f", alpha, p)
 }

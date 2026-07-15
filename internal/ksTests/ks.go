@@ -3,9 +3,6 @@ package kstests
 import (
 	"math"
 	"slices"
-	"testing"
-
-	"github.com/stretchr/testify/assert"
 )
 
 // Round to nearest integer. Rounds half integers to the nearest even integer.
@@ -68,10 +65,7 @@ func kprob(z float64) float64 {
 		fj := [4]float64{-2, -8, -18, -32}
 		r := [4]float64{0, 0, 0, 0}
 		v := z * z
-		maxj := nint(3.0 / z)
-		if maxj < 1 {
-			maxj = 1
-		}
+		maxj := max(nint(3.0/z), 1)
 		for j := 0; j < maxj; j += 1 {
 			r[j] = math.Exp(fj[j] * v)
 		}
@@ -82,15 +76,14 @@ func kprob(z float64) float64 {
 	return p
 }
 
-/* Runs a Kolmogorov-Smirnov test for a given sample and reference distribution.
+/*
+Runs a Kolmogorov-Smirnov test for a given sample and reference distribution.
 This estimates the likelihood that the given sample comes from the reference distribution.
-If the p-value is less than the given alpha, the test fails.
 
 See:
 https://en.wikipedia.org/wiki/Kolmogorov%E2%80%93Smirnov_test
 */
-func KsTest(t *testing.T, cdf func(float64) float64, sample []float64, alpha float64) bool {
-	t.Log("Running Kolmogorov-Smirnov test:")
+func KsTest(cdf func(float64) float64, sample []float64) float64 {
 	// Find the maximum difference between the sample and the reference distribution.
 	slices.Sort(sample)
 	n := float64(len(sample))
@@ -122,8 +115,5 @@ func KsTest(t *testing.T, cdf func(float64) float64, sample []float64, alpha flo
 		}
 	}
 	z := max * math.Sqrt(n)
-	p := kprob(z)
-	t.Logf("N: %d, Max: %f, K(%f) = %f\n", len(sample), max, z, p)
-	p = 1.0 - p
-	return assert.LessOrEqual(t, p, alpha, "Null hypothesis was rejected. a = %f, was %f.", alpha, p)
+	return kprob(z)
 }
