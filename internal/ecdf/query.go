@@ -8,7 +8,7 @@ import (
 	"strconv"
 )
 
-// Query finds the ECDF for an independent variable in a Joint ECDF given the value of the dependent variable.
+// Query finds the ECDF for the dependent variable in a Joint ECDF given the value of the independent variable.
 func Query(ctx context.Context, jointECDF []byte, x float64) ([]float64, []float64, error) {
 	var points bytes.Buffer
 	err := runJECDF(
