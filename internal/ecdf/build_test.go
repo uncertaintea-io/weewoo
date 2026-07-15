@@ -2,54 +2,12 @@ package ecdf
 
 import (
 	"bytes"
-	"os"
-	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-func writeFakeJECDF(t *testing.T, body string) string {
-	t.Helper()
-	path := filepath.Join(t.TempDir(), "jecdf")
-	err := os.WriteFile(path, []byte("#!/bin/sh\n"+body), 0755)
-	require.NoError(t, err)
-	return path
-}
-
-func setJECDFTool(t *testing.T, path string) {
-	t.Helper()
-	old := *jecdf
-	*jecdf = path
-	t.Cleanup(func() {
-		*jecdf = old
-	})
-}
-
-func jecdfExists(t *testing.T) bool {
-	t.Helper()
-	info, err := os.Stat(*jecdf)
-	if err != nil {
-		t.Log(err)
-		return false
-	}
-
-	// Ensure it is a regular file and not a directory
-	if info.IsDir() {
-		t.Log("jecdf is a directory, not a file")
-		return false
-	}
-
-	// Check if any execution bits (User, Group, or Other) are set
-	if info.Mode().Perm()&0111 != 0 {
-		return true
-	}
-
-	t.Log("file exists but is not executable")
-	return false
-}
 
 func newTestChunk(t time.Time, x, y float64) ([]byte, error) {
 	return Encode(t, []Sample{{x, 1}}, []Sample{{y, 1}})

@@ -1,6 +1,6 @@
 module github.com/uncertaintea-io/weewoo
 
-go 1.25.0
+go 1.26
 
 require (
 	github.com/go-openapi/strfmt v0.26.2
