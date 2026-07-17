@@ -21,20 +21,24 @@ type Collector interface {
 }
 
 type collector struct {
-	client    *http.Client
-	store     ecdf.ChunkStore
-	scheduler *IntervalScheduler
+	client     *http.Client
+	store      ecdf.ChunkStore
+	jointStore ecdf.JointStore
+	cfg        config.Config
+	scheduler  *IntervalScheduler
 }
 
 // this creates a collector that can be used to collect samples from the prometheus server
-func NewCollector(client *http.Client, store ecdf.ChunkStore, scheduler *IntervalScheduler) Collector {
+func NewCollector(client *http.Client, store ecdf.ChunkStore, jointStore ecdf.JointStore, cfg config.Config, scheduler *IntervalScheduler) Collector {
 	if client == nil {
 		client = http.DefaultClient
 	}
 	c := &collector{
-		client:    client,
-		store:     store,
-		scheduler: scheduler,
+		client:     client,
+		store:      store,
+		jointStore: jointStore,
+		cfg:        cfg,
+		scheduler:  scheduler,
 	}
 	return c
 }
@@ -67,5 +71,9 @@ func (c *collector) collectSamples(ctx context.Context, service *config.Service,
 	if err != nil {
 		return err
 	}
-	return c.store.WriteChunk(service.Id, LoadLatencyIndicator, end, chunk)
+	if err := c.store.WriteChunk(service.Id, LoadLatencyIndicator, end, chunk); err != nil {
+		return err
+	}
+	_, err = AnalyseSample(c.store, c.cfg, c.jointStore, service.Id, LoadLatencyIndicator, end)
+	return err
 }
