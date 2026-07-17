@@ -4,10 +4,10 @@ package alerting
 // It will be used to send alerts to the user when the system is not working as expected.
 
 import (
-	"maps"
 	"context"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net/http"
 	"time"
 
@@ -30,6 +30,10 @@ type AlertingOptions struct {
 }
 
 func SendIt(cfg config.Config, options AlertingOptions) error {
+	return SendItContext(context.Background(), cfg, options)
+}
+
+func SendItContext(ctx context.Context, cfg config.Config, options AlertingOptions) error {
 	alertmanagerHost, err := cfg.GetConfig("alertmanager_host")
 	if err != nil {
 		return fmt.Errorf("failed to get alertmanager host: %w", err)
@@ -67,7 +71,7 @@ func SendIt(cfg config.Config, options AlertingOptions) error {
 		},
 	}
 	// prepare the request parameters
-	params := alert.NewPostAlertsParams().WithContext(context.Background()).WithHTTPClient(http.DefaultClient).WithAlerts(alertPayload)
+	params := alert.NewPostAlertsParams().WithContext(ctx).WithHTTPClient(http.DefaultClient).WithAlerts(alertPayload)
 
 	slog.Debug("params", "params", params)
 	// send the alerts over HTTP v2 API
