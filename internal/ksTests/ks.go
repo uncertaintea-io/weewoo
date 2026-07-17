@@ -55,7 +55,7 @@ func kprob(z float64) float64 {
 		p = 1
 	} else if z < 0.755 {
 		const w = 2.50662827
-		// c1 - -pi**2/8, c2 = 9*c1, c3 = 25*c1
+		// c1 = -pi**2/8, c2 = 9*c1, c3 = 25*c1
 		const c1 = -1.2337005501361697
 		const c2 = -11.103304951225528
 		const c3 = -30.842513753404244
@@ -88,7 +88,6 @@ func KsTest(cdf func(float64) float64, sample []float64) float64 {
 	slices.Sort(sample)
 	n := float64(len(sample))
 	max := 0.0
-	// min := math.Inf(1)
 	ip := 0.0
 	for i, x := range sample {
 		p := cdf(x)
@@ -96,12 +95,7 @@ func KsTest(cdf func(float64) float64, sample []float64) float64 {
 		if diff < 0 {
 			diff = -diff
 		}
-		// if diff < min {
-		// 	t.Logf("New min diff: cdf(%g) = %g, p = %d/%d = %g, diff = %g", x, p, i+1, len(sample)+2, ip, diff)
-		// 	min = diff
-		// }
 		if diff > max {
-			// t.Logf("New max diff: cdf(%g) = %g, p = %d/%d = %g, diff = %g", x, p, i+1, len(sample)+2, ip, diff)
 			max = diff
 		}
 		ip = float64(i+1) / n
@@ -110,7 +104,6 @@ func KsTest(cdf func(float64) float64, sample []float64) float64 {
 			diff = -diff
 		}
 		if diff > max {
-			// t.Logf("New max diff: cdf(%g) = %g, p = %d/%d = %g, diff = %g", x, p, i, len(sample)+2, ip, diff)
 			max = diff
 		}
 	}
