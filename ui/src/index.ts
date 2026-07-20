@@ -45,7 +45,7 @@ function renderShell(content: string, apiResponse = 'Ready'): void {
     <div class="app-frame">
       <aside class="sidebar" aria-label="Primary navigation">
         <div class="sidebar-brand">
-          <span class="brand-mark" aria-hidden="true"></span>
+          <img class="brand-logo" src="/img/UncertainTEA.png" alt="" aria-hidden="true" />
           <div>
             <strong>WeeWoo Services</strong>
             <span>Monitoring console</span>

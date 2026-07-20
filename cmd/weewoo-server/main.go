@@ -47,8 +47,27 @@ type createServiceRequest struct {
 }
 
 type serviceCollector interface {
-	Schedule(service *config.Service)
+	Schedule(service *config.Service) error
 	Import(ctx context.Context, service *config.Service, start, end time.Time) error
+}
+
+type liveServiceTracker struct {
+	collector       collection.Collector
+	scheduleBuilder func(serviceID int) error
+}
+
+func (t *liveServiceTracker) Schedule(service *config.Service) error {
+	if err := t.collector.Schedule(service); err != nil {
+		return fmt.Errorf("failed to schedule metric collection: %w", err)
+	}
+	if err := t.scheduleBuilder(service.Id); err != nil {
+		return fmt.Errorf("failed to schedule ECDF publishing: %w", err)
+	}
+	return nil
+}
+
+func (t *liveServiceTracker) Import(ctx context.Context, service *config.Service, start, end time.Time) error {
+	return t.collector.Import(ctx, service, start, end)
 }
 
 func newServiceResponse(service *config.Service) serviceResponse {
@@ -137,7 +156,11 @@ func NewCreateServiceHandler(cfg config.Config, collector serviceCollector) http
 			http.Error(w, "failed to create service", http.StatusInternalServerError)
 			return
 		}
-		collector.Schedule(service)
+		if err := collector.Schedule(service); err != nil {
+			log.Printf("service %d was created but could not be tracked: %v", service.Id, err)
+			http.Error(w, "service created, but tracking could not be started", http.StatusInternalServerError)
+			return
+		}
 		if request.ImportStart != nil {
 			if err := collector.Import(r.Context(), service, *request.ImportStart, *request.ImportEnd); err != nil {
 				log.Printf("historical import failed for service %d: %v", service.Id, err)
@@ -233,19 +256,29 @@ func main() {
 	collector := collection.NewCollector(http.DefaultClient, ecdf.NewDatabaseChunkStore(db), scheduler)
 	defer collector.Stop()
 	for _, service := range services {
-		collector.Schedule(service)
+		if err := collector.Schedule(service); err != nil {
+			log.Fatalf("Failed to schedule service %d: %v", service.Id, err)
+		}
 	}
 
 	// Start ECDF builder
-	err = collection.StartECDFBuilder(ecdf.NewDatabaseChunkStore(db), ecdf.NewDatabaseJointStore(db), cfg, scheduler)
+	chunkStore := ecdf.NewDatabaseChunkStore(db)
+	jointStore := ecdf.NewDatabaseJointStore(db)
+	err = collection.StartECDFBuilder(chunkStore, jointStore, cfg, scheduler)
 	if err != nil {
 		log.Fatalf("Failed to start ECDF builder: %v", err)
+	}
+	tracker := &liveServiceTracker{
+		collector: collector,
+		scheduleBuilder: func(serviceID int) error {
+			return collection.ScheduleECDFBuilder(serviceID, chunkStore, jointStore, cfg, scheduler)
+		},
 	}
 
 	appMux := http.NewServeMux()
 	appMux.Handle("/api/services", observeRequestDuration(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost {
-			NewCreateServiceHandler(cfg, collector).ServeHTTP(w, r)
+			NewCreateServiceHandler(cfg, tracker).ServeHTTP(w, r)
 			return
 		}
 		NewListAllServicesHandler(cfg).ServeHTTP(w, r)

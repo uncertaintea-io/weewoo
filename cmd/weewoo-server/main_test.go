@@ -21,7 +21,29 @@ type fakeServiceCollector struct {
 	end       time.Time
 }
 
-func (c *fakeServiceCollector) Schedule(service *config.Service) { c.scheduled = service }
+func (c *fakeServiceCollector) Stop() {}
+func (c *fakeServiceCollector) Schedule(service *config.Service) error {
+	c.scheduled = service
+	return nil
+}
+
+func TestLiveServiceTrackerSchedulesCollectionAndPublishing(t *testing.T) {
+	collector := &fakeServiceCollector{}
+	builderServiceID := 0
+	tracker := &liveServiceTracker{
+		collector: collector,
+		scheduleBuilder: func(serviceID int) error {
+			builderServiceID = serviceID
+			return nil
+		},
+	}
+	service := &config.Service{Id: 42, Name: "checkout", Interval: time.Minute}
+
+	require.NoError(t, tracker.Schedule(service))
+
+	assert.Same(t, service, collector.scheduled)
+	assert.Equal(t, 42, builderServiceID)
+}
 func (c *fakeServiceCollector) Import(_ context.Context, service *config.Service, start, end time.Time) error {
 	c.imported, c.start, c.end = service, start, end
 	return nil

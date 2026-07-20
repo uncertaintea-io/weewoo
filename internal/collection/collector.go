@@ -17,7 +17,7 @@ const (
 
 type Collector interface {
 	Stop()
-	Schedule(service *config.Service)
+	Schedule(service *config.Service) error
 	Import(ctx context.Context, service *config.Service, start, end time.Time) error
 }
 
@@ -44,8 +44,8 @@ func (c *collector) Stop() {
 	c.scheduler.Stop()
 }
 
-func (c *collector) Schedule(service *config.Service) {
-	c.scheduler.AddCallback(service.Id, service.Interval, func(ctx context.Context, start time.Time, end time.Time) IntervalResult {
+func (c *collector) Schedule(service *config.Service) error {
+	return c.scheduler.AddCallback(service.Id, service.Interval, func(ctx context.Context, start time.Time, end time.Time) IntervalResult {
 		slog.Info("Collecting sample", "service", service.Name, "start", start, "end", end)
 		if err := c.collectSamples(ctx, service, start, end); err != nil {
 			return IntervalRetry(err)
