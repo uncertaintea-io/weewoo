@@ -1,6 +1,7 @@
 package kstests
 
 import (
+	"iter"
 	"math"
 	"slices"
 )
@@ -84,28 +85,30 @@ See:
 https://en.wikipedia.org/wiki/Kolmogorov%E2%80%93Smirnov_test
 */
 func KsTest(cdf func(float64) float64, sample []float64) float64 {
-	// Find the maximum difference between the sample and the reference distribution.
 	slices.Sort(sample)
-	n := float64(len(sample))
+	return KsTestIter(cdf, uint64(len(sample)), func(yield func(float64, uint64) bool) {
+		for _, value := range sample {
+			if !yield(value, 1) {
+				return
+			}
+		}
+	})
+}
+
+// KsTestIter runs a Kolmogorov-Smirnov test over sorted values and their
+// occurrence counts. count must equal the sum of the yielded occurrence counts.
+func KsTestIter(cdf func(float64) float64, count uint64, sample iter.Seq2[float64, uint64]) float64 {
+	n := float64(count)
 	max := 0.0
-	ip := 0.0
-	for i, x := range sample {
-		p := cdf(x)
-		diff := p - ip
-		if diff < 0 {
-			diff = -diff
+	var seen uint64
+	for value, occurrences := range sample {
+		if occurrences == 0 {
+			continue
 		}
-		if diff > max {
-			max = diff
-		}
-		ip = float64(i+1) / n
-		diff = ip - p
-		if diff < 0 {
-			diff = -diff
-		}
-		if diff > max {
-			max = diff
-		}
+		p := cdf(value)
+		max = math.Max(max, math.Abs(p-float64(seen)/n))
+		seen += occurrences
+		max = math.Max(max, math.Abs(float64(seen)/n-p))
 	}
 	z := max * math.Sqrt(n)
 	return kprob(z)

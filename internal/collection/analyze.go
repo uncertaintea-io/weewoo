@@ -1,9 +1,12 @@
 package collection
 
 import (
+	"cmp"
 	"context"
 	"fmt"
+	"iter"
 	"log/slog"
+	"slices"
 	"time"
 
 	"github.com/uncertaintea-io/weewoo/internal/alerting"
@@ -15,7 +18,6 @@ import (
 const (
 	analyseSampleTimeout = 5 * time.Second
 	analyseSampleAlpha   = 0.001
-	maxExpandedSamples   = 1_000_000
 )
 
 // analyzeSample evaluates collected samples against the current published joint
@@ -34,10 +36,14 @@ func analyzeSample(cfg config.Config, jointStore ecdf.JointStore, service *confi
 	if len(latencies) == 0 {
 		return false, fmt.Errorf("chunk has no latency samples")
 	}
-	if sampleCount(loads, 0) == 0 {
+	loadCount, err := checkedSampleCount(loads)
+	if err != nil {
+		return false, fmt.Errorf("invalid load samples: %w", err)
+	}
+	if loadCount == 0 {
 		return false, fmt.Errorf("chunk has no load observations")
 	}
-	latencyCount, err := checkedSampleCount(latencies, maxExpandedSamples)
+	latencyCount, err := checkedSampleCount(latencies)
 	if err != nil {
 		return false, fmt.Errorf("invalid latency samples: %w", err)
 	}
@@ -59,8 +65,18 @@ func analyzeSample(cfg config.Config, jointStore ecdf.JointStore, service *confi
 		return false, fmt.Errorf("failed to query joint ECDF: %w", err)
 	}
 
-	latencySample := expandSamples(latencies, latencyCount)
-	probability := kstests.KsTest(cdf, latencySample)
+	sortedLatencies := slices.Clone(latencies)
+	slices.SortFunc(sortedLatencies, func(a, b ecdf.Sample) int {
+		return cmp.Compare(a.Value, b.Value)
+	})
+	latencyValues := func(yield func(float64, uint64) bool) {
+		for _, sample := range sortedLatencies {
+			if !yield(sample.Value, sample.Count) {
+				return
+			}
+		}
+	}
+	probability := kstests.KsTestIter(cdf, latencyCount, iter.Seq2[float64, uint64](latencyValues))
 	anomalyScore := 1.0 - probability
 	anomalous := anomalyScore > analyseSampleAlpha
 	if anomalous {
@@ -93,7 +109,7 @@ func analyzeSample(cfg config.Config, jointStore ecdf.JointStore, service *confi
 		"anomalous", anomalous,
 		"probability", probability,
 		"anomaly_score", anomalyScore,
-		"samples", len(latencySample),
+		"samples", latencyCount,
 		"load", loadValue,
 	)
 
@@ -114,35 +130,13 @@ func weightedMean(samples []ecdf.Sample) float64 {
 	return total / float64(count)
 }
 
-// expandSamples expands a slice of samples into a slice of floats.
-func expandSamples(samples []ecdf.Sample, size int) []float64 {
-	expanded := make([]float64, 0, size)
-	for _, sample := range samples {
-		for i := uint64(0); i < sample.Count; i++ {
-			expanded = append(expanded, sample.Value)
-		}
-	}
-	return expanded
-}
-
-func sampleCount(samples []ecdf.Sample, stopAfter uint64) uint64 {
+func checkedSampleCount(samples []ecdf.Sample) (uint64, error) {
 	var total uint64
 	for _, sample := range samples {
 		if ^uint64(0)-total < sample.Count {
-			return ^uint64(0)
+			return 0, fmt.Errorf("observation count overflows uint64")
 		}
 		total += sample.Count
-		if stopAfter > 0 && total > stopAfter {
-			return total
-		}
 	}
-	return total
-}
-
-func checkedSampleCount(samples []ecdf.Sample, limit int) (int, error) {
-	total := sampleCount(samples, uint64(limit))
-	if total > uint64(limit) {
-		return 0, fmt.Errorf("observation count %d exceeds limit %d", total, limit)
-	}
-	return int(total), nil
+	return total, nil
 }

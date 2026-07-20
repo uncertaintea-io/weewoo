@@ -5,7 +5,10 @@ import (
 	"context"
 	"flag"
 	"log/slog"
+	"math"
+	"math/rand/v2"
 	"os"
+	"slices"
 	"testing"
 	"time"
 
@@ -66,4 +69,92 @@ func TestKsTest(t *testing.T) {
 	passed := p <= alpha
 	slog.Info("KS test result", "passed", passed, "samples", len(latencies), "load", fixedLoad)
 	assert.True(t, passed, "expected sample to match queried ECDF with p-value of %f, was %f", alpha, p)
+}
+
+func TestKsTestIterMatchesExpandedSample(t *testing.T) {
+	cdf := func(value float64) float64 { return value / 10 }
+	expanded := []float64{1, 1, 1, 4, 4, 8}
+	counted := func(yield func(float64, uint64) bool) {
+		for _, sample := range []struct {
+			value float64
+			count uint64
+		}{{1, 3}, {4, 2}, {8, 1}} {
+			if !yield(sample.value, sample.count) {
+				return
+			}
+		}
+	}
+
+	require.Equal(t, KsTest(cdf, expanded), KsTestIter(cdf, 6, counted))
+}
+
+func TestKsTestIterEvaluatesEachDistinctValueOnce(t *testing.T) {
+	calls := 0
+	cdf := func(float64) float64 {
+		calls++
+		return 0.5
+	}
+	counted := func(yield func(float64, uint64) bool) {
+		yield(1, 1_000_000)
+	}
+
+	KsTestIter(cdf, 1_000_000, counted)
+	require.Equal(t, 1, calls)
+}
+
+func TestKsTestIterMatchesReferenceImplementation(t *testing.T) {
+	rng := rand.New(rand.NewPCG(1, 2))
+	cdf := func(value float64) float64 {
+		return 1 / (1 + math.Exp(-value))
+	}
+
+	for run := 0; run < 1_000; run++ {
+		records := make([]struct {
+			value float64
+			count uint64
+		}, rng.IntN(20))
+		var expanded []float64
+		var count uint64
+		for i := range records {
+			records[i].value = float64(rng.IntN(21)-10) / 2
+			records[i].count = uint64(rng.IntN(8))
+			count += records[i].count
+			for range records[i].count {
+				expanded = append(expanded, records[i].value)
+			}
+		}
+		slices.SortFunc(records, func(a, b struct {
+			value float64
+			count uint64
+		}) int {
+			if a.value < b.value {
+				return -1
+			}
+			if a.value > b.value {
+				return 1
+			}
+			return 0
+		})
+		counted := func(yield func(float64, uint64) bool) {
+			for _, record := range records {
+				if !yield(record.value, record.count) {
+					return
+				}
+			}
+		}
+
+		require.Equal(t, referenceKsTest(cdf, expanded), KsTestIter(cdf, count, counted), "run %d", run)
+	}
+}
+
+func referenceKsTest(cdf func(float64) float64, sample []float64) float64 {
+	slices.Sort(sample)
+	n := float64(len(sample))
+	maxDifference := 0.0
+	for i, value := range sample {
+		p := cdf(value)
+		maxDifference = math.Max(maxDifference, math.Abs(p-float64(i)/n))
+		maxDifference = math.Max(maxDifference, math.Abs(float64(i+1)/n-p))
+	}
+	return kprob(maxDifference * math.Sqrt(n))
 }

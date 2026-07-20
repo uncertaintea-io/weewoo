@@ -19,14 +19,24 @@ func (unreadJointStore) Publish(context.Context, int, int, time.Time, func(io.Wr
 	panic("unexpected Publish call")
 }
 
-func TestAnalyseSampleRejectsUnsafeExpandedSampleCount(t *testing.T) {
+func TestAnalyseSampleRejectsOverflowingSampleCount(t *testing.T) {
 	const serviceID, indicatorID = 1, 2
 	timestamp := time.Unix(1_700_000_000, 0)
 	loads := []ecdf.Sample{{Value: 12, Count: 1}}
-	latencies := []ecdf.Sample{{Value: 30, Count: math.MaxUint64}}
+	latencies := []ecdf.Sample{{Value: 30, Count: math.MaxUint64}, {Value: 31, Count: 1}}
 
 	_, err := analyzeSample(config.NewFakeConfig(), unreadJointStore{}, &config.Service{Id: serviceID, Name: "test"}, indicatorID, timestamp, loads, latencies)
-	require.EqualError(t, err, "invalid latency samples: observation count 18446744073709551615 exceeds limit 1000000")
+	require.EqualError(t, err, "invalid latency samples: observation count overflows uint64")
+}
+
+func TestAnalyseSampleRejectsOverflowingLoadCount(t *testing.T) {
+	const serviceID, indicatorID = 1, 2
+	timestamp := time.Unix(1_700_000_000, 0)
+	loads := []ecdf.Sample{{Value: 12, Count: math.MaxUint64}, {Value: 13, Count: 1}}
+	latencies := []ecdf.Sample{{Value: 30, Count: 1}}
+
+	_, err := analyzeSample(config.NewFakeConfig(), unreadJointStore{}, &config.Service{Id: serviceID, Name: "test"}, indicatorID, timestamp, loads, latencies)
+	require.EqualError(t, err, "invalid load samples: observation count overflows uint64")
 }
 
 func (unreadJointStore) ReadCurrent(context.Context, int, int) ([]byte, error) {
