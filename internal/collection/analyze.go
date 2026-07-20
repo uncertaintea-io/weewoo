@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"strconv"
 	"time"
 
 	"github.com/uncertaintea-io/weewoo/internal/alerting"
@@ -19,12 +18,9 @@ const (
 	maxExpandedSamples   = 1_000_000
 )
 
-// AnalyseSample evaluates a collected chunk against the current published joint
-// ECDF. It returns true when the sample appears anomalous.
-func AnalyseSample(chunkStore ecdf.ChunkStore, cfg config.Config, jointStore ecdf.JointStore, serviceID int, indicatorID int, timestamp time.Time) (bool, error) {
-	if chunkStore == nil {
-		return false, fmt.Errorf("nil chunk store")
-	}
+// analyzeSample evaluates collected samples against the current published joint
+// ECDF. It returns true when the samples appear anomalous.
+func analyzeSample(cfg config.Config, jointStore ecdf.JointStore, service *config.Service, indicatorID int, timestamp time.Time, loads, latencies []ecdf.Sample) (bool, error) {
 	if cfg == nil {
 		return false, fmt.Errorf("nil config")
 	}
@@ -32,15 +28,6 @@ func AnalyseSample(chunkStore ecdf.ChunkStore, cfg config.Config, jointStore ecd
 		return false, fmt.Errorf("nil joint ECDF store")
 	}
 
-	chunk, err := chunkStore.ReadChunk(serviceID, indicatorID, timestamp)
-	if err != nil {
-		return false, err
-	}
-
-	_, loads, latencies, err := ecdf.Decode(chunk)
-	if err != nil {
-		return false, fmt.Errorf("failed to decode chunk: %w", err)
-	}
 	if len(loads) == 0 {
 		return false, fmt.Errorf("chunk has no load samples")
 	}
@@ -61,7 +48,7 @@ func AnalyseSample(chunkStore ecdf.ChunkStore, cfg config.Config, jointStore ecd
 	ctx, cancel := context.WithTimeout(context.Background(), analyseSampleTimeout)
 	defer cancel()
 
-	jointECDF, err := jointStore.ReadCurrent(ctx, serviceID, indicatorID)
+	jointECDF, err := jointStore.ReadCurrent(ctx, service.Id, indicatorID)
 	if err != nil {
 		return false, fmt.Errorf("failed to read current joint ECDF: %w", err)
 	}
@@ -82,18 +69,18 @@ func AnalyseSample(chunkStore ecdf.ChunkStore, cfg config.Config, jointStore ecd
 			return false, fmt.Errorf("failed to read alert generator URL: %w", err)
 		}
 		if err := alerting.SendItContext(ctx, cfg, alerting.AlertingOptions{
-			Service:      strconv.Itoa(serviceID),
+			Service:      service.Name,
 			Serverity:    "critical",
-			Indicator:    strconv.Itoa(indicatorID),
+			Indicator:    "Load vs. Latency",
 			AlertName:    "anomalous_sample",
 			Summary:      "Anomalous sample detected",
-			Description:  fmt.Sprintf("Anomalous sample detected for service %d and indicator %d", serviceID, indicatorID),
+			Description:  fmt.Sprintf("Sample does not match the distribution expected at load %f. (P = %f, below threshold of %f)", loadValue, probability, analyseSampleAlpha),
 			Annotations:  nil,
 			GeneratorURL: generatorURL,
 		}); err != nil {
 			slog.Error(
 				"failed to send anomaly alert",
-				"service_id", serviceID,
+				"service_id", service.Id,
 				"indicator_id", indicatorID,
 				"timestamp", timestamp,
 				"error", err,

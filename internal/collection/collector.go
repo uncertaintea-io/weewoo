@@ -22,20 +22,20 @@ type Collector interface {
 
 type collector struct {
 	client     *http.Client
-	store      ecdf.ChunkStore
+	chunkStore      ecdf.ChunkStore
 	jointStore ecdf.JointStore
 	cfg        config.Config
 	scheduler  *IntervalScheduler
 }
 
 // this creates a collector that can be used to collect samples from the prometheus server
-func NewCollector(client *http.Client, store ecdf.ChunkStore, jointStore ecdf.JointStore, cfg config.Config, scheduler *IntervalScheduler) Collector {
+func NewCollector(client *http.Client, chunkStore ecdf.ChunkStore, jointStore ecdf.JointStore, cfg config.Config, scheduler *IntervalScheduler) Collector {
 	if client == nil {
 		client = http.DefaultClient
 	}
 	c := &collector{
 		client:     client,
-		store:      store,
+		chunkStore:      chunkStore,
 		jointStore: jointStore,
 		cfg:        cfg,
 		scheduler:  scheduler,
@@ -67,13 +67,15 @@ func (c *collector) collectSamples(ctx context.Context, service *config.Service,
 	if err != nil {
 		return err
 	}
-	chunk, err := ecdf.Encode(end, ecdf.CountSamples(loadValue), ecdf.CountSamples(latencyValue))
+	loads := ecdf.CountSamples(loadValue)
+	latencies := ecdf.CountSamples(latencyValue)
+	chunk, err := ecdf.Encode(end, loads, latencies)
 	if err != nil {
 		return err
 	}
-	if err := c.store.WriteChunk(service.Id, LoadLatencyIndicator, end, chunk); err != nil {
+	if err := c.chunkStore.WriteChunk(service.Id, LoadLatencyIndicator, end, chunk); err != nil {
 		return err
 	}
-	_, err = AnalyseSample(c.store, c.cfg, c.jointStore, service.Id, LoadLatencyIndicator, end)
+	_, err = analyzeSample(c.cfg, c.jointStore, service, LoadLatencyIndicator, end, loads, latencies)
 	return err
 }
