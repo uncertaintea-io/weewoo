@@ -5,6 +5,32 @@ export interface Service {
   loadQuery: string;
   latencyQuery: string;
   intervalSeconds: number;
+  tracking: TrackingStatus;
+  imports: ImportJob[];
+}
+
+export interface ActivityEntry {
+  type: string;
+  message: string;
+  timestamp: string;
+}
+
+export interface TrackingStatus {
+  state: 'pending' | 'collecting' | 'healthy' | 'degraded' | 'unavailable' | 'paused';
+  lastSuccess?: string;
+  lastError?: string;
+  error?: string;
+  activity: ActivityEntry[];
+}
+
+export interface ImportJob {
+  id: number;
+  serviceId: number;
+  state: 'queued' | 'running' | 'complete' | 'failed' | 'cancelled';
+  progress: number;
+  error?: string;
+  startedAt: string;
+  endedAt?: string;
 }
 
 export interface CreateServiceInput {
@@ -64,6 +90,21 @@ function parseService(value: unknown): Service {
     throw new Error('Service response item must be an object.');
   }
 
+  const trackingValue = isRecord(value.tracking) ? value.tracking : {};
+  const activity = Array.isArray(trackingValue.activity) ? trackingValue.activity.filter(isRecord).map((entry) => ({
+    type: readString(entry.type, 'activity.type'),
+    message: readString(entry.message, 'activity.message'),
+    timestamp: readString(entry.timestamp, 'activity.timestamp'),
+  })) : [];
+  const imports = Array.isArray(value.imports) ? value.imports.filter(isRecord).map((job) => ({
+    id: readNumber(job.id, 'import.id'),
+    serviceId: readNumber(job.serviceId, 'import.serviceId'),
+    state: readString(job.state, 'import.state') as ImportJob['state'],
+    progress: readNumber(job.progress, 'import.progress'),
+    ...(typeof job.error === 'string' ? { error: job.error } : {}),
+    startedAt: readString(job.startedAt, 'import.startedAt'),
+    ...(typeof job.endedAt === 'string' ? { endedAt: job.endedAt } : {}),
+  })) : [];
   return {
     id: readNumber(value.id, 'id'),
     name: readString(value.name, 'name'),
@@ -71,7 +112,21 @@ function parseService(value: unknown): Service {
     loadQuery: readString(value.loadQuery, 'loadQuery'),
     latencyQuery: readString(value.latencyQuery, 'latencyQuery'),
     intervalSeconds: readNumber(value.intervalSeconds, 'intervalSeconds'),
+    tracking: {
+      state: (typeof trackingValue.state === 'string' ? trackingValue.state : 'pending') as TrackingStatus['state'],
+      ...(typeof trackingValue.lastSuccess === 'string' ? { lastSuccess: trackingValue.lastSuccess } : {}),
+      ...(typeof trackingValue.lastError === 'string' ? { lastError: trackingValue.lastError } : {}),
+      ...(typeof trackingValue.error === 'string' ? { error: trackingValue.error } : {}),
+      activity,
+    },
+    imports,
   };
+}
+
+async function serviceRequest(path: string, init: RequestInit, fetcher: Fetcher): Promise<Service> {
+  const response = await fetcher(path, init);
+  if (!response.ok) throw await readServiceError(response);
+  return parseService(await response.json());
 }
 
 export async function ListAllServices(fetcher: Fetcher = fetch): Promise<Service[]> {
@@ -94,17 +149,45 @@ export async function ListAllServices(fetcher: Fetcher = fetch): Promise<Service
 }
 
 export async function CreateService(input: CreateServiceInput, fetcher: Fetcher = fetch): Promise<Service> {
-  const response = await fetcher('/api/services', {
+  return serviceRequest('/api/services', {
     method: 'POST',
     headers: {
       Accept: 'application/json',
       'Content-Type': 'application/json',
     },
     body: JSON.stringify(input),
-  });
+  }, fetcher);
+}
 
-  if (!response.ok) {
-    throw await readServiceError(response);
-  }
-  return parseService(await response.json());
+export async function GetService(id: number, fetcher: Fetcher = fetch): Promise<Service> {
+  return serviceRequest(`/api/services/${String(id)}`, { headers: { Accept: 'application/json' } }, fetcher);
+}
+
+export async function UpdateService(id: number, input: CreateServiceInput, fetcher: Fetcher = fetch): Promise<Service> {
+  return serviceRequest(`/api/services/${String(id)}`, {
+    method: 'PUT', headers: { Accept: 'application/json', 'Content-Type': 'application/json' }, body: JSON.stringify(input),
+  }, fetcher);
+}
+
+export async function DeleteService(id: number, fetcher: Fetcher = fetch): Promise<void> {
+  const response = await fetcher(`/api/services/${String(id)}`, { method: 'DELETE' });
+  if (!response.ok) throw await readServiceError(response);
+}
+
+export async function TestService(input: CreateServiceInput, fetcher: Fetcher = fetch): Promise<string> {
+  const response = await fetcher('/api/services/test', {
+    method: 'POST', headers: { Accept: 'application/json', 'Content-Type': 'application/json' }, body: JSON.stringify(input),
+  });
+  if (!response.ok) throw await readServiceError(response);
+  const body = await response.json() as { message?: unknown };
+  return typeof body.message === 'string' ? body.message : 'Connection succeeded';
+}
+
+export async function CancelImport(id: number, fetcher: Fetcher = fetch): Promise<void> {
+  const response = await fetcher(`/api/imports/${String(id)}/cancel`, { method: 'POST' });
+  if (!response.ok) throw await readServiceError(response);
+}
+
+export async function SetServicePaused(id: number, paused: boolean, fetcher: Fetcher = fetch): Promise<Service> {
+  return serviceRequest(`/api/services/${String(id)}/${paused ? 'pause' : 'resume'}`, { method: 'POST', headers: { Accept: 'application/json' } }, fetcher);
 }

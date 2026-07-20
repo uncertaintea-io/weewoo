@@ -1,8 +1,9 @@
 import './index.scss'
-import { CreateService, ListAllServices, ServicesApiError, type CreateServiceInput, type Service } from './api';
+import { CancelImport, CreateService, DeleteService, GetService, ListAllServices, ServicesApiError, SetServicePaused, TestService, UpdateService, type CreateServiceInput, type Service } from './api';
 import { escapeHtml, renderServiceUrl } from './rendering';
 
 const app = document.querySelector<HTMLDivElement>('#app');
+let detailRefreshTimer: number | undefined;
 type Theme = 'light' | 'dark' | 'system';
 
 function savedTheme(): Theme {
@@ -34,6 +35,15 @@ function formatInterval(seconds: number): string {
 
 function serviceInitial(service: Service): string {
   return service.name.trim().charAt(0).toUpperCase() || 'S';
+}
+
+function statusLabel(state: Service['tracking']['state']): string {
+  return state.charAt(0).toUpperCase() + state.slice(1);
+}
+
+function formatTimestamp(value?: string): string {
+  if (value === undefined) return 'Not yet';
+  return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value));
 }
 
 function renderShell(content: string, apiResponse = 'Ready'): void {
@@ -229,6 +239,9 @@ function renderServices(services: Service[]): void {
     return;
   }
 
+  const healthy = services.filter((service) => service.tracking.state === 'healthy').length;
+  const degraded = services.filter((service) => service.tracking.state === 'degraded').length;
+  const unavailable = services.filter((service) => service.tracking.state === 'unavailable').length;
   const serviceRows = services.map((service) => `
     <article class="service-dashboard" data-service-name="${escapeHtml(service.name.toLowerCase())}">
       <header class="service-header">
@@ -236,35 +249,36 @@ function renderServices(services: Service[]): void {
           <div class="service-avatar" aria-hidden="true">${escapeHtml(serviceInitial(service))}</div>
           <div>
             <div class="service-title">
-              <h2>${escapeHtml(service.name)}</h2>
+              <h2><a href="#service/${String(service.id)}">${escapeHtml(service.name)}</a></h2>
               <span class="service-id">#${String(service.id)}</span>
             </div>
             ${renderServiceUrl(service.prometheusUrl)}
           </div>
         </div>
-        <span class="status-pill status-pill--healthy">Healthy</span>
+        <span class="status-pill status-pill--${escapeHtml(service.tracking.state)}">${escapeHtml(statusLabel(service.tracking.state))}</span>
       </header>
 
       <dl class="metric-grid">
-        ${renderMetricBox('Current status', 'Healthy', 'Loaded from service configuration', 'ok')}
+        ${renderMetricBox('Current status', statusLabel(service.tracking.state), service.tracking.error ?? 'Live scheduler status', service.tracking.state === 'healthy' ? 'ok' : '')}
         ${renderMetricBox('Uptime', 'Not reported', 'No health-check source configured yet')}
         ${renderMetricBox('Collection interval', formatInterval(service.intervalSeconds), 'How often new metrics are collected')}
-        ${renderMetricBox('Last alert', 'None reported', 'Alert history API not available yet')}
+        ${renderMetricBox('Last collection', formatTimestamp(service.tracking.lastSuccess), service.tracking.lastError === undefined ? 'No collection errors recorded' : `Last error: ${formatTimestamp(service.tracking.lastError)}`)}
       </dl>
 
       <dl class="query-grid">
         ${renderQueryBox('Load signal', service.loadQuery)}
         ${renderQueryBox('Latency signal', service.latencyQuery)}
       </dl>
+      <footer class="service-footer"><a class="secondary-button" href="#service/${String(service.id)}">View details</a></footer>
     </article>
   `).join('');
 
   renderShell(`
     <section class="summary-grid" aria-label="Service summary">
       ${renderSummaryCard('Total Services', services.length, 'total')}
-      ${renderSummaryCard('Healthy', services.length, 'healthy')}
-      ${renderSummaryCard('Degraded', 0, 'degraded')}
-      ${renderSummaryCard('Unavailable', 0, 'unavailable')}
+      ${renderSummaryCard('Healthy', healthy, 'healthy')}
+      ${renderSummaryCard('Degraded', degraded, 'degraded')}
+      ${renderSummaryCard('Unavailable', unavailable, 'unavailable')}
     </section>
     <section class="service-panel">
       <div class="panel-header">
@@ -299,6 +313,16 @@ function inputValue(form: HTMLFormElement, name: string): string {
   return typeof value === 'string' ? value.trim() : '';
 }
 
+function serviceInputFromForm(form: HTMLFormElement): CreateServiceInput {
+  return {
+    name: inputValue(form, 'name'),
+    prometheusUrl: inputValue(form, 'prometheusUrl'),
+    loadQuery: inputValue(form, 'loadQuery'),
+    latencyQuery: inputValue(form, 'latencyQuery'),
+    intervalSeconds: Number(inputValue(form, 'intervalSeconds')),
+  };
+}
+
 function renderServiceForm(importHistory: boolean): void {
   renderShell(`
     <section class="form-panel">
@@ -317,7 +341,7 @@ function renderServiceForm(importHistory: boolean): void {
           <label><span>Import through</span><input name="importEnd" required type="datetime-local" /></label>
         ` : ''}
         <div id="form-error" class="form-error wide" role="alert"></div>
-        <div class="form-actions wide"><a class="secondary-button" href="#services">Cancel</a><button class="primary-button" type="submit">OK</button></div>
+        <div class="form-actions wide"><button id="test-service" class="secondary-button" type="button">Test connection</button><a class="secondary-button" href="#services">Cancel</a><button class="primary-button" type="submit">OK</button></div>
       </form>
     </section>
   `);
@@ -326,18 +350,31 @@ function renderServiceForm(importHistory: boolean): void {
     event.preventDefault();
     void submitServiceForm(event.currentTarget as HTMLFormElement, importHistory);
   });
+  document.querySelector<HTMLButtonElement>('#test-service')?.addEventListener('click', () => {
+    const form = document.querySelector<HTMLFormElement>('#service-form');
+    if (form !== null) void testServiceForm(form);
+  });
+}
+
+async function testServiceForm(form: HTMLFormElement): Promise<void> {
+  const button = form.querySelector<HTMLButtonElement>('#test-service');
+  const errorBox = form.querySelector<HTMLElement>('#form-error');
+  if (!form.reportValidity()) return;
+  if (button !== null) { button.disabled = true; button.textContent = 'Testing…'; }
+  try {
+    const message = await TestService(serviceInputFromForm(form));
+    if (errorBox !== null) { errorBox.classList.add('is-success'); errorBox.textContent = message; }
+  } catch (error) {
+    if (errorBox !== null) { errorBox.classList.remove('is-success'); errorBox.textContent = error instanceof Error ? error.message : 'Test failed'; }
+  } finally {
+    if (button !== null) { button.disabled = false; button.textContent = 'Test connection'; }
+  }
 }
 
 async function submitServiceForm(form: HTMLFormElement, importHistory: boolean): Promise<void> {
   const submit = form.querySelector<HTMLButtonElement>('button[type="submit"]');
   const errorBox = form.querySelector<HTMLElement>('#form-error');
-  const input: CreateServiceInput = {
-    name: inputValue(form, 'name'),
-    prometheusUrl: inputValue(form, 'prometheusUrl'),
-    loadQuery: inputValue(form, 'loadQuery'),
-    latencyQuery: inputValue(form, 'latencyQuery'),
-    intervalSeconds: Number(inputValue(form, 'intervalSeconds')),
-  };
+  const input = serviceInputFromForm(form);
   if (importHistory) {
     input.importStart = new Date(inputValue(form, 'importStart')).toISOString();
     input.importEnd = new Date(inputValue(form, 'importEnd')).toISOString();
@@ -402,12 +439,117 @@ function renderSettings(): void {
   });
 }
 
+function renderActivity(service: Service): string {
+  if (service.tracking.activity.length === 0) return '<p class="muted-copy">No collection activity has been recorded yet.</p>';
+  return `<ol class="activity-list">${service.tracking.activity.map((entry) => `
+    <li><span class="activity-dot activity-dot--${escapeHtml(entry.type)}"></span><div><strong>${escapeHtml(entry.message)}</strong><time>${escapeHtml(formatTimestamp(entry.timestamp))}</time></div></li>
+  `).join('')}</ol>`;
+}
+
+function renderImports(service: Service): string {
+  if (service.imports.length === 0) return '<p class="muted-copy">No historical imports for this service.</p>';
+  return `<div class="import-list">${service.imports.map((job) => `
+    <article class="import-row">
+      <div><strong>Import #${String(job.id)}</strong><span>${escapeHtml(statusLabel(job.state as Service['tracking']['state']))}</span></div>
+      <progress max="100" value="${String(job.progress)}">${String(job.progress)}%</progress>
+      ${(job.state === 'queued' || job.state === 'running') ? `<button class="secondary-button cancel-import" type="button" data-import-id="${String(job.id)}">Cancel</button>` : ''}
+      ${job.error === undefined ? '' : `<p>${escapeHtml(job.error)}</p>`}
+    </article>
+  `).join('')}</div>`;
+}
+
+function renderServiceDetail(service: Service): void {
+  renderShell(`
+    <section class="detail-header">
+      <div><a class="back-link" href="#services">← All services</a><p class="eyebrow">Service #${String(service.id)}</p><h2>${escapeHtml(service.name)}</h2>${renderServiceUrl(service.prometheusUrl)}</div>
+      <div class="detail-actions"><span class="status-pill status-pill--${escapeHtml(service.tracking.state)}">${escapeHtml(statusLabel(service.tracking.state))}</span><button id="toggle-tracking" class="secondary-button" type="button">${service.tracking.state === 'paused' ? 'Resume' : 'Pause'}</button><a class="secondary-button" href="#service/${String(service.id)}/edit">Edit</a><button id="delete-service" class="danger-button" type="button">Delete</button></div>
+    </section>
+    <section class="detail-grid">
+      <article class="detail-card"><span>Tracking state</span><strong>${escapeHtml(statusLabel(service.tracking.state))}</strong><p>${escapeHtml(service.tracking.error ?? 'The scheduler is running normally.')}</p></article>
+      <article class="detail-card"><span>Last successful collection</span><strong>${escapeHtml(formatTimestamp(service.tracking.lastSuccess))}</strong><p>Every ${escapeHtml(formatInterval(service.intervalSeconds))}</p></article>
+      <article class="detail-card"><span>Last collection error</span><strong>${escapeHtml(formatTimestamp(service.tracking.lastError))}</strong><p>${escapeHtml(service.tracking.error ?? 'No errors recorded')}</p></article>
+    </section>
+    <section class="detail-columns">
+      <article class="detail-panel"><div class="panel-header"><h2>Collection activity</h2><span>Latest first</span></div>${renderActivity(service)}</article>
+      <article class="detail-panel"><div class="panel-header"><h2>Historical imports</h2><span>${String(service.imports.length)} jobs</span></div>${renderImports(service)}</article>
+    </section>
+    <section class="detail-panel query-detail"><div class="panel-header"><h2>Prometheus configuration</h2></div><dl class="query-grid">${renderQueryBox('Load signal', service.loadQuery)}${renderQueryBox('Latency signal', service.latencyQuery)}</dl></section>
+  `, '200 OK');
+  document.querySelector('#delete-service')?.addEventListener('click', () => { void deleteServiceFromDetail(service); });
+  document.querySelector('#toggle-tracking')?.addEventListener('click', () => {
+    void (async () => { await SetServicePaused(service.id, service.tracking.state !== 'paused'); await loadServiceDetail(service.id); })();
+  });
+  document.querySelectorAll<HTMLButtonElement>('.cancel-import').forEach((button) => {
+    button.addEventListener('click', () => {
+      void (async () => {
+        await CancelImport(Number(button.dataset.importId));
+        await loadServiceDetail(service.id);
+      })();
+    });
+  });
+  if (service.imports.some((job) => job.state === 'queued' || job.state === 'running')) {
+    detailRefreshTimer = window.setTimeout(() => {
+      if (window.location.hash === `#service/${String(service.id)}`) void loadServiceDetail(service.id);
+    }, 2000);
+  }
+}
+
+async function deleteServiceFromDetail(service: Service): Promise<void> {
+  if (!window.confirm(`Delete ${service.name}? Historical data will be retained.`)) return;
+  await DeleteService(service.id);
+  window.location.hash = 'services';
+}
+
+async function loadServiceDetail(id: number): Promise<void> {
+  renderLoading();
+  try { renderServiceDetail(await GetService(id)); } catch (error) { renderError(error); }
+}
+
+function renderEditServiceForm(service: Service): void {
+  renderShell(`
+    <section class="form-panel"><a class="back-link" href="#service/${String(service.id)}">← Back to service</a><p class="eyebrow">Service #${String(service.id)}</p><h2>Edit service</h2>
+      <form id="service-form" class="service-form">
+        <label><span>Service name</span><input name="name" required value="${escapeHtml(service.name)}" /></label>
+        <label><span>Prometheus URL</span><input name="prometheusUrl" required type="url" value="${escapeHtml(service.prometheusUrl)}" /></label>
+        <label class="wide"><span>Load query</span><textarea name="loadQuery" required rows="3">${escapeHtml(service.loadQuery)}</textarea></label>
+        <label class="wide"><span>Latency query</span><textarea name="latencyQuery" required rows="3">${escapeHtml(service.latencyQuery)}</textarea></label>
+        <label><span>Collection interval (seconds)</span><input name="intervalSeconds" required type="number" min="1" value="${String(service.intervalSeconds)}" /></label>
+        <div id="form-error" class="form-error wide" role="alert"></div>
+        <div class="form-actions wide"><button id="test-service" class="secondary-button" type="button">Test connection</button><a class="secondary-button" href="#service/${String(service.id)}">Cancel</a><button class="primary-button" type="submit">Save changes</button></div>
+      </form>
+    </section>
+  `);
+  const form = document.querySelector<HTMLFormElement>('#service-form');
+  form?.addEventListener('submit', (event) => {
+    event.preventDefault();
+    void (async () => {
+      const errorBox = form.querySelector<HTMLElement>('#form-error');
+      try { await UpdateService(service.id, serviceInputFromForm(form)); window.location.hash = `service/${String(service.id)}`; }
+      catch (error) { if (errorBox !== null) errorBox.textContent = error instanceof Error ? error.message : 'Update failed'; }
+    })();
+  });
+  form?.querySelector('#test-service')?.addEventListener('click', () => { void testServiceForm(form); });
+}
+
+async function loadEditService(id: number): Promise<void> {
+  renderLoading();
+  try { renderEditServiceForm(await GetService(id)); } catch (error) { renderError(error); }
+}
+
 async function boot(): Promise<void> {
+  if (detailRefreshTimer !== undefined) {
+    window.clearTimeout(detailRefreshTimer);
+    detailRefreshTimer = undefined;
+  }
   const route = window.location.hash.slice(1) || 'services';
   if (route === 'add') { renderAddChoice(); return; }
   if (route === 'add/new') { renderServiceForm(false); return; }
   if (route === 'add/import') { renderServiceForm(true); return; }
   if (route === 'settings') { renderSettings(); return; }
+  const detailMatch = /^service\/(\d+)$/.exec(route);
+  if (detailMatch !== null) { await loadServiceDetail(Number(detailMatch[1])); return; }
+  const editMatch = /^service\/(\d+)\/edit$/.exec(route);
+  if (editMatch !== null) { await loadEditService(Number(editMatch[1])); return; }
   if (route !== 'services') { renderPlaceholder(route); return; }
   renderLoading();
 

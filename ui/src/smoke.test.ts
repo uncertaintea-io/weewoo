@@ -59,6 +59,8 @@ describe('ListAllServices', () => {
         loadQuery: 'load',
         latencyQuery: 'latency',
         intervalSeconds: 30,
+        tracking: { state: 'pending', activity: [] },
+        imports: [],
       },
     ]);
   });

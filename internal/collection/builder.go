@@ -31,12 +31,15 @@ func getTargets(cfg config.Config) ([]ecdfBuilderTarget, error) {
 	if err != nil {
 		return nil, err
 	}
-	targets := make([]ecdfBuilderTarget, len(services))
-	for i, service := range services {
-		targets[i] = ecdfBuilderTarget{
+	targets := make([]ecdfBuilderTarget, 0, len(services))
+	for _, service := range services {
+		if service.Paused {
+			continue
+		}
+		targets = append(targets, ecdfBuilderTarget{
 			ServiceID:  service.Id,
 			CallbackID: ecdfBuilderCallbackIDOffset + service.Id,
-		}
+		})
 	}
 	return targets, nil
 }

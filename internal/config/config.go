@@ -44,6 +44,7 @@ type Config interface {
 	WriteService(service *Service) error
 	ReadService(id int) (*Service, error)
 	ReadAllServices() ([]*Service, error)
+	DeleteService(id int) error
 	Close()
 }
 
@@ -61,4 +62,5 @@ type Service struct {
 	LoadQuery     string
 	LatencyQuery  string
 	Interval      time.Duration
+	Paused        bool
 }

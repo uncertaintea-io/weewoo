@@ -21,7 +21,8 @@ type fakeServiceCollector struct {
 	end       time.Time
 }
 
-func (c *fakeServiceCollector) Stop() {}
+func (c *fakeServiceCollector) Stop()          {}
+func (c *fakeServiceCollector) Unschedule(int) {}
 func (c *fakeServiceCollector) Schedule(service *config.Service) error {
 	c.scheduled = service
 	return nil
@@ -77,6 +78,8 @@ func TestNewListAllServicesHandler(t *testing.T) {
 		LoadQuery:       "sum(rate(http_requests_total[5m]))",
 		LatencyQuery:    "histogram_quantile(0.95, rate(http_request_duration_seconds_bucket[5m]))",
 		IntervalSeconds: 30,
+		Tracking:        trackingStatus{State: "pending", Activity: []activityEntry{}},
+		Imports:         []importJob{},
 	}, services[0])
 }
 
@@ -127,4 +130,52 @@ func TestNewCreateServiceHandlerValidatesInput(t *testing.T) {
 	NewCreateServiceHandler(config.NewFakeConfig(), &fakeServiceCollector{}).ServeHTTP(recorder, request)
 
 	assert.Equal(t, http.StatusBadRequest, recorder.Code)
+}
+
+func TestServiceAPIReportsTrackingStatusAndDeletesService(t *testing.T) {
+	cfg := config.NewFakeConfig()
+	service := &config.Service{Name: "checkout", PrometheusURL: "http://prometheus.example.com", LoadQuery: "load", LatencyQuery: "latency", Interval: time.Minute}
+	require.NoError(t, cfg.WriteService(service))
+	monitor := newTrackingMonitor()
+	now := time.Now().UTC()
+	monitor.record(service.Id, "healthy", "collection_succeeded", "collected", now)
+	tracker := &fakeServiceCollector{}
+	imports := newImportManager(tracker, monitor)
+	handler := NewServiceAPIHandler(cfg, tracker, monitor, imports, http.DefaultClient)
+
+	getRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(getRecorder, httptest.NewRequest(http.MethodGet, "/api/services/1", nil))
+	require.Equal(t, http.StatusOK, getRecorder.Code)
+	var response serviceResponse
+	require.NoError(t, json.NewDecoder(getRecorder.Body).Decode(&response))
+	assert.Equal(t, "healthy", response.Tracking.State)
+	assert.Equal(t, "collected", response.Tracking.Activity[0].Message)
+
+	deleteRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(deleteRecorder, httptest.NewRequest(http.MethodDelete, "/api/services/1", nil))
+	assert.Equal(t, http.StatusNoContent, deleteRecorder.Code)
+	_, err := cfg.ReadService(1)
+	assert.Error(t, err)
+}
+
+func TestServiceAPICreatesBackgroundImport(t *testing.T) {
+	cfg := config.NewFakeConfig()
+	monitor := newTrackingMonitor()
+	tracker := &fakeServiceCollector{}
+	imports := newImportManager(tracker, monitor)
+	handler := NewServiceAPIHandler(cfg, tracker, monitor, imports, http.DefaultClient)
+	body := bytes.NewBufferString(`{
+		"name":"checkout", "prometheusUrl":"http://prometheus.example.com",
+		"loadQuery":"load", "latencyQuery":"latency", "intervalSeconds":60,
+		"importStart":"2026-07-01T00:00:00Z", "importEnd":"2026-07-02T00:00:00Z"
+	}`)
+	recorder := httptest.NewRecorder()
+
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/api/services", body))
+
+	require.Equal(t, http.StatusCreated, recorder.Code)
+	require.Eventually(t, func() bool {
+		jobs := imports.listForService(1)
+		return len(jobs) == 1 && jobs[0].State == "complete" && jobs[0].Progress == 100
+	}, time.Second, time.Millisecond)
 }

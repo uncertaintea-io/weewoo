@@ -28,12 +28,14 @@ func NewMetricshandler() http.Handler {
 }
 
 type serviceResponse struct {
-	ID              int    `json:"id"`
-	Name            string `json:"name"`
-	PrometheusURL   string `json:"prometheusUrl"`
-	LoadQuery       string `json:"loadQuery"`
-	LatencyQuery    string `json:"latencyQuery"`
-	IntervalSeconds int64  `json:"intervalSeconds"`
+	ID              int            `json:"id"`
+	Name            string         `json:"name"`
+	PrometheusURL   string         `json:"prometheusUrl"`
+	LoadQuery       string         `json:"loadQuery"`
+	LatencyQuery    string         `json:"latencyQuery"`
+	IntervalSeconds int64          `json:"intervalSeconds"`
+	Tracking        trackingStatus `json:"tracking"`
+	Imports         []importJob    `json:"imports"`
 }
 
 type createServiceRequest struct {
@@ -48,11 +50,13 @@ type createServiceRequest struct {
 
 type serviceCollector interface {
 	Schedule(service *config.Service) error
+	Unschedule(serviceID int)
 	Import(ctx context.Context, service *config.Service, start, end time.Time) error
 }
 
 type liveServiceTracker struct {
 	collector       collection.Collector
+	scheduler       *collection.IntervalScheduler
 	scheduleBuilder func(serviceID int) error
 }
 
@@ -70,6 +74,11 @@ func (t *liveServiceTracker) Import(ctx context.Context, service *config.Service
 	return t.collector.Import(ctx, service, start, end)
 }
 
+func (t *liveServiceTracker) Unschedule(serviceID int) {
+	t.scheduler.RemoveCallback(serviceID)
+	t.scheduler.RemoveCallback(1000 + serviceID)
+}
+
 func newServiceResponse(service *config.Service) serviceResponse {
 	return serviceResponse{
 		ID:              service.Id,
@@ -78,6 +87,8 @@ func newServiceResponse(service *config.Service) serviceResponse {
 		LoadQuery:       service.LoadQuery,
 		LatencyQuery:    service.LatencyQuery,
 		IntervalSeconds: int64(service.Interval / time.Second),
+		Tracking:        trackingStatus{State: "pending", Activity: []activityEntry{}},
+		Imports:         []importJob{},
 	}
 }
 
@@ -251,11 +262,16 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to read services: %v", err)
 	}
-	scheduler := collection.NewIntervalScheduler(collection.WithSchedulerEventHandler(nil))
+	monitor := newTrackingMonitor()
+	scheduler := collection.NewIntervalScheduler(collection.WithSchedulerEventHandler(monitor.handleSchedulerEvent))
 	defer scheduler.Stop()
 	collector := collection.NewCollector(http.DefaultClient, ecdf.NewDatabaseChunkStore(db), scheduler)
 	defer collector.Stop()
 	for _, service := range services {
+		if service.Paused {
+			monitor.record(service.Id, "paused", "tracking_paused", "Prometheus collection is paused", time.Now().UTC())
+			continue
+		}
 		if err := collector.Schedule(service); err != nil {
 			log.Fatalf("Failed to schedule service %d: %v", service.Id, err)
 		}
@@ -270,19 +286,15 @@ func main() {
 	}
 	tracker := &liveServiceTracker{
 		collector: collector,
+		scheduler: scheduler,
 		scheduleBuilder: func(serviceID int) error {
 			return collection.ScheduleECDFBuilder(serviceID, chunkStore, jointStore, cfg, scheduler)
 		},
 	}
+	imports := newImportManager(tracker, monitor)
 
 	appMux := http.NewServeMux()
-	appMux.Handle("/api/services", observeRequestDuration(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodPost {
-			NewCreateServiceHandler(cfg, tracker).ServeHTTP(w, r)
-			return
-		}
-		NewListAllServicesHandler(cfg).ServeHTTP(w, r)
-	})))
+	appMux.Handle("/api/", observeRequestDuration(NewServiceAPIHandler(cfg, tracker, monitor, imports, http.DefaultClient)))
 	//Serve files from static folder
 	appMux.Handle("/", observeRequestDuration(http.FileServer(http.Dir("./ui/dist"))))
 

@@ -70,6 +70,14 @@ func (c *fakeConfig) ReadAllServices() ([]*Service, error) {
 	return services, nil
 }
 
+func (c *fakeConfig) DeleteService(id int) error {
+	if _, ok := c.services[id]; !ok {
+		return fmt.Errorf("id not found in database")
+	}
+	delete(c.services, id)
+	return nil
+}
+
 func (c *fakeConfig) Close() {
 	c.config = nil
 	c.dataSources = nil
