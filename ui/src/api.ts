@@ -7,6 +7,16 @@ export interface Service {
   intervalSeconds: number;
 }
 
+export interface CreateServiceInput {
+  name: string;
+  prometheusUrl: string;
+  loadQuery: string;
+  latencyQuery: string;
+  intervalSeconds: number;
+  importStart?: string;
+  importEnd?: string;
+}
+
 type Fetcher = typeof fetch;
 
 export class ServicesApiError extends Error {
@@ -15,11 +25,20 @@ export class ServicesApiError extends Error {
 
   public constructor(status: number, statusText: string) {
     const responseLabel = `${String(status)}${statusText === '' ? '' : ` ${statusText}`}`;
-    super(`Unable to load services. Server returned ${responseLabel}.`);
+    super(`Services API returned ${responseLabel}.`);
     this.name = 'ServicesApiError';
     this.status = status;
     this.statusText = statusText;
   }
+}
+
+async function readServiceError(response: Response): Promise<ServicesApiError> {
+  const error = new ServicesApiError(response.status, response.statusText);
+  const detail = (await response.text()).trim();
+  if (detail !== '') {
+    error.message = detail;
+  }
+  return error;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -72,4 +91,20 @@ export async function ListAllServices(fetcher: Fetcher = fetch): Promise<Service
   }
 
   return responseBody.map(parseService);
+}
+
+export async function CreateService(input: CreateServiceInput, fetcher: Fetcher = fetch): Promise<Service> {
+  const response = await fetcher('/api/services', {
+    method: 'POST',
+    headers: {
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(input),
+  });
+
+  if (!response.ok) {
+    throw await readServiceError(response);
+  }
+  return parseService(await response.json());
 }

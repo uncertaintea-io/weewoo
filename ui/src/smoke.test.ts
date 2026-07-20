@@ -1,6 +1,6 @@
 import { expect } from 'chai';
 import 'mocha';
-import { ListAllServices, ServicesApiError } from './api';
+import { CreateService, ListAllServices, ServicesApiError } from './api';
 import { renderServiceUrl } from './rendering';
 
 describe('Exercise the testing framework itself', () => {
@@ -77,6 +77,29 @@ describe('ListAllServices', () => {
       expect((error as ServicesApiError).status).to.equal(503);
       expect((error as ServicesApiError).statusText).to.equal('Service Unavailable');
     }
+  });
+
+});
+
+describe('CreateService', () => {
+
+  it('posts a service and reads the created response', async () => {
+    const input = {
+      name: 'checkout', prometheusUrl: 'http://prometheus.example.com',
+      loadQuery: 'load', latencyQuery: 'latency', intervalSeconds: 30,
+    };
+    const fetcher = (url: string | URL | Request, init?: RequestInit): Promise<Response> => {
+      expect(url).to.equal('/api/services');
+      expect(init?.method).to.equal('POST');
+      expect(init?.body).to.be.a('string');
+      expect(JSON.parse(init?.body as string)).to.deep.equal(input);
+      return Promise.resolve(new Response(JSON.stringify({ id: 7, ...input }), { status: 201 }));
+    };
+
+    const service = await CreateService(input, fetcher);
+
+    expect(service.id).to.equal(7);
+    expect(service.name).to.equal('checkout');
   });
 
 });

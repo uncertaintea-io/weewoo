@@ -18,6 +18,7 @@ const (
 type Collector interface {
 	Stop()
 	Schedule(service *config.Service)
+	Import(ctx context.Context, service *config.Service, start, end time.Time) error
 }
 
 type collector struct {
@@ -51,6 +52,11 @@ func (c *collector) Schedule(service *config.Service) {
 		}
 		return IntervalSuccess()
 	})
+}
+
+// Import collects an explicit historical window for a service.
+func (c *collector) Import(ctx context.Context, service *config.Service, start, end time.Time) error {
+	return c.collectSamples(ctx, service, start, end)
 }
 
 // this collects the samples from the prometheus server and writes them to the chunk store

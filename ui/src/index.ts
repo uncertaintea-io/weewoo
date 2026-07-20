@@ -1,8 +1,24 @@
 import './index.scss'
-import { ListAllServices, ServicesApiError, type Service } from './api';
+import { CreateService, ListAllServices, ServicesApiError, type CreateServiceInput, type Service } from './api';
 import { escapeHtml, renderServiceUrl } from './rendering';
 
 const app = document.querySelector<HTMLDivElement>('#app');
+type Theme = 'light' | 'dark' | 'system';
+
+function savedTheme(): Theme {
+  const theme = localStorage.getItem('weewoo-theme');
+  return theme === 'light' || theme === 'dark' ? theme : 'system';
+}
+
+function applyTheme(theme: Theme): void {
+  if (theme === 'system') {
+    document.documentElement.removeAttribute('data-theme');
+  } else {
+    document.documentElement.dataset.theme = theme;
+  }
+}
+
+applyTheme(savedTheme());
 
 function formatInterval(seconds: number): string {
   if (seconds < 60) {
@@ -20,7 +36,7 @@ function serviceInitial(service: Service): string {
   return service.name.trim().charAt(0).toUpperCase() || 'S';
 }
 
-function renderShell(content: string, apiResponse = 'Loading'): void {
+function renderShell(content: string, apiResponse = 'Ready'): void {
   if (app === null) {
     return;
   }
@@ -36,12 +52,11 @@ function renderShell(content: string, apiResponse = 'Loading'): void {
           </div>
         </div>
         <nav class="sidebar-nav">
-          <a class="is-active" href="#">Overview</a>
-          <a href="#">Services</a>
-          <a href="#">Alerts</a>
-          <a href="#">Incidents</a>
-          <a href="#">Integrations</a>
-          <a href="#">Settings</a>
+          <a class="${window.location.hash === '#settings' ? '' : 'is-active'}" href="#services">Services</a>
+          <a href="#alerts">Alerts</a>
+          <a href="#incidents">Incidents</a>
+          <a href="#integrations">Integrations</a>
+          <a class="${window.location.hash === '#settings' ? 'is-active' : ''}" href="#settings">Settings</a>
         </nav>
         <article class="system-card">
           <span>System Status</span>
@@ -61,10 +76,10 @@ function renderShell(content: string, apiResponse = 'Loading'): void {
               <span id="service-count">0 services monitored</span>
               <small>Last updated: just now</small>
             </div>
-            <button class="icon-button" type="button" aria-label="Settings">
+            <a class="icon-button" href="#settings" aria-label="Settings">
               <span aria-hidden="true"></span>
-            </button>
-            <div class="avatar" aria-label="User profile"></div>
+            </a>
+            <a class="avatar" href="#profile" aria-label="User profile"></a>
           </div>
         </header>
         <main class="page-shell">
@@ -81,7 +96,7 @@ function renderShell(content: string, apiResponse = 'Loading'): void {
               </div>
               <div>
                 <span>Response</span>
-                <strong class="api-response">${escapeHtml(apiResponse)}</strong>
+                <strong class="api-response${apiResponse === '200 OK' || apiResponse === 'Ready' ? ' is-success' : ''}">${escapeHtml(apiResponse)}</strong>
               </div>
             </article>
           </section>
@@ -90,6 +105,17 @@ function renderShell(content: string, apiResponse = 'Loading'): void {
       </div>
     </div>
   `;
+  bindShellInteractions();
+}
+
+function bindShellInteractions(): void {
+  const search = document.querySelector<HTMLInputElement>('.search-box input');
+  search?.addEventListener('input', () => {
+    const term = search.value.trim().toLowerCase();
+    document.querySelectorAll<HTMLElement>('.service-dashboard').forEach((row) => {
+      row.hidden = term !== '' && !(row.dataset.serviceName ?? '').includes(term);
+    });
+  });
 }
 
 function renderMetricBox(label: string, value: string, detail: string, modifier = ''): string {
@@ -155,6 +181,7 @@ function renderEmpty(): void {
       <div class="empty-state">
         <h2>No services configured</h2>
         <p>Add services to the configuration database and they will appear here.</p>
+        <a class="primary-button" href="#add">+ Add service</a>
       </div>
     </section>
   `, '200 OK');
@@ -203,7 +230,7 @@ function renderServices(services: Service[]): void {
   }
 
   const serviceRows = services.map((service) => `
-    <article class="service-dashboard">
+    <article class="service-dashboard" data-service-name="${escapeHtml(service.name.toLowerCase())}">
       <header class="service-header">
         <div class="service-identity">
           <div class="service-avatar" aria-hidden="true">${escapeHtml(serviceInitial(service))}</div>
@@ -221,13 +248,13 @@ function renderServices(services: Service[]): void {
       <dl class="metric-grid">
         ${renderMetricBox('Current status', 'Healthy', 'Loaded from service configuration', 'ok')}
         ${renderMetricBox('Uptime', 'Not reported', 'No health-check source configured yet')}
-        ${renderMetricBox('Collection interval', formatInterval(service.intervalSeconds), 'Prometheus polling cadence')}
+        ${renderMetricBox('Collection interval', formatInterval(service.intervalSeconds), 'How often new metrics are collected')}
         ${renderMetricBox('Last alert', 'None reported', 'Alert history API not available yet')}
       </dl>
 
       <dl class="query-grid">
-        ${renderQueryBox('Measuring load', service.loadQuery)}
-        ${renderQueryBox('Measuring latency', service.latencyQuery)}
+        ${renderQueryBox('Load signal', service.loadQuery)}
+        ${renderQueryBox('Latency signal', service.latencyQuery)}
       </dl>
     </article>
   `).join('');
@@ -242,7 +269,7 @@ function renderServices(services: Service[]): void {
     <section class="service-panel">
       <div class="panel-header">
         <h2>Services</h2>
-        <span>${String(services.length)} services loaded</span>
+        <div class="panel-actions"><span>${String(services.length)} services loaded</span><a class="add-button" href="#add" aria-label="Add service"><span aria-hidden="true">+</span></a></div>
       </div>
       <div class="service-list">
         ${serviceRows}
@@ -252,7 +279,136 @@ function renderServices(services: Service[]): void {
   setServiceCount(services.length);
 }
 
+function renderAddChoice(): void {
+  renderShell(`
+    <section class="form-panel">
+      <a class="back-link" href="#services">← Back to services</a>
+      <p class="eyebrow">Add service</p>
+      <h2>How should WeeWoo start tracking it?</h2>
+      <p class="form-intro">Create a service from now on, or seed it with historical Prometheus data.</p>
+      <div class="choice-grid">
+        <a class="choice-card" href="#add/new"><strong>New service</strong><span>Start collecting at the next interval.</span></a>
+        <a class="choice-card" href="#add/import"><strong>Import Prometheus history</strong><span>Collect an older time range, then continue live tracking.</span></a>
+      </div>
+    </section>
+  `);
+}
+
+function inputValue(form: HTMLFormElement, name: string): string {
+  const value = new FormData(form).get(name);
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function renderServiceForm(importHistory: boolean): void {
+  renderShell(`
+    <section class="form-panel">
+      <a class="back-link" href="#add">← Choose another option</a>
+      <p class="eyebrow">${importHistory ? 'Import historical data' : 'New service'}</p>
+      <h2>${importHistory ? 'Add a service with Prometheus history' : 'Add a service'}</h2>
+      <p class="form-intro">All fields are required${importHistory ? ', including the historical UTC range' : ''}.</p>
+      <form id="service-form" class="service-form">
+        <label><span>Service name</span><input name="name" required autocomplete="organization" placeholder="Checkout API" /></label>
+        <label><span>Prometheus URL</span><input name="prometheusUrl" required type="url" placeholder="https://prometheus.example.com" /></label>
+        <label class="wide"><span>Load query</span><textarea name="loadQuery" required rows="3" placeholder="sum(rate(http_requests_total[5m]))"></textarea></label>
+        <label class="wide"><span>Latency query</span><textarea name="latencyQuery" required rows="3" placeholder="histogram_quantile(0.95, ...)"></textarea></label>
+        <label><span>Collection interval (seconds)</span><input name="intervalSeconds" required type="number" min="1" value="60" /></label>
+        ${importHistory ? `
+          <label><span>Import from</span><input name="importStart" required type="datetime-local" /></label>
+          <label><span>Import through</span><input name="importEnd" required type="datetime-local" /></label>
+        ` : ''}
+        <div id="form-error" class="form-error wide" role="alert"></div>
+        <div class="form-actions wide"><a class="secondary-button" href="#services">Cancel</a><button class="primary-button" type="submit">OK</button></div>
+      </form>
+    </section>
+  `);
+
+  document.querySelector<HTMLFormElement>('#service-form')?.addEventListener('submit', (event) => {
+    event.preventDefault();
+    void submitServiceForm(event.currentTarget as HTMLFormElement, importHistory);
+  });
+}
+
+async function submitServiceForm(form: HTMLFormElement, importHistory: boolean): Promise<void> {
+  const submit = form.querySelector<HTMLButtonElement>('button[type="submit"]');
+  const errorBox = form.querySelector<HTMLElement>('#form-error');
+  const input: CreateServiceInput = {
+    name: inputValue(form, 'name'),
+    prometheusUrl: inputValue(form, 'prometheusUrl'),
+    loadQuery: inputValue(form, 'loadQuery'),
+    latencyQuery: inputValue(form, 'latencyQuery'),
+    intervalSeconds: Number(inputValue(form, 'intervalSeconds')),
+  };
+  if (importHistory) {
+    input.importStart = new Date(inputValue(form, 'importStart')).toISOString();
+    input.importEnd = new Date(inputValue(form, 'importEnd')).toISOString();
+  }
+  if (submit !== null) {
+    submit.disabled = true;
+    submit.textContent = importHistory ? 'Importing…' : 'Adding…';
+  }
+  if (errorBox !== null) errorBox.textContent = '';
+  try {
+    await CreateService(input);
+    window.location.hash = 'services';
+  } catch (error) {
+    if (errorBox !== null) errorBox.textContent = error instanceof Error ? error.message : 'Unable to add service.';
+    if (submit !== null) {
+      submit.disabled = false;
+      submit.textContent = 'OK';
+    }
+  }
+}
+
+function renderPlaceholder(route: string): void {
+  const title = route.charAt(0).toUpperCase() + route.slice(1);
+  renderShell(`<section class="form-panel placeholder-panel"><p class="eyebrow">WeeWoo Services</p><h2>${escapeHtml(title)}</h2><p>This area is ready for its ${escapeHtml(route)} controls.</p><a class="primary-button" href="#services">Go to services</a></section>`);
+}
+
+function renderSettings(): void {
+  const theme = savedTheme();
+  renderShell(`
+    <section class="settings-panel">
+      <div class="settings-heading">
+        <div>
+          <p class="eyebrow">Preferences</p>
+          <h2>Settings</h2>
+          <p>Choose how the monitoring console looks on this device.</p>
+        </div>
+        <a class="secondary-button" href="#services">Back to services</a>
+      </div>
+      <div class="setting-row">
+        <div>
+          <strong>Appearance</strong>
+          <p>Use a light interface, a dark interface, or follow your device setting.</p>
+        </div>
+        <div class="theme-picker" role="radiogroup" aria-label="Color theme">
+          ${(['system', 'light', 'dark'] as Theme[]).map((option) => `
+            <button type="button" class="theme-option${theme === option ? ' is-selected' : ''}" data-theme-option="${option}" role="radio" aria-checked="${String(theme === option)}">
+              <span class="theme-preview theme-preview--${option}" aria-hidden="true"></span>
+              ${option.charAt(0).toUpperCase() + option.slice(1)}
+            </button>
+          `).join('')}
+        </div>
+      </div>
+    </section>
+  `);
+  document.querySelectorAll<HTMLButtonElement>('[data-theme-option]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const selected = button.dataset.themeOption as Theme;
+      localStorage.setItem('weewoo-theme', selected);
+      applyTheme(selected);
+      renderSettings();
+    });
+  });
+}
+
 async function boot(): Promise<void> {
+  const route = window.location.hash.slice(1) || 'services';
+  if (route === 'add') { renderAddChoice(); return; }
+  if (route === 'add/new') { renderServiceForm(false); return; }
+  if (route === 'add/import') { renderServiceForm(true); return; }
+  if (route === 'settings') { renderSettings(); return; }
+  if (route !== 'services') { renderPlaceholder(route); return; }
   renderLoading();
 
   try {
@@ -263,4 +419,5 @@ async function boot(): Promise<void> {
   }
 }
 
+window.addEventListener('hashchange', () => { void boot(); });
 void boot();

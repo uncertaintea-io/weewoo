@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"os/signal"
 	"strconv"
 	"syscall"
@@ -33,6 +34,21 @@ type serviceResponse struct {
 	LoadQuery       string `json:"loadQuery"`
 	LatencyQuery    string `json:"latencyQuery"`
 	IntervalSeconds int64  `json:"intervalSeconds"`
+}
+
+type createServiceRequest struct {
+	Name            string     `json:"name"`
+	PrometheusURL   string     `json:"prometheusUrl"`
+	LoadQuery       string     `json:"loadQuery"`
+	LatencyQuery    string     `json:"latencyQuery"`
+	IntervalSeconds int64      `json:"intervalSeconds"`
+	ImportStart     *time.Time `json:"importStart,omitempty"`
+	ImportEnd       *time.Time `json:"importEnd,omitempty"`
+}
+
+type serviceCollector interface {
+	Schedule(service *config.Service)
+	Import(ctx context.Context, service *config.Service, start, end time.Time) error
 }
 
 func newServiceResponse(service *config.Service) serviceResponse {
@@ -68,6 +84,73 @@ func NewListAllServicesHandler(cfg config.Config) http.Handler {
 		w.Header().Set("Content-Type", "application/json")
 		if err := json.NewEncoder(w).Encode(response); err != nil {
 			log.Printf("failed to encode services response: %v", err)
+		}
+	})
+}
+
+func validateCreateService(request createServiceRequest) error {
+	if request.Name == "" || request.PrometheusURL == "" || request.LoadQuery == "" || request.LatencyQuery == "" {
+		return fmt.Errorf("name, prometheusUrl, loadQuery, and latencyQuery are required")
+	}
+	parsedURL, err := url.ParseRequestURI(request.PrometheusURL)
+	if err != nil || parsedURL.Host == "" || (parsedURL.Scheme != "http" && parsedURL.Scheme != "https") {
+		return fmt.Errorf("prometheusUrl must be an HTTP or HTTPS URL")
+	}
+	if request.IntervalSeconds <= 0 {
+		return fmt.Errorf("intervalSeconds must be greater than zero")
+	}
+	if (request.ImportStart == nil) != (request.ImportEnd == nil) {
+		return fmt.Errorf("importStart and importEnd must be provided together")
+	}
+	if request.ImportStart != nil && !request.ImportStart.Before(*request.ImportEnd) {
+		return fmt.Errorf("importStart must be before importEnd")
+	}
+	return nil
+}
+
+func NewCreateServiceHandler(cfg config.Config, collector serviceCollector) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			w.Header().Set("Allow", http.MethodPost)
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		var request createServiceRequest
+		decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&request); err != nil {
+			http.Error(w, "invalid JSON request", http.StatusBadRequest)
+			return
+		}
+		if err := validateCreateService(request); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		service := &config.Service{
+			Name: request.Name, PrometheusURL: request.PrometheusURL,
+			LoadQuery: request.LoadQuery, LatencyQuery: request.LatencyQuery,
+			Interval: time.Duration(request.IntervalSeconds) * time.Second,
+		}
+		if err := cfg.WriteService(service); err != nil {
+			http.Error(w, "failed to create service", http.StatusInternalServerError)
+			return
+		}
+		collector.Schedule(service)
+		if request.ImportStart != nil {
+			if err := collector.Import(r.Context(), service, *request.ImportStart, *request.ImportEnd); err != nil {
+				log.Printf("historical import failed for service %d: %v", service.Id, err)
+				http.Error(w, "service created, but historical import failed", http.StatusBadGateway)
+				return
+			}
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Location", fmt.Sprintf("/api/services/%d", service.Id))
+		w.WriteHeader(http.StatusCreated)
+		if err := json.NewEncoder(w).Encode(newServiceResponse(service)); err != nil {
+			log.Printf("failed to encode created service: %v", err)
 		}
 	})
 }
@@ -160,7 +243,13 @@ func main() {
 	}
 
 	appMux := http.NewServeMux()
-	appMux.Handle("/api/services", observeRequestDuration(NewListAllServicesHandler(cfg)))
+	appMux.Handle("/api/services", observeRequestDuration(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			NewCreateServiceHandler(cfg, collector).ServeHTTP(w, r)
+			return
+		}
+		NewListAllServicesHandler(cfg).ServeHTTP(w, r)
+	})))
 	//Serve files from static folder
 	appMux.Handle("/", observeRequestDuration(http.FileServer(http.Dir("./ui/dist"))))
 

@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -11,6 +13,19 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/uncertaintea-io/weewoo/internal/config"
 )
+
+type fakeServiceCollector struct {
+	scheduled *config.Service
+	imported  *config.Service
+	start     time.Time
+	end       time.Time
+}
+
+func (c *fakeServiceCollector) Schedule(service *config.Service) { c.scheduled = service }
+func (c *fakeServiceCollector) Import(_ context.Context, service *config.Service, start, end time.Time) error {
+	c.imported, c.start, c.end = service, start, end
+	return nil
+}
 
 func TestNewListAllServicesHandler(t *testing.T) {
 	cfg := config.NewFakeConfig()
@@ -51,4 +66,43 @@ func TestNewListAllServicesHandlerRejectsNonGetMethods(t *testing.T) {
 
 	assert.Equal(t, http.StatusMethodNotAllowed, recorder.Code)
 	assert.Equal(t, http.MethodGet, recorder.Header().Get("Allow"))
+}
+
+func TestNewCreateServiceHandlerCreatesSchedulesAndImportsService(t *testing.T) {
+	cfg := config.NewFakeConfig()
+	collector := &fakeServiceCollector{}
+	body := []byte(`{
+		"name":"checkout",
+		"prometheusUrl":"http://prometheus.example.com",
+		"loadQuery":"load",
+		"latencyQuery":"latency",
+		"intervalSeconds":30,
+		"importStart":"2026-07-01T00:00:00Z",
+		"importEnd":"2026-07-02T00:00:00Z"
+	}`)
+	request := httptest.NewRequest(http.MethodPost, "/api/services", bytes.NewReader(body))
+	recorder := httptest.NewRecorder()
+
+	NewCreateServiceHandler(cfg, collector).ServeHTTP(recorder, request)
+
+	require.Equal(t, http.StatusCreated, recorder.Code)
+	assert.Equal(t, "/api/services/1", recorder.Header().Get("Location"))
+	service, err := cfg.ReadService(1)
+	require.NoError(t, err)
+	assert.Equal(t, "checkout", service.Name)
+	assert.Same(t, service, collector.scheduled)
+	assert.Same(t, service, collector.imported)
+	assert.Equal(t, time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC), collector.start)
+	assert.Equal(t, time.Date(2026, 7, 2, 0, 0, 0, 0, time.UTC), collector.end)
+}
+
+func TestNewCreateServiceHandlerValidatesInput(t *testing.T) {
+	request := httptest.NewRequest(http.MethodPost, "/api/services", bytes.NewBufferString(`{
+		"name":"", "prometheusUrl":"javascript:alert(1)", "intervalSeconds":0
+	}`))
+	recorder := httptest.NewRecorder()
+
+	NewCreateServiceHandler(config.NewFakeConfig(), &fakeServiceCollector{}).ServeHTTP(recorder, request)
+
+	assert.Equal(t, http.StatusBadRequest, recorder.Code)
 }
