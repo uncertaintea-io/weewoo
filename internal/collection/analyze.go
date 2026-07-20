@@ -77,8 +77,7 @@ func analyzeSample(cfg config.Config, jointStore ecdf.JointStore, service *confi
 		}
 	}
 	probability := kstests.KsTestIter(cdf, latencyCount, iter.Seq2[float64, uint64](latencyValues))
-	anomalyScore := 1.0 - probability
-	anomalous := anomalyScore > analyseSampleAlpha
+	anomalous := isAnomalous(probability)
 	if anomalous {
 		generatorURL, err := cfg.GetConfig("alert_generator_url")
 		if err != nil {
@@ -108,12 +107,15 @@ func analyzeSample(cfg config.Config, jointStore ecdf.JointStore, service *confi
 		"KS test result",
 		"anomalous", anomalous,
 		"probability", probability,
-		"anomaly_score", anomalyScore,
 		"samples", latencyCount,
 		"load", loadValue,
 	)
 
 	return anomalous, nil
+}
+
+func isAnomalous(pValue float64) bool {
+	return pValue < analyseSampleAlpha
 }
 
 // weightedMean calculates the weighted mean of a slice of samples.

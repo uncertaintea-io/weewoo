@@ -62,3 +62,21 @@ func TestAnalyseSampleRejectsZeroTotalSampleCount(t *testing.T) {
 		})
 	}
 }
+
+func TestIsAnomalousUsesPValueThresholdDirectly(t *testing.T) {
+	tests := []struct {
+		name      string
+		pValue    float64
+		anomalous bool
+	}{
+		{"high p-value is normal", 0.96, false},
+		{"threshold is normal", analyseSampleAlpha, false},
+		{"below threshold is anomalous", 0.0009, true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			require.Equal(t, test.anomalous, isAnomalous(test.pValue))
+		})
+	}
+}

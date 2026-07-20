@@ -65,8 +65,7 @@ func TestKsTest(t *testing.T) {
 
 	p := KsTest(cdf, latencies)
 	t.Logf("Probability sample was drawn from distribution: %f", p)
-	p = 1.0 - p
-	passed := p <= alpha
+	passed := p >= alpha
 	slog.Info("KS test result", "passed", passed, "samples", len(latencies), "load", fixedLoad)
 	assert.True(t, passed, "expected sample to match queried ECDF with p-value of %f, was %f", alpha, p)
 }
