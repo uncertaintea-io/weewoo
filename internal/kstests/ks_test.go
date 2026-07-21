@@ -4,26 +4,21 @@ import (
 	"bytes"
 	"context"
 	"flag"
-	"log/slog"
-	"math"
-	"math/rand/v2"
 	"os"
-	"slices"
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/uncertaintea-io/weewoo/internal/ecdf"
 )
 
-func TestKsTest(t *testing.T) {
+func TestOneSampleAgainstJointECDF(t *testing.T) {
 	const (
-		serviceID   = 1
-		indicatorID = 1
-		fixedLoad   = 1.5
-		alpha       = 0.001
+		serviceID         = 1
+		indicatorID       = 1
+		fixedLoad         = 1.5
+		significanceLevel = 0.01
 	)
 
 	jecdfPath := "../../jecdf"
@@ -63,14 +58,23 @@ func TestKsTest(t *testing.T) {
 	cdf, err := ecdf.Query(ctx, jointECDF.Bytes(), fixedLoad)
 	require.NoError(t, err)
 
-	p := KsTest(cdf, latencies)
-	t.Logf("Probability sample was drawn from distribution: %f", p)
-	passed := p >= alpha
-	slog.Info("KS test result", "passed", passed, "samples", len(latencies), "load", fixedLoad)
-	assert.True(t, passed, "expected sample to match queried ECDF with p-value of %f, was %f", alpha, p)
+	result := OneSample(cdf, latencies)
+	require.GreaterOrEqual(t, result.PValue, significanceLevel, "expected sample to be consistent with reference CDF")
 }
 
-func TestKsTestIterMatchesExpandedSample(t *testing.T) {
+func TestOneSampleReturnsSmallerPValueForLargerDifference(t *testing.T) {
+	uniformCDF := func(value float64) float64 { return value }
+	matchingSample := []float64{0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0}
+	shiftedSample := []float64{0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
+
+	matching := OneSample(uniformCDF, matchingSample)
+	shifted := OneSample(uniformCDF, shiftedSample)
+
+	require.Greater(t, matching.PValue, shifted.PValue)
+	require.Less(t, shifted.PValue, 0.01)
+}
+
+func TestOneSampleIterMatchesExpandedSample(t *testing.T) {
 	cdf := func(value float64) float64 { return value / 10 }
 	expanded := []float64{1, 1, 1, 4, 4, 8}
 	counted := func(yield func(float64, uint64) bool) {
@@ -84,10 +88,10 @@ func TestKsTestIterMatchesExpandedSample(t *testing.T) {
 		}
 	}
 
-	require.Equal(t, KsTest(cdf, expanded), KsTestIter(cdf, 6, counted))
+	require.Equal(t, OneSample(cdf, expanded), OneSampleIter(cdf, 6, counted))
 }
 
-func TestKsTestIterEvaluatesEachDistinctValueOnce(t *testing.T) {
+func TestOneSampleIterEvaluatesEachDistinctValueOnce(t *testing.T) {
 	calls := 0
 	cdf := func(float64) float64 {
 		calls++
@@ -97,63 +101,6 @@ func TestKsTestIterEvaluatesEachDistinctValueOnce(t *testing.T) {
 		yield(1, 1_000_000)
 	}
 
-	KsTestIter(cdf, 1_000_000, counted)
+	OneSampleIter(cdf, 1_000_000, counted)
 	require.Equal(t, 1, calls)
-}
-
-func TestKsTestIterMatchesReferenceImplementation(t *testing.T) {
-	rng := rand.New(rand.NewPCG(1, 2))
-	cdf := func(value float64) float64 {
-		return 1 / (1 + math.Exp(-value))
-	}
-
-	for run := 0; run < 1_000; run++ {
-		records := make([]struct {
-			value float64
-			count uint64
-		}, rng.IntN(20))
-		var expanded []float64
-		var count uint64
-		for i := range records {
-			records[i].value = float64(rng.IntN(21)-10) / 2
-			records[i].count = uint64(rng.IntN(8))
-			count += records[i].count
-			for range records[i].count {
-				expanded = append(expanded, records[i].value)
-			}
-		}
-		slices.SortFunc(records, func(a, b struct {
-			value float64
-			count uint64
-		}) int {
-			if a.value < b.value {
-				return -1
-			}
-			if a.value > b.value {
-				return 1
-			}
-			return 0
-		})
-		counted := func(yield func(float64, uint64) bool) {
-			for _, record := range records {
-				if !yield(record.value, record.count) {
-					return
-				}
-			}
-		}
-
-		require.Equal(t, referenceKsTest(cdf, expanded), KsTestIter(cdf, count, counted), "run %d", run)
-	}
-}
-
-func referenceKsTest(cdf func(float64) float64, sample []float64) float64 {
-	slices.Sort(sample)
-	n := float64(len(sample))
-	maxDifference := 0.0
-	for i, value := range sample {
-		p := cdf(value)
-		maxDifference = math.Max(maxDifference, math.Abs(p-float64(i)/n))
-		maxDifference = math.Max(maxDifference, math.Abs(float64(i+1)/n-p))
-	}
-	return kprob(maxDifference * math.Sqrt(n))
 }

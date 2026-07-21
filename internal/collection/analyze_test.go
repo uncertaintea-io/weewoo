@@ -19,6 +19,10 @@ func (unreadJointStore) Publish(context.Context, int, int, time.Time, func(io.Wr
 	panic("unexpected Publish call")
 }
 
+func (unreadJointStore) ReadCurrent(context.Context, int, int) ([]byte, error) {
+	panic("unexpected ReadCurrent call")
+}
+
 func TestAnalyseSampleRejectsOverflowingSampleCount(t *testing.T) {
 	const serviceID, indicatorID = 1, 2
 	timestamp := time.Unix(1_700_000_000, 0)
@@ -37,10 +41,6 @@ func TestAnalyseSampleRejectsOverflowingLoadCount(t *testing.T) {
 
 	_, err := analyzeSample(config.NewFakeConfig(), unreadJointStore{}, &config.Service{Id: serviceID, Name: "test"}, indicatorID, timestamp, loads, latencies)
 	require.EqualError(t, err, "invalid load samples: observation count overflows uint64")
-}
-
-func (unreadJointStore) ReadCurrent(context.Context, int, int) ([]byte, error) {
-	panic("unexpected ReadCurrent call")
 }
 
 func TestAnalyseSampleRejectsZeroTotalSampleCount(t *testing.T) {
@@ -63,20 +63,22 @@ func TestAnalyseSampleRejectsZeroTotalSampleCount(t *testing.T) {
 	}
 }
 
-func TestIsAnomalousUsesPValueThresholdDirectly(t *testing.T) {
+func TestIsStatisticallySignificantUsesPValueDirectly(t *testing.T) {
+	require.Equal(t, 0.01, ksSignificanceLevel)
+
 	tests := []struct {
-		name      string
-		pValue    float64
-		anomalous bool
+		name        string
+		pValue      float64
+		significant bool
 	}{
-		{"high p-value is normal", 0.96, false},
-		{"threshold is normal", analyseSampleAlpha, false},
-		{"below threshold is anomalous", 0.0009, true},
+		{"high p-value is not significant", 0.96, false},
+		{"significance level is not significant", ksSignificanceLevel, false},
+		{"below significance level is significant", 0.009, true},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			require.Equal(t, test.anomalous, isAnomalous(test.pValue))
+			require.Equal(t, test.significant, isStatisticallySignificant(test.pValue))
 		})
 	}
 }

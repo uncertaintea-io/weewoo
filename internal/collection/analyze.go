@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"iter"
 	"log/slog"
+	"math/bits"
 	"slices"
 	"time"
 
@@ -16,8 +17,8 @@ import (
 )
 
 const (
-	analyseSampleTimeout = 5 * time.Second
-	analyseSampleAlpha   = 0.001
+	analyzeSampleTimeout = 5 * time.Second
+	ksSignificanceLevel  = 0.01
 )
 
 // analyzeSample evaluates collected samples against the current published joint
@@ -51,7 +52,7 @@ func analyzeSample(cfg config.Config, jointStore ecdf.JointStore, service *confi
 		return false, fmt.Errorf("chunk has no latency observations")
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), analyseSampleTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), analyzeSampleTimeout)
 	defer cancel()
 
 	jointECDF, err := jointStore.ReadCurrent(ctx, service.Id, indicatorID)
@@ -76,20 +77,25 @@ func analyzeSample(cfg config.Config, jointStore ecdf.JointStore, service *confi
 			}
 		}
 	}
-	probability := kstests.KsTestIter(cdf, latencyCount, iter.Seq2[float64, uint64](latencyValues))
-	anomalous := isAnomalous(probability)
+	ksResult := kstests.OneSampleIter(cdf, latencyCount, iter.Seq2[float64, uint64](latencyValues))
+	anomalous := isStatisticallySignificant(ksResult.PValue)
 	if anomalous {
 		generatorURL, err := cfg.GetConfig("alert_generator_url")
 		if err != nil {
 			return false, fmt.Errorf("failed to read alert generator URL: %w", err)
 		}
 		if err := alerting.SendItContext(ctx, cfg, alerting.AlertingOptions{
-			Service:      service.Name,
-			Serverity:    "critical",
-			Indicator:    "Load vs. Latency",
-			AlertName:    "anomalous_sample",
-			Summary:      "Anomalous sample detected",
-			Description:  fmt.Sprintf("Sample does not match the distribution expected at load %f. (P = %f, below threshold of %f)", loadValue, probability, analyseSampleAlpha),
+			Service:   service.Name,
+			Serverity: "critical",
+			Indicator: "Load vs. Latency",
+			AlertName: "anomalous_sample",
+			Summary:   "Anomalous sample detected",
+			Description: fmt.Sprintf(
+				"Current latency distribution differs from the reference at load %f (KS p-value %g is below significance level %g).",
+				loadValue,
+				ksResult.PValue,
+				ksSignificanceLevel,
+			),
 			Annotations:  nil,
 			GeneratorURL: generatorURL,
 		}); err != nil {
@@ -106,7 +112,9 @@ func analyzeSample(cfg config.Config, jointStore ecdf.JointStore, service *confi
 	slog.Info(
 		"KS test result",
 		"anomalous", anomalous,
-		"probability", probability,
+		"ks_statistic", ksResult.Statistic,
+		"p_value", ksResult.PValue,
+		"significance_level", ksSignificanceLevel,
 		"samples", latencyCount,
 		"load", loadValue,
 	)
@@ -114,8 +122,8 @@ func analyzeSample(cfg config.Config, jointStore ecdf.JointStore, service *confi
 	return anomalous, nil
 }
 
-func isAnomalous(pValue float64) bool {
-	return pValue < analyseSampleAlpha
+func isStatisticallySignificant(pValue float64) bool {
+	return pValue < ksSignificanceLevel
 }
 
 // weightedMean calculates the weighted mean of a slice of samples.
@@ -135,10 +143,11 @@ func weightedMean(samples []ecdf.Sample) float64 {
 func checkedSampleCount(samples []ecdf.Sample) (uint64, error) {
 	var total uint64
 	for _, sample := range samples {
-		if ^uint64(0)-total < sample.Count {
+		var carry uint64
+		total, carry = bits.Add64(total, sample.Count, 0)
+		if carry != 0 {
 			return 0, fmt.Errorf("observation count overflows uint64")
 		}
-		total += sample.Count
 	}
 	return total, nil
 }
