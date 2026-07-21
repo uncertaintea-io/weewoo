@@ -66,7 +66,7 @@ func TestSleepHandlerReturnsSuccessfulPingAfterDelay(t *testing.T) {
 	assert.GreaterOrEqual(t, elapsed, delay)
 	assert.Equal(t, http.StatusOK, recorder.Code)
 	assert.Equal(t, "text/plain; charset=utf-8", recorder.Header().Get("Content-Type"))
-	assert.Equal(t, "pong\n", recorder.Body.String())
+	assert.Equal(t, sleep_message, recorder.Body.String())
 }
 
 func TestSleepHandlerRejectsNonGetMethods(t *testing.T) {
