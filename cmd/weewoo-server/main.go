@@ -26,6 +26,14 @@ func NewMetricshandler() http.Handler {
 	return mux
 }
 
+// makes a new http handler that sleeps for x amount of time before responding allowing us to test the server load by changing the sleep time
+func SleepHandler(sleepTime time.Duration) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(sleepTime)
+		w.WriteHeader(http.StatusOK)
+	})
+}
+
 type serviceResponse struct {
 	ID              int    `json:"id"`
 	Name            string `json:"name"`
