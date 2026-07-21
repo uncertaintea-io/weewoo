@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -51,4 +52,44 @@ func TestNewListAllServicesHandlerRejectsNonGetMethods(t *testing.T) {
 
 	assert.Equal(t, http.StatusMethodNotAllowed, recorder.Code)
 	assert.Equal(t, http.MethodGet, recorder.Header().Get("Allow"))
+}
+
+func TestSleepHandlerReturnsSuccessfulPingAfterDelay(t *testing.T) {
+	delay := 20 * time.Millisecond
+	request := httptest.NewRequest(http.MethodGet, "/sleep", nil)
+	recorder := httptest.NewRecorder()
+
+	start := time.Now()
+	SleepHandler(delay).ServeHTTP(recorder, request)
+	elapsed := time.Since(start)
+
+	assert.GreaterOrEqual(t, elapsed, delay)
+	assert.Equal(t, http.StatusOK, recorder.Code)
+	assert.Equal(t, "text/plain; charset=utf-8", recorder.Header().Get("Content-Type"))
+	assert.Equal(t, sleep_message, recorder.Body.String())
+}
+
+func TestSleepHandlerRejectsNonGetMethods(t *testing.T) {
+	request := httptest.NewRequest(http.MethodPost, "/sleep", nil)
+	recorder := httptest.NewRecorder()
+
+	SleepHandler(time.Second).ServeHTTP(recorder, request)
+
+	assert.Equal(t, http.StatusMethodNotAllowed, recorder.Code)
+	assert.Equal(t, http.MethodGet, recorder.Header().Get("Allow"))
+}
+
+func TestSleepHandlerStopsWhenRequestIsCanceled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	request := httptest.NewRequest(http.MethodGet, "/sleep", nil).WithContext(ctx)
+	recorder := httptest.NewRecorder()
+	delay := 200 * time.Millisecond
+
+	start := time.Now()
+	SleepHandler(delay).ServeHTTP(recorder, request)
+
+	assert.Less(t, time.Since(start), delay)
+	assert.Empty(t, recorder.Header())
+	assert.Empty(t, recorder.Body.String())
 }

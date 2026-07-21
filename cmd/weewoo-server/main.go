@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"log/slog"
 	"net/http"
 	"os/signal"
 	"strconv"
@@ -20,10 +21,45 @@ import (
 	"github.com/uncertaintea-io/weewoo/internal/ecdf"
 )
 
+const (
+	sleep_duration = 1 * time.Second
+	sleep_message  = "zzz\n"
+)
+
 func NewMetricshandler() http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", promhttp.Handler())
 	return mux
+}
+
+// SleepHandler returns a successful ping after the configured delay.
+func SleepHandler(sleepTime time.Duration) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			w.Header().Set("Allow", http.MethodGet)
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		timer := time.NewTimer(sleepTime)
+		defer timer.Stop()
+
+		select {
+		case <-timer.C:
+		case <-r.Context().Done():
+			slog.Error("request canceled", "error", r.Context().Err())
+			return
+		}
+
+		if r.Context().Err() != nil {
+			slog.Error("request context error", "error", r.Context().Err())
+			return
+		}
+
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(sleep_message))
+	})
 }
 
 type serviceResponse struct {
@@ -118,7 +154,10 @@ func observeRequestDuration(next http.Handler) http.Handler {
 		next.ServeHTTP(rec, r)
 
 		status := rec.status
-		if status == 0 {
+		if status == 0 && r.Context().Err() != nil {
+			// 499 is conventionally used in metrics for a request canceled by the client.
+			status = 499
+		} else if status == 0 {
 			status = http.StatusOK
 		}
 
@@ -161,6 +200,8 @@ func main() {
 
 	appMux := http.NewServeMux()
 	appMux.Handle("/api/services", observeRequestDuration(NewListAllServicesHandler(cfg)))
+	//edit this to change the sleep time
+	appMux.Handle("/sleep", observeRequestDuration(SleepHandler(sleep_duration)))
 	//Serve files from static folder
 	appMux.Handle("/", observeRequestDuration(http.FileServer(http.Dir("./ui/dist"))))
 
