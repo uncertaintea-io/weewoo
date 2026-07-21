@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"log/slog"
 	"net/http"
 	"os/signal"
 	"strconv"
@@ -18,6 +19,11 @@ import (
 	"github.com/uncertaintea-io/weewoo/internal/collection"
 	"github.com/uncertaintea-io/weewoo/internal/config"
 	"github.com/uncertaintea-io/weewoo/internal/ecdf"
+)
+
+const (
+	sleep_duration = 1 * time.Second
+	sleep_message  = "zzz\n"
 )
 
 func NewMetricshandler() http.Handler {
@@ -41,16 +47,18 @@ func SleepHandler(sleepTime time.Duration) http.Handler {
 		select {
 		case <-timer.C:
 		case <-r.Context().Done():
+			slog.Error("request canceled", "error", r.Context().Err())
 			return
 		}
 
 		if r.Context().Err() != nil {
+			slog.Error("request context error", "error", r.Context().Err())
 			return
 		}
 
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("pong\n"))
+		_, _ = w.Write([]byte(sleep_message))
 	})
 }
 
@@ -193,7 +201,7 @@ func main() {
 	appMux := http.NewServeMux()
 	appMux.Handle("/api/services", observeRequestDuration(NewListAllServicesHandler(cfg)))
 	//edit this to change the sleep time
-	appMux.Handle("/sleep", observeRequestDuration(SleepHandler(1*time.Second)))
+	appMux.Handle("/sleep", observeRequestDuration(SleepHandler(sleep_duration)))
 	//Serve files from static folder
 	appMux.Handle("/", observeRequestDuration(http.FileServer(http.Dir("./ui/dist"))))
 
