@@ -186,14 +186,16 @@ func main() {
 	}
 	scheduler := collection.NewIntervalScheduler(collection.WithSchedulerEventHandler(nil))
 	defer scheduler.Stop()
-	collector := collection.NewCollector(http.DefaultClient, ecdf.NewDatabaseChunkStore(db), scheduler)
+	chunkStore := ecdf.NewDatabaseChunkStore(db)
+	jointStore := ecdf.NewDatabaseJointStore(db)
+	collector := collection.NewCollector(http.DefaultClient, chunkStore, jointStore, cfg, scheduler)
 	defer collector.Stop()
 	for _, service := range services {
 		collector.Schedule(service)
 	}
 
 	// Start ECDF builder
-	err = collection.StartECDFBuilder(ecdf.NewDatabaseChunkStore(db), ecdf.NewDatabaseJointStore(db), cfg, scheduler)
+	err = collection.StartECDFBuilder(chunkStore, jointStore, cfg, scheduler)
 	if err != nil {
 		log.Fatalf("Failed to start ECDF builder: %v", err)
 	}

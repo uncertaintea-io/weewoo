@@ -4,23 +4,21 @@ import (
 	"bytes"
 	"context"
 	"flag"
-	"log/slog"
 	"os"
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/uncertaintea-io/weewoo/internal/ecdf"
 )
 
-func TestKsTest(t *testing.T) {
+func TestOneSampleAgainstJointECDF(t *testing.T) {
 	const (
-		serviceID   = 1
-		indicatorID = 1
-		fixedLoad   = 1.5
-		alpha       = 0.001
+		serviceID         = 1
+		indicatorID       = 1
+		fixedLoad         = 1.5
+		significanceLevel = 0.01
 	)
 
 	jecdfPath := "../../jecdf"
@@ -60,10 +58,49 @@ func TestKsTest(t *testing.T) {
 	cdf, err := ecdf.Query(ctx, jointECDF.Bytes(), fixedLoad)
 	require.NoError(t, err)
 
-	p := KsTest(cdf, latencies)
-	t.Logf("Probability sample was drawn from distribution: %f", p)
-	p = 1.0 - p
-	passed := p <= alpha
-	slog.Info("KS test result", "passed", passed, "samples", len(latencies), "load", fixedLoad)
-	assert.True(t, passed, "expected sample to match queried ECDF with p-value of %f, was %f", alpha, p)
+	result := OneSample(cdf, latencies)
+	require.GreaterOrEqual(t, result.PValue, significanceLevel, "expected sample to be consistent with reference CDF")
+}
+
+func TestOneSampleReturnsSmallerPValueForLargerDifference(t *testing.T) {
+	uniformCDF := func(value float64) float64 { return value }
+	matchingSample := []float64{0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0}
+	shiftedSample := []float64{0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
+
+	matching := OneSample(uniformCDF, matchingSample)
+	shifted := OneSample(uniformCDF, shiftedSample)
+
+	require.Greater(t, matching.PValue, shifted.PValue)
+	require.Less(t, shifted.PValue, 0.01)
+}
+
+func TestOneSampleIterMatchesExpandedSample(t *testing.T) {
+	cdf := func(value float64) float64 { return value / 10 }
+	expanded := []float64{1, 1, 1, 4, 4, 8}
+	counted := func(yield func(float64, uint64) bool) {
+		for _, sample := range []struct {
+			value float64
+			count uint64
+		}{{1, 3}, {4, 2}, {8, 1}} {
+			if !yield(sample.value, sample.count) {
+				return
+			}
+		}
+	}
+
+	require.Equal(t, OneSample(cdf, expanded), OneSampleIter(cdf, 6, counted))
+}
+
+func TestOneSampleIterEvaluatesEachDistinctValueOnce(t *testing.T) {
+	calls := 0
+	cdf := func(float64) float64 {
+		calls++
+		return 0.5
+	}
+	counted := func(yield func(float64, uint64) bool) {
+		yield(1, 1_000_000)
+	}
+
+	OneSampleIter(cdf, 1_000_000, counted)
+	require.Equal(t, 1, calls)
 }

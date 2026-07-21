@@ -1,0 +1,84 @@
+package collection
+
+import (
+	"context"
+	"io"
+	"math"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/require"
+
+	"github.com/uncertaintea-io/weewoo/internal/config"
+	"github.com/uncertaintea-io/weewoo/internal/ecdf"
+)
+
+type unreadJointStore struct{}
+
+func (unreadJointStore) Publish(context.Context, int, int, time.Time, func(io.Writer) error) (int64, bool, error) {
+	panic("unexpected Publish call")
+}
+
+func (unreadJointStore) ReadCurrent(context.Context, int, int) ([]byte, error) {
+	panic("unexpected ReadCurrent call")
+}
+
+func TestAnalyseSampleRejectsOverflowingSampleCount(t *testing.T) {
+	const serviceID, indicatorID = 1, 2
+	timestamp := time.Unix(1_700_000_000, 0)
+	loads := []ecdf.Sample{{Value: 12, Count: 1}}
+	latencies := []ecdf.Sample{{Value: 30, Count: math.MaxUint64}, {Value: 31, Count: 1}}
+
+	_, err := analyzeSample(config.NewFakeConfig(), unreadJointStore{}, &config.Service{Id: serviceID, Name: "test"}, indicatorID, timestamp, loads, latencies)
+	require.EqualError(t, err, "invalid latency samples: observation count overflows uint64")
+}
+
+func TestAnalyseSampleRejectsOverflowingLoadCount(t *testing.T) {
+	const serviceID, indicatorID = 1, 2
+	timestamp := time.Unix(1_700_000_000, 0)
+	loads := []ecdf.Sample{{Value: 12, Count: math.MaxUint64}, {Value: 13, Count: 1}}
+	latencies := []ecdf.Sample{{Value: 30, Count: 1}}
+
+	_, err := analyzeSample(config.NewFakeConfig(), unreadJointStore{}, &config.Service{Id: serviceID, Name: "test"}, indicatorID, timestamp, loads, latencies)
+	require.EqualError(t, err, "invalid load samples: observation count overflows uint64")
+}
+
+func TestAnalyseSampleRejectsZeroTotalSampleCount(t *testing.T) {
+	const serviceID, indicatorID = 1, 2
+	timestamp := time.Unix(1_700_000_000, 0)
+
+	for _, test := range []struct {
+		name      string
+		loads     []ecdf.Sample
+		latencies []ecdf.Sample
+		wantError string
+	}{
+		{"load", []ecdf.Sample{{Value: 12, Count: 0}}, []ecdf.Sample{{Value: 30, Count: 1}}, "chunk has no load observations"},
+		{"latency", []ecdf.Sample{{Value: 12, Count: 1}}, []ecdf.Sample{{Value: 30, Count: 0}}, "chunk has no latency observations"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := analyzeSample(config.NewFakeConfig(), unreadJointStore{}, &config.Service{Id: serviceID, Name: "test"}, indicatorID, timestamp, test.loads, test.latencies)
+			require.EqualError(t, err, test.wantError)
+		})
+	}
+}
+
+func TestIsStatisticallySignificantUsesPValueDirectly(t *testing.T) {
+	require.Equal(t, 0.01, ksSignificanceLevel)
+
+	tests := []struct {
+		name        string
+		pValue      float64
+		significant bool
+	}{
+		{"high p-value is not significant", 0.96, false},
+		{"significance level is not significant", ksSignificanceLevel, false},
+		{"below significance level is significant", 0.009, true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			require.Equal(t, test.significant, isStatisticallySignificant(test.pValue))
+		})
+	}
+}
