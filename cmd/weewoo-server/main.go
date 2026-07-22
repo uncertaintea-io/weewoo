@@ -244,6 +244,11 @@ func main() {
 		log.Fatal(err)
 	}
 
+	for range 2 {
+		if err := <-serverErr; err != nil {
+			slog.Error("server shutdown", slog.Any("error", err))
+		}
+	}
 	appServer.Shutdown(context.Background())
 	metricsServer.Shutdown(context.Background())
 }
