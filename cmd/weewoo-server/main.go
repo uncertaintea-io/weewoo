@@ -21,6 +21,8 @@ import (
 	"github.com/uncertaintea-io/weewoo/internal/ecdf"
 )
 
+const appServerWriteTimeout = 20 * time.Second
+
 func NewMetricshandler() http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", promhttp.Handler())
@@ -307,7 +309,7 @@ func main() {
 		Addr:           appPort,
 		Handler:        appMux,
 		ReadTimeout:    10 * time.Second,
-		WriteTimeout:   10 * time.Second,
+		WriteTimeout:   appServerWriteTimeout,
 		MaxHeaderBytes: 1 << 20,
 	}
 

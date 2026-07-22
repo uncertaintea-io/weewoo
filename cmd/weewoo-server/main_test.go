@@ -45,6 +45,12 @@ func TestLiveServiceTrackerSchedulesCollectionAndPublishing(t *testing.T) {
 	assert.Same(t, service, collector.scheduled)
 	assert.Equal(t, 42, builderServiceID)
 }
+
+func TestAppServerWriteTimeoutExceedsPrometheusTestTimeout(t *testing.T) {
+	assert.Greater(t, appServerWriteTimeout, prometheusTestTimeout,
+		"the server must leave time for the Prometheus test handler to write its response")
+}
+
 func (c *fakeServiceCollector) Import(_ context.Context, service *config.Service, start, end time.Time) error {
 	c.imported, c.start, c.end = service, start, end
 	return nil

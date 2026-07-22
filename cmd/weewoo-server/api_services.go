@@ -13,6 +13,8 @@ import (
 	"github.com/uncertaintea-io/weewoo/internal/config"
 )
 
+const prometheusTestTimeout = 15 * time.Second
+
 type serviceAPI struct {
 	cfg        config.Config
 	tracker    serviceCollector
@@ -48,6 +50,10 @@ func (a *serviceAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		parts := strings.Split(path, "/")
+		if len(parts) != 3 {
+			http.Error(w, "invalid path", http.StatusBadRequest)
+			return
+		}
 		id, err := strconv.Atoi(parts[1])
 		if err != nil || id <= 0 {
 			http.Error(w, "invalid service ID", http.StatusBadRequest)
@@ -244,7 +250,7 @@ func (a *serviceAPI) testConnection(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), prometheusTestTimeout)
 	defer cancel()
 	end := time.Now().UTC()
 	start := end.Add(-5 * time.Minute)

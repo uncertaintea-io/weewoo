@@ -1,5 +1,6 @@
 import './index.scss'
 import { CancelImport, CreateService, DeleteService, GetService, ListAllServices, ServicesApiError, SetServicePaused, TestService, UpdateService, type CreateServiceInput, type Service } from './api';
+import { datetimeLocalToUtcISOString } from './datetime';
 import { escapeHtml, renderServiceUrl } from './rendering';
 
 const app = document.querySelector<HTMLDivElement>('#app');
@@ -55,7 +56,7 @@ function renderShell(content: string, apiResponse = 'Ready'): void {
     <div class="app-frame">
       <aside class="sidebar" aria-label="Primary navigation">
         <div class="sidebar-brand">
-          <img class="brand-logo" src="/img/UncertainTEA.png" alt="" aria-hidden="true" />
+          <img class="brand-logo" src="/img/logo.svg" alt="" aria-hidden="true" />
           <div>
             <strong>WeeWoo Services</strong>
             <span>Monitoring console</span>
@@ -376,8 +377,8 @@ async function submitServiceForm(form: HTMLFormElement, importHistory: boolean):
   const errorBox = form.querySelector<HTMLElement>('#form-error');
   const input = serviceInputFromForm(form);
   if (importHistory) {
-    input.importStart = new Date(inputValue(form, 'importStart')).toISOString();
-    input.importEnd = new Date(inputValue(form, 'importEnd')).toISOString();
+    input.importStart = datetimeLocalToUtcISOString(inputValue(form, 'importStart'));
+    input.importEnd = datetimeLocalToUtcISOString(inputValue(form, 'importEnd'));
   }
   if (submit !== null) {
     submit.disabled = true;

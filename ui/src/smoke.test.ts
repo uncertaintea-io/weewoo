@@ -1,7 +1,16 @@
 import { expect } from 'chai';
 import 'mocha';
 import { CreateService, ListAllServices, ServicesApiError } from './api';
+import { datetimeLocalToUtcISOString } from './datetime';
 import { renderServiceUrl } from './rendering';
+
+describe('datetimeLocalToUtcISOString', () => {
+
+  it('interprets a timezone-less form value as UTC', () => {
+    expect(datetimeLocalToUtcISOString('2026-07-01T00:00')).to.equal('2026-07-01T00:00:00.000Z');
+  });
+
+});
 
 describe('Exercise the testing framework itself', () => {
 

@@ -139,12 +139,14 @@ func (m *importManager) start(service *config.Service, start, end time.Time) imp
 		err := m.tracker.Import(ctx, service, start, end)
 		now := time.Now().UTC()
 		if err != nil {
-			state := "failed"
-			message := err.Error()
 			if ctx.Err() != nil {
-				state, message = "cancelled", "Historical import cancelled"
+				message := "Historical import cancelled"
+				m.finish(job.ID, "cancelled", message, now)
+				m.monitor.record(service.Id, "", "import_cancelled", message, now)
+				return
 			}
-			m.finish(job.ID, state, message, now)
+			message := err.Error()
+			m.finish(job.ID, "failed", message, now)
 			m.monitor.record(service.Id, "degraded", "import_failed", message, now)
 			return
 		}

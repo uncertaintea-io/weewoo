@@ -185,7 +185,7 @@ textarea {
   border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
   border-radius: 13px;
   box-shadow: 0 8px 22px color-mix(in srgb, var(--accent) 20%, transparent);
-  object-fit: cover;
+  object-fit: contain;
 }
 
 .sidebar-nav {
