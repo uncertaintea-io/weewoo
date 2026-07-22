@@ -184,6 +184,8 @@ func TestServiceAPICreatesBackgroundImport(t *testing.T) {
 		jobs := imports.listForService(1)
 		return len(jobs) == 1 && jobs[0].State == "complete" && jobs[0].Progress == 100
 	}, time.Second, time.Millisecond)
+}
+
 func TestSleepHandlerReturnsSuccessfulPingAfterDelay(t *testing.T) {
 	delay := 20 * time.Millisecond
 	request := httptest.NewRequest(http.MethodGet, "/sleep", nil)
