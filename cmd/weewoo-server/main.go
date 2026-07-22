@@ -320,8 +320,8 @@ func main() {
 	}
 
 	// Start ECDF builder
-	chunkStore := ecdf.NewDatabaseChunkStore(db)
-	jointStore := ecdf.NewDatabaseJointStore(db)
+	chunkStore = ecdf.NewDatabaseChunkStore(db)
+	jointStore = ecdf.NewDatabaseJointStore(db)
 	err = collection.StartECDFBuilder(chunkStore, jointStore, cfg, scheduler)
 	if err != nil {
 		log.Fatalf("Failed to start ECDF builder: %v", err)
