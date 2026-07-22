@@ -35,7 +35,8 @@ const (
 	MaxCallbackType
 )
 
-func getCallbackId(serviceID int, callbackType CallbackType) int {
+// CallbackID returns the scheduler ID for one kind of service callback.
+func CallbackID(serviceID int, callbackType CallbackType) int {
 	return ReservedCallbackIds + serviceID*int(MaxCallbackType) + int(callbackType)
 }
 
@@ -52,7 +53,7 @@ func getTargets(cfg config.Config) ([]ecdfBuilderTarget, error) {
 		}
 		targets = append(targets, ecdfBuilderTarget{
 			ServiceID:  service.Id,
-			CallbackID: getCallbackId(service.Id, BuilderCallback),
+			CallbackID: CallbackID(service.Id, BuilderCallback),
 		})
 	}
 	return targets, nil
@@ -96,7 +97,7 @@ func ScheduleECDFBuilder(serviceID int, chunkStore ecdf.ChunkStore, jointStore e
 	if err != nil {
 		return fmt.Errorf("failed to get build timeout: %w", err)
 	}
-	callbackID := getCallbackId(serviceID, BuilderCallback)
+	callbackID := CallbackID(serviceID, BuilderCallback)
 	err = scheduler.AddCallback(callbackID, serviceInterval, func(ctx context.Context, start time.Time, end time.Time) IntervalResult {
 		buildCtx, cancel := context.WithTimeout(ctx, buildTimeout)
 		defer cancel()

@@ -11,6 +11,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/uncertaintea-io/weewoo/internal/collection"
 	"github.com/uncertaintea-io/weewoo/internal/config"
 )
 
@@ -44,6 +45,27 @@ func TestLiveServiceTrackerSchedulesCollectionAndPublishing(t *testing.T) {
 
 	assert.Same(t, service, collector.scheduled)
 	assert.Equal(t, 42, builderServiceID)
+}
+
+func TestLiveServiceTrackerUnschedulesCollectionAndPublishing(t *testing.T) {
+	var removed []int
+	scheduler := collection.NewIntervalScheduler(collection.WithSchedulerEventHandler(func(event collection.SchedulerEvent) {
+		if event.Kind == collection.SchedulerEventCallbackRemoved {
+			removed = append(removed, event.ID)
+		}
+	}))
+	defer scheduler.Stop()
+	callback := func(context.Context, time.Time, time.Time) collection.IntervalResult {
+		return collection.IntervalSuccess()
+	}
+	serviceID := 1003
+	require.NoError(t, scheduler.AddCallback(collection.CallbackID(serviceID, collection.CollectCallback), time.Hour, callback))
+	require.NoError(t, scheduler.AddCallback(collection.CallbackID(serviceID, collection.BuilderCallback), time.Hour, callback))
+
+	tracker := &liveServiceTracker{scheduler: scheduler}
+	tracker.Unschedule(serviceID)
+
+	assert.ElementsMatch(t, []int{3006, 3007}, removed)
 }
 
 func TestAppServerWriteTimeoutExceedsPrometheusTestTimeout(t *testing.T) {

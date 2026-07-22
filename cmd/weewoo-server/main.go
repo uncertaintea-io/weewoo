@@ -114,8 +114,8 @@ func (t *liveServiceTracker) Import(ctx context.Context, service *config.Service
 }
 
 func (t *liveServiceTracker) Unschedule(serviceID int) {
-	t.scheduler.RemoveCallback(serviceID)
-	t.scheduler.RemoveCallback(1000 + serviceID)
+	t.scheduler.RemoveCallback(collection.CallbackID(serviceID, collection.CollectCallback))
+	t.scheduler.RemoveCallback(collection.CallbackID(serviceID, collection.BuilderCallback))
 }
 
 func newServiceResponse(service *config.Service) serviceResponse {
