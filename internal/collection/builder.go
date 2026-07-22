@@ -31,12 +31,15 @@ func getTargets(cfg config.Config) ([]ecdfBuilderTarget, error) {
 	if err != nil {
 		return nil, err
 	}
-	targets := make([]ecdfBuilderTarget, len(services))
-	for i, service := range services {
-		targets[i] = ecdfBuilderTarget{
+	targets := make([]ecdfBuilderTarget, 0, len(services))
+	for _, service := range services {
+		if service.Paused {
+			continue
+		}
+		targets = append(targets, ecdfBuilderTarget{
 			ServiceID:  service.Id,
 			CallbackID: ecdfBuilderCallbackIDOffset + service.Id,
-		}
+		})
 	}
 	return targets, nil
 }
@@ -59,39 +62,55 @@ func StartECDFBuilder(chunkStore ecdf.ChunkStore, jointStore ecdf.JointStore, cf
 	}
 	slog.Info("ECDF publisher startup configuration")
 	for _, target := range targets {
-		buildTimeout, err := configuredDuration(cfg, ECDFScheduledBuildTimeoutConfigKey, defaultECDFScheduledBuildTimeout)
-		if err != nil {
-			return fmt.Errorf("failed to get build timeout: %w", err)
+		if err := ScheduleECDFBuilder(target.ServiceID, chunkStore, jointStore, cfg, scheduler); err != nil {
+			return err
 		}
-		err = scheduler.AddCallback(target.CallbackID, serviceInterval, func(ctx context.Context, start time.Time, end time.Time) IntervalResult {
-			buildCtx, cancel := context.WithTimeout(ctx, buildTimeout)
-			defer cancel()
+	}
+	return nil
+}
 
-			bytesWritten, published, err := jointStore.Publish(buildCtx, target.ServiceID, LoadLatencyIndicator, end, func(out io.Writer) error {
-				if err := ecdf.BuildJointECDFContext(buildCtx, chunkStore, target.ServiceID, LoadLatencyIndicator, out); err != nil {
-					return fmt.Errorf("ECDF generation failed: %w", err)
-				}
-				return nil
-			})
-			if err != nil {
-				stage := "publication"
-				if buildCtx.Err() != nil {
-					stage = "scheduled build deadline"
-					err = fmt.Errorf("%s failed: %w", stage, errors.Join(err, buildCtx.Err()))
-				}
-				slog.Error("failed to publish joint ECDF", "service_id", target.ServiceID, "indicator_id", LoadLatencyIndicator, "stage", stage, "error", err)
-				return IntervalRetry(err)
+// ScheduleECDFBuilder registers the hourly publisher for one service. It is
+// used at startup and whenever a service is added while the server is running.
+func ScheduleECDFBuilder(serviceID int, chunkStore ecdf.ChunkStore, jointStore ecdf.JointStore, cfg config.Config, scheduler *IntervalScheduler) error {
+	if serviceID <= 0 {
+		return fmt.Errorf("service ID must be greater than zero")
+	}
+	if scheduler == nil || jointStore == nil || cfg == nil {
+		return fmt.Errorf("ECDF builder dependencies must not be nil")
+	}
+	buildTimeout, err := configuredDuration(cfg, ECDFScheduledBuildTimeoutConfigKey, defaultECDFScheduledBuildTimeout)
+	if err != nil {
+		return fmt.Errorf("failed to get build timeout: %w", err)
+	}
+	callbackID := ecdfBuilderCallbackIDOffset + serviceID
+	err = scheduler.AddCallback(callbackID, serviceInterval, func(ctx context.Context, start time.Time, end time.Time) IntervalResult {
+		buildCtx, cancel := context.WithTimeout(ctx, buildTimeout)
+		defer cancel()
+
+		bytesWritten, published, err := jointStore.Publish(buildCtx, serviceID, LoadLatencyIndicator, end, func(out io.Writer) error {
+			if err := ecdf.BuildJointECDFContext(buildCtx, chunkStore, serviceID, LoadLatencyIndicator, out); err != nil {
+				return fmt.Errorf("ECDF generation failed: %w", err)
 			}
-			if !published {
-				slog.Info("this is being handled by another publisher", "service_id", target.ServiceID, "indicator_id", LoadLatencyIndicator)
-				return IntervalSuccess()
-			}
-			slog.Info("built joint ECDF", "service_id", target.ServiceID, "indicator_id", LoadLatencyIndicator, "start", start, "end", end, "bytes", bytesWritten)
-			return IntervalSuccess()
-		}, WithLastEnd(time.Now().UTC().Truncate(serviceInterval).Add(-serviceInterval)))
+			return nil
+		})
 		if err != nil {
-			return fmt.Errorf("failed to add callback for service %d: %w", target.ServiceID, err)
+			stage := "publication"
+			if buildCtx.Err() != nil {
+				stage = "scheduled build deadline"
+				err = fmt.Errorf("%s failed: %w", stage, errors.Join(err, buildCtx.Err()))
+			}
+			slog.Error("failed to publish joint ECDF", "service_id", serviceID, "indicator_id", LoadLatencyIndicator, "stage", stage, "error", err)
+			return IntervalRetry(err)
 		}
+		if !published {
+			slog.Info("this is being handled by another publisher", "service_id", serviceID, "indicator_id", LoadLatencyIndicator)
+			return IntervalSuccess()
+		}
+		slog.Info("built joint ECDF", "service_id", serviceID, "indicator_id", LoadLatencyIndicator, "start", start, "end", end, "bytes", bytesWritten)
+		return IntervalSuccess()
+	}, WithLastEnd(time.Now().UTC().Truncate(serviceInterval).Add(-serviceInterval)))
+	if err != nil {
+		return fmt.Errorf("failed to add callback for service %d: %w", serviceID, err)
 	}
 	return nil
 }

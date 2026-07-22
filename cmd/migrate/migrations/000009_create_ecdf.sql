@@ -14,6 +14,6 @@ CREATE TABLE IF NOT EXISTS ecdf (
 CREATE INDEX IF NOT EXISTS ecdf_current_version_idx
     ON ecdf (service_id, indicator_id, version DESC);
 
-CREATE UNIQUE INDEX ecdf_build_interval_idx
+CREATE UNIQUE INDEX IF NOT EXISTS ecdf_build_interval_idx
     ON ecdf (service_id, indicator_id, interval_end)
     WHERE interval_end IS NOT NULL;

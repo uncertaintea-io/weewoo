@@ -114,16 +114,16 @@ func (c *database) WriteService(service *Service) error {
 	// makes sure the id is not inserted at 0. if it is 0, it inserts a new service at a non zero id
 	if service.Id == 0 {
 		err := c.db.QueryRow(`
-			INSERT INTO service (name, prometheus_url, load_query, latency_query, interval_seconds)
-			VALUES ($1, $2, $3, $4, $5)
+			INSERT INTO service (name, prometheus_url, load_query, latency_query, interval_seconds, paused)
+			VALUES ($1, $2, $3, $4, $5, $6)
 			RETURNING id
-		`, service.Name, service.PrometheusURL, service.LoadQuery, service.LatencyQuery, intervalSeconds).Scan(&service.Id)
+		`, service.Name, service.PrometheusURL, service.LoadQuery, service.LatencyQuery, intervalSeconds, service.Paused).Scan(&service.Id)
 		if err != nil {
 			return fmt.Errorf("failed to insert service: %w", err)
 		}
 	} else {
-		_, err := c.db.Exec("UPDATE service SET name = $1, prometheus_url = $2, load_query = $3, latency_query = $4, interval_seconds = $5 WHERE id = $6",
-			service.Name, service.PrometheusURL, service.LoadQuery, service.LatencyQuery, intervalSeconds, service.Id)
+		_, err := c.db.Exec("UPDATE service SET name = $1, prometheus_url = $2, load_query = $3, latency_query = $4, interval_seconds = $5, paused = $6 WHERE id = $7",
+			service.Name, service.PrometheusURL, service.LoadQuery, service.LatencyQuery, intervalSeconds, service.Paused, service.Id)
 		if err != nil {
 			return fmt.Errorf("failed to update service: %w", err)
 		}
@@ -138,7 +138,7 @@ func (c *database) ReadService(id int) (*Service, error) {
 	if id <= 0 {
 		return nil, fmt.Errorf("id must be greater than 0")
 	}
-	err := c.db.QueryRow("SELECT id, name, prometheus_url, load_query, latency_query, interval_seconds FROM service WHERE id = $1", id).Scan(&service.Id, &service.Name, &service.PrometheusURL, &service.LoadQuery, &service.LatencyQuery, &intervalSeconds)
+	err := c.db.QueryRow("SELECT id, name, prometheus_url, load_query, latency_query, interval_seconds, paused FROM service WHERE id = $1", id).Scan(&service.Id, &service.Name, &service.PrometheusURL, &service.LoadQuery, &service.LatencyQuery, &intervalSeconds, &service.Paused)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read service: %w", err)
 	}
@@ -153,7 +153,7 @@ func (c *database) ReadService(id int) (*Service, error) {
 
 // this function reads all the services from the database and returns them as a slice of service objects
 func (c *database) ReadAllServices() ([]*Service, error) {
-	rows, err := c.db.Query("SELECT id, name, prometheus_url, load_query, latency_query, interval_seconds FROM service")
+	rows, err := c.db.Query("SELECT id, name, prometheus_url, load_query, latency_query, interval_seconds, paused FROM service")
 	if err != nil {
 		return nil, err
 	}
@@ -173,11 +173,29 @@ func (c *database) ReadAllServices() ([]*Service, error) {
 	return services, nil
 }
 
+func (c *database) DeleteService(id int) error {
+	if id <= 0 {
+		return fmt.Errorf("id must be greater than 0")
+	}
+	result, err := c.db.Exec("DELETE FROM service WHERE id = $1", id)
+	if err != nil {
+		return fmt.Errorf("failed to delete service: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to inspect deleted service: %w", err)
+	}
+	if rows == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
 // this function converts a row from the database to a service object
 func (c *database) RowsToObject(rows *sql.Rows) (*Service, error) {
 	var service Service
 	var intervalSeconds int64
-	err := rows.Scan(&service.Id, &service.Name, &service.PrometheusURL, &service.LoadQuery, &service.LatencyQuery, &intervalSeconds)
+	err := rows.Scan(&service.Id, &service.Name, &service.PrometheusURL, &service.LoadQuery, &service.LatencyQuery, &intervalSeconds, &service.Paused)
 	if err != nil {
 		return nil, err
 	}
