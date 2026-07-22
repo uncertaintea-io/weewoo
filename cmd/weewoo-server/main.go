@@ -8,6 +8,7 @@ import (
 	"log"
 	"log/slog"
 	"net/http"
+	"os"
 	"net/url"
 	"os/signal"
 	"strconv"
@@ -284,6 +285,9 @@ func observeRequestDuration(next http.Handler) http.Handler {
 }
 
 func main() {
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	slog.SetDefault(logger)
+
 	configfile := flag.String("config", "config.yaml", "Config file")
 	flag.Parse()
 	systemSettings, err := config.ReadSystemSettings(*configfile)
@@ -382,4 +386,9 @@ func main() {
 
 	appServer.Shutdown(context.Background())
 	metricsServer.Shutdown(context.Background())
+	for range 2 {
+		if err := <-serverErr; err != nil {
+			logger.Error("server shutdown", slog.Any("error", err))
+		}
+	}
 }
