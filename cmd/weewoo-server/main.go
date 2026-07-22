@@ -8,6 +8,7 @@ import (
 	"log"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os/signal"
 	"strconv"
 	"syscall"
@@ -21,6 +22,7 @@ import (
 	"github.com/uncertaintea-io/weewoo/internal/ecdf"
 )
 
+const appServerWriteTimeout = 20 * time.Second
 const (
 	sleep_duration = 1 * time.Second
 	sleep_message  = "zzz\n"
@@ -63,12 +65,55 @@ func SleepHandler(sleepTime time.Duration) http.Handler {
 }
 
 type serviceResponse struct {
-	ID              int    `json:"id"`
-	Name            string `json:"name"`
-	PrometheusURL   string `json:"prometheusUrl"`
-	LoadQuery       string `json:"loadQuery"`
-	LatencyQuery    string `json:"latencyQuery"`
-	IntervalSeconds int64  `json:"intervalSeconds"`
+	ID              int            `json:"id"`
+	Name            string         `json:"name"`
+	PrometheusURL   string         `json:"prometheusUrl"`
+	LoadQuery       string         `json:"loadQuery"`
+	LatencyQuery    string         `json:"latencyQuery"`
+	IntervalSeconds int64          `json:"intervalSeconds"`
+	Tracking        trackingStatus `json:"tracking"`
+	Imports         []importJob    `json:"imports"`
+}
+
+type createServiceRequest struct {
+	Name            string     `json:"name"`
+	PrometheusURL   string     `json:"prometheusUrl"`
+	LoadQuery       string     `json:"loadQuery"`
+	LatencyQuery    string     `json:"latencyQuery"`
+	IntervalSeconds int64      `json:"intervalSeconds"`
+	ImportStart     *time.Time `json:"importStart,omitempty"`
+	ImportEnd       *time.Time `json:"importEnd,omitempty"`
+}
+
+type serviceCollector interface {
+	Schedule(service *config.Service) error
+	Unschedule(serviceID int)
+	Import(ctx context.Context, service *config.Service, start, end time.Time) error
+}
+
+type liveServiceTracker struct {
+	collector       collection.Collector
+	scheduler       *collection.IntervalScheduler
+	scheduleBuilder func(serviceID int) error
+}
+
+func (t *liveServiceTracker) Schedule(service *config.Service) error {
+	if err := t.collector.Schedule(service); err != nil {
+		return fmt.Errorf("failed to schedule metric collection: %w", err)
+	}
+	if err := t.scheduleBuilder(service.Id); err != nil {
+		return fmt.Errorf("failed to schedule ECDF publishing: %w", err)
+	}
+	return nil
+}
+
+func (t *liveServiceTracker) Import(ctx context.Context, service *config.Service, start, end time.Time) error {
+	return t.collector.Import(ctx, service, start, end)
+}
+
+func (t *liveServiceTracker) Unschedule(serviceID int) {
+	t.scheduler.RemoveCallback(serviceID)
+	t.scheduler.RemoveCallback(1000 + serviceID)
 }
 
 func newServiceResponse(service *config.Service) serviceResponse {
@@ -79,6 +124,8 @@ func newServiceResponse(service *config.Service) serviceResponse {
 		LoadQuery:       service.LoadQuery,
 		LatencyQuery:    service.LatencyQuery,
 		IntervalSeconds: int64(service.Interval / time.Second),
+		Tracking:        trackingStatus{State: "pending", Activity: []activityEntry{}},
+		Imports:         []importJob{},
 	}
 }
 
@@ -104,6 +151,77 @@ func NewListAllServicesHandler(cfg config.Config) http.Handler {
 		w.Header().Set("Content-Type", "application/json")
 		if err := json.NewEncoder(w).Encode(response); err != nil {
 			log.Printf("failed to encode services response: %v", err)
+		}
+	})
+}
+
+func validateCreateService(request createServiceRequest) error {
+	if request.Name == "" || request.PrometheusURL == "" || request.LoadQuery == "" || request.LatencyQuery == "" {
+		return fmt.Errorf("name, prometheusUrl, loadQuery, and latencyQuery are required")
+	}
+	parsedURL, err := url.ParseRequestURI(request.PrometheusURL)
+	if err != nil || parsedURL.Host == "" || (parsedURL.Scheme != "http" && parsedURL.Scheme != "https") {
+		return fmt.Errorf("prometheusUrl must be an HTTP or HTTPS URL")
+	}
+	if request.IntervalSeconds <= 0 {
+		return fmt.Errorf("intervalSeconds must be greater than zero")
+	}
+	if (request.ImportStart == nil) != (request.ImportEnd == nil) {
+		return fmt.Errorf("importStart and importEnd must be provided together")
+	}
+	if request.ImportStart != nil && !request.ImportStart.Before(*request.ImportEnd) {
+		return fmt.Errorf("importStart must be before importEnd")
+	}
+	return nil
+}
+
+func NewCreateServiceHandler(cfg config.Config, collector serviceCollector) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			w.Header().Set("Allow", http.MethodPost)
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		var request createServiceRequest
+		decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&request); err != nil {
+			http.Error(w, "invalid JSON request", http.StatusBadRequest)
+			return
+		}
+		if err := validateCreateService(request); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		service := &config.Service{
+			Name: request.Name, PrometheusURL: request.PrometheusURL,
+			LoadQuery: request.LoadQuery, LatencyQuery: request.LatencyQuery,
+			Interval: time.Duration(request.IntervalSeconds) * time.Second,
+		}
+		if err := cfg.WriteService(service); err != nil {
+			http.Error(w, "failed to create service", http.StatusInternalServerError)
+			return
+		}
+		if err := collector.Schedule(service); err != nil {
+			log.Printf("service %d was created but could not be tracked: %v", service.Id, err)
+			http.Error(w, "service created, but tracking could not be started", http.StatusInternalServerError)
+			return
+		}
+		if request.ImportStart != nil {
+			if err := collector.Import(r.Context(), service, *request.ImportStart, *request.ImportEnd); err != nil {
+				log.Printf("historical import failed for service %d: %v", service.Id, err)
+				http.Error(w, "service created, but historical import failed", http.StatusBadGateway)
+				return
+			}
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Location", fmt.Sprintf("/api/services/%d", service.Id))
+		w.WriteHeader(http.StatusCreated)
+		if err := json.NewEncoder(w).Encode(newServiceResponse(service)); err != nil {
+			log.Printf("failed to encode created service: %v", err)
 		}
 	})
 }
@@ -184,23 +302,41 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to read services: %v", err)
 	}
-	scheduler := collection.NewIntervalScheduler(collection.WithSchedulerEventHandler(nil))
+	monitor := newTrackingMonitor()
+	scheduler := collection.NewIntervalScheduler(collection.WithSchedulerEventHandler(monitor.handleSchedulerEvent))
 	defer scheduler.Stop()
 	chunkStore := ecdf.NewDatabaseChunkStore(db)
 	jointStore := ecdf.NewDatabaseJointStore(db)
 	collector := collection.NewCollector(http.DefaultClient, chunkStore, jointStore, cfg, scheduler)
 	defer collector.Stop()
 	for _, service := range services {
-		collector.Schedule(service)
+		if service.Paused {
+			monitor.record(service.Id, "paused", "tracking_paused", "Prometheus collection is paused", time.Now().UTC())
+			continue
+		}
+		if err := collector.Schedule(service); err != nil {
+			log.Fatalf("Failed to schedule service %d: %v", service.Id, err)
+		}
 	}
 
 	// Start ECDF builder
+	chunkStore := ecdf.NewDatabaseChunkStore(db)
+	jointStore := ecdf.NewDatabaseJointStore(db)
 	err = collection.StartECDFBuilder(chunkStore, jointStore, cfg, scheduler)
 	if err != nil {
 		log.Fatalf("Failed to start ECDF builder: %v", err)
 	}
+	tracker := &liveServiceTracker{
+		collector: collector,
+		scheduler: scheduler,
+		scheduleBuilder: func(serviceID int) error {
+			return collection.ScheduleECDFBuilder(serviceID, chunkStore, jointStore, cfg, scheduler)
+		},
+	}
+	imports := newImportManager(tracker, monitor)
 
 	appMux := http.NewServeMux()
+	appMux.Handle("/api/", observeRequestDuration(NewServiceAPIHandler(cfg, tracker, monitor, imports, http.DefaultClient)))
 	appMux.Handle("/api/services", observeRequestDuration(NewListAllServicesHandler(cfg)))
 	//edit this to change the sleep time
 	appMux.Handle("/sleep", observeRequestDuration(SleepHandler(sleep_duration)))
@@ -216,7 +352,7 @@ func main() {
 		Addr:           appPort,
 		Handler:        appMux,
 		ReadTimeout:    10 * time.Second,
-		WriteTimeout:   10 * time.Second,
+		WriteTimeout:   appServerWriteTimeout,
 		MaxHeaderBytes: 1 << 20,
 	}
 

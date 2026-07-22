@@ -98,11 +98,11 @@ func testServiceFunctions(t *testing.T, config Config) {
 	// testing writeService on a counter for the id. also tests what happens when there is no record for the id that was passed in.
 	t.Run("WriteService", func(t *testing.T) {
 		service := &Service{
-			Name:            name,
-			PrometheusURL:   "http://example.com",
-			LoadQuery:       "load_query",
-			LatencyQuery:    "latency_query",
-			Interval: 10 * time.Second,
+			Name:          name,
+			PrometheusURL: "http://example.com",
+			LoadQuery:     "load_query",
+			LatencyQuery:  "latency_query",
+			Interval:      10 * time.Second,
 		}
 		err := config.WriteService(service)
 		require.NoError(t, err)
@@ -135,6 +135,12 @@ func testServiceFunctions(t *testing.T, config Config) {
 		data, err = config.ReadService(-1)
 		assert.Error(t, err)
 		assert.Nil(t, data)
+	})
+	t.Run("DeleteService", func(t *testing.T) {
+		require.NoError(t, config.DeleteService(writtenID))
+		deleted, err := config.ReadService(writtenID)
+		assert.Error(t, err)
+		assert.Nil(t, deleted)
 	})
 }
 
