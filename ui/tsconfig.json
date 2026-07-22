@@ -14,7 +14,8 @@
   "ts-node": {
     "compilerOptions": {
       "module": "CommonJS",
-      "moduleResolution": "node"
+      "moduleResolution": "node",
+      "ignoreDeprecations": "6.0"
     }
   },
   "include": ["src/**/*"]
