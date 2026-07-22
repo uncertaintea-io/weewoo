@@ -159,3 +159,24 @@ func TestECDFPublisherDisabledSkipsScheduling(t *testing.T) {
 	case <-time.After(50 * time.Millisecond):
 	}
 }
+
+func TestGetCallbackId(t *testing.T) {
+	tests := []struct {
+		name         string
+		serviceID    int
+		callbackType CallbackType
+		want         int
+	}{
+		{name: "first service collect callback", serviceID: 1, callbackType: CollectCallback, want: 1002},
+		{name: "first service builder callback", serviceID: 1, callbackType: BuilderCallback, want: 1003},
+		{name: "service IDs do not overlap", serviceID: 1001, callbackType: BuilderCallback, want: 3003},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := getCallbackId(tt.serviceID, tt.callbackType); got != tt.want {
+				t.Fatalf("getCallbackId(%d, %d) = %d, want %d", tt.serviceID, tt.callbackType, got, tt.want)
+			}
+		})
+	}
+}
