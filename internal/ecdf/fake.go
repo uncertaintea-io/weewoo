@@ -9,6 +9,8 @@ import (
 type fakeEntry struct {
 	timestamp time.Time
 	chunk     []byte
+	good      *bool
+	pValue    float64
 }
 
 func (c *fakeEntry) Compare(other *fakeEntry) int {
@@ -31,6 +33,8 @@ func (c *fakeChunkStore) WriteChunk(serviceId int, indicatorId int, timestamp ti
 	entries := c.chunks[serviceId][indicatorId]
 	i, found := slices.BinarySearchFunc(entries, entry, (*fakeEntry).Compare)
 	if found {
+		entry.good = entries[i].good
+		entry.pValue = entries[i].pValue
 		entries[i] = entry
 	} else {
 		entries = slices.Insert(entries, i, entry)
@@ -57,6 +61,27 @@ func (c *fakeChunkStore) ReadChunk(serviceId int, indicatorId int, timestamp tim
 	return entries[i].chunk, nil
 }
 
+func (c *fakeChunkStore) WriteVerdict(_ context.Context, serviceID, indicatorID int, timestamp time.Time, good bool, pValue float64) error {
+	indicators, ok := c.chunks[serviceID]
+	if !ok {
+		return ChunkNotFoundError
+	}
+	entries, ok := indicators[indicatorID]
+	if !ok {
+		return ChunkNotFoundError
+	}
+	i, found := slices.BinarySearchFunc(entries, timestamp, func(entry *fakeEntry, timestamp time.Time) int {
+		return entry.timestamp.Compare(timestamp)
+	})
+	if !found {
+		return ChunkNotFoundError
+	}
+	entries[i].good = new(bool)
+	*entries[i].good = good
+	entries[i].pValue = pValue
+	return nil
+}
+
 func (c *fakeChunkStore) ScanGoodChunks(ctx context.Context, serviceId int, indicatorId int, out chan<- []byte) error {
 	indicators, ok := c.chunks[serviceId]
 	if !ok {
@@ -67,6 +92,9 @@ func (c *fakeChunkStore) ScanGoodChunks(ctx context.Context, serviceId int, indi
 		return nil
 	}
 	for _, entry := range entries {
+		if entry.good != nil && !*entry.good {
+			continue
+		}
 		select {
 		case out <- entry.chunk:
 		case <-ctx.Done():

@@ -15,10 +15,6 @@ func NewDatabaseChunkStore(db *sql.DB) ChunkStore {
 	return &database{db: db}
 }
 
-func NewDatabaseVerdictStore(db *sql.DB) VerdictStore {
-	return &database{db: db}
-}
-
 // WriteChunk writes a time chunk to the database.
 func (c *database) WriteChunk(serviceId int, indicatorId int, timestamp time.Time, chunk []byte) error {
 	_, err := c.db.Exec(`

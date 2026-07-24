@@ -41,7 +41,7 @@ type AnalysisQueue interface {
 type AnalysisWorker struct {
 	cfg        config.Config
 	jointStore ecdf.JointStore
-	verdicts   ecdf.VerdictStore
+	chunks     ecdf.ChunkStore
 	alerts     alerting.AlertQueue
 	jobs       chan AnalysisRequest
 	ctx        context.Context
@@ -50,7 +50,7 @@ type AnalysisWorker struct {
 	stopOnce   sync.Once
 }
 
-func NewAnalysisWorker(cfg config.Config, jointStore ecdf.JointStore, verdicts ecdf.VerdictStore, alerts alerting.AlertQueue, capacity int) *AnalysisWorker {
+func NewAnalysisWorker(cfg config.Config, jointStore ecdf.JointStore, chunks ecdf.ChunkStore, alerts alerting.AlertQueue, capacity int) *AnalysisWorker {
 	if capacity <= 0 {
 		capacity = DefaultAnalysisQueueCapacity
 	}
@@ -58,7 +58,7 @@ func NewAnalysisWorker(cfg config.Config, jointStore ecdf.JointStore, verdicts e
 	worker := &AnalysisWorker{
 		cfg:        cfg,
 		jointStore: jointStore,
-		verdicts:   verdicts,
+		chunks:     chunks,
 		alerts:     alerts,
 		jobs:       make(chan AnalysisRequest, capacity),
 		ctx:        ctx,
@@ -127,7 +127,7 @@ func (w *AnalysisWorker) analyze(request AnalysisRequest) {
 			ctx,
 			w.cfg,
 			w.jointStore,
-			w.verdicts,
+			w.chunks,
 			w.alerts,
 			&request.Service,
 			request.IndicatorID,

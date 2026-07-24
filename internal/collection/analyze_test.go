@@ -48,11 +48,12 @@ type recordedVerdict struct {
 	pValue      float64
 }
 
-type recordingVerdictStore struct {
+type recordingChunkStore struct {
+	ecdf.ChunkStore
 	verdicts []recordedVerdict
 }
 
-func (s *recordingVerdictStore) WriteVerdict(_ context.Context, serviceID, indicatorID int, timestamp time.Time, good bool, pValue float64) error {
+func (s *recordingChunkStore) WriteVerdict(_ context.Context, serviceID, indicatorID int, timestamp time.Time, good bool, pValue float64) error {
 	s.verdicts = append(s.verdicts, recordedVerdict{
 		serviceID:   serviceID,
 		indicatorID: indicatorID,
@@ -172,7 +173,7 @@ fi
 cat >/dev/null
 printf '\002\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\077\360\000\000\000\000\000\000\077\360\000\000\000\000\000\000'
 `)
-	verdicts := &recordingVerdictStore{}
+	verdicts := &recordingChunkStore{}
 	alerts := &recordingAlertQueue{}
 	timestamp := time.Unix(1_700_000_000, 0)
 
@@ -209,7 +210,7 @@ cat >/dev/null
 printf '\002\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\077\360\000\000\000\000\000\000\077\360\000\000\000\000\000\000'
 `)
 	timestamp := time.Unix(1_700_000_000, 0)
-	verdicts := &recordingVerdictStore{
+	verdicts := &recordingChunkStore{
 		verdicts: []recordedVerdict{{
 			serviceID:   7,
 			indicatorID: LoadLatencyIndicator,

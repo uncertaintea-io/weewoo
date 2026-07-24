@@ -102,13 +102,14 @@ func TestAnalysisWorkerBoundsQueueAndStopsActiveWork(t *testing.T) {
 	require.ErrorIs(t, worker.Submit(validAnalysisRequest()), ErrAnalyzerStopped)
 }
 
-type failOnceVerdictStore struct {
+type failOnceChunkStore struct {
+	ecdf.ChunkStore
 	mu        sync.Mutex
 	calls     int
 	persisted chan struct{}
 }
 
-func (s *failOnceVerdictStore) WriteVerdict(context.Context, int, int, time.Time, bool, float64) error {
+func (s *failOnceChunkStore) WriteVerdict(context.Context, int, int, time.Time, bool, float64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.calls++
@@ -119,7 +120,7 @@ func (s *failOnceVerdictStore) WriteVerdict(context.Context, int, int, time.Time
 	return nil
 }
 
-func (s *failOnceVerdictStore) Calls() int {
+func (s *failOnceChunkStore) Calls() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.calls
@@ -133,7 +134,7 @@ fi
 cat >/dev/null
 printf '\002\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\077\360\000\000\000\000\000\000\077\360\000\000\000\000\000\000'
 `)
-	verdicts := &failOnceVerdictStore{persisted: make(chan struct{})}
+	verdicts := &failOnceChunkStore{persisted: make(chan struct{})}
 	worker := NewAnalysisWorker(config.NewFakeConfig(), staticJointStore{}, verdicts, nil, 1)
 	t.Cleanup(worker.Stop)
 
@@ -147,13 +148,14 @@ printf '\002\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\077
 	require.Equal(t, 2, verdicts.Calls())
 }
 
-type failingVerdictStore struct {
+type failingChunkStore struct {
+	ecdf.ChunkStore
 	mu       sync.Mutex
 	calls    int
 	finished chan struct{}
 }
 
-func (s *failingVerdictStore) WriteVerdict(context.Context, int, int, time.Time, bool, float64) error {
+func (s *failingChunkStore) WriteVerdict(context.Context, int, int, time.Time, bool, float64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.calls++
@@ -163,7 +165,7 @@ func (s *failingVerdictStore) WriteVerdict(context.Context, int, int, time.Time,
 	return errors.New("persistent database failure")
 }
 
-func (s *failingVerdictStore) Calls() int {
+func (s *failingChunkStore) Calls() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.calls
@@ -177,7 +179,7 @@ fi
 cat >/dev/null
 printf '\002\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\077\360\000\000\000\000\000\000\077\360\000\000\000\000\000\000'
 `)
-	verdicts := &failingVerdictStore{finished: make(chan struct{})}
+	verdicts := &failingChunkStore{finished: make(chan struct{})}
 	worker := NewAnalysisWorker(config.NewFakeConfig(), staticJointStore{}, verdicts, nil, 1)
 	t.Cleanup(worker.Stop)
 

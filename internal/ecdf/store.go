@@ -14,13 +14,8 @@ var (
 type ChunkStore interface {
 	WriteChunk(serviceId int, indicatorId int, timestamp time.Time, chunk []byte) error
 	ReadChunk(serviceId int, indicatorId int, timestamp time.Time) ([]byte, error)
-	ScanGoodChunks(ctx context.Context, serviceId int, indicatorId int, out chan<- []byte) error
-}
-
-// VerdictStore records whether a time chunk is eligible for future joint ECDF
-// builds. Writing the same chunk again replaces its previous verdict.
-type VerdictStore interface {
 	WriteVerdict(ctx context.Context, serviceID, indicatorID int, timestamp time.Time, good bool, pValue float64) error
+	ScanGoodChunks(ctx context.Context, serviceId int, indicatorId int, out chan<- []byte) error
 }
 
 // JointStore atomically publishes and reads generated joint ECDFs. Publish
