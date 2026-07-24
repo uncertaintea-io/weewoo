@@ -8,8 +8,8 @@ import (
 	"log"
 	"log/slog"
 	"net/http"
-	"os"
 	"net/url"
+	"os"
 	"os/signal"
 	"strconv"
 	"syscall"
@@ -18,6 +18,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/uncertaintea-io/weewoo/internal/alerting"
 	"github.com/uncertaintea-io/weewoo/internal/collection"
 	"github.com/uncertaintea-io/weewoo/internal/config"
 	"github.com/uncertaintea-io/weewoo/internal/ecdf"
@@ -154,6 +155,14 @@ func NewListAllServicesHandler(cfg config.Config) http.Handler {
 			log.Printf("failed to encode services response: %v", err)
 		}
 	})
+}
+
+func newAppMux(apiHandler, sleepHandler, staticHandler http.Handler) *http.ServeMux {
+	appMux := http.NewServeMux()
+	appMux.Handle("/api/", apiHandler)
+	appMux.Handle("/sleep", sleepHandler)
+	appMux.Handle("/", staticHandler)
+	return appMux
 }
 
 func validateCreateService(request createServiceRequest) error {
@@ -311,7 +320,11 @@ func main() {
 	defer scheduler.Stop()
 	chunkStore := ecdf.NewDatabaseChunkStore(db)
 	jointStore := ecdf.NewDatabaseJointStore(db)
-	collector := collection.NewCollector(http.DefaultClient, chunkStore, jointStore, cfg, scheduler)
+	alertDispatcher := alerting.NewDispatcher(cfg, alerting.DefaultQueueCapacity)
+	defer alertDispatcher.Stop()
+	analysisWorker := collection.NewAnalysisWorker(cfg, jointStore, alertDispatcher, collection.DefaultAnalysisQueueCapacity)
+	defer analysisWorker.Stop()
+	collector := collection.NewCollector(http.DefaultClient, chunkStore, scheduler, analysisWorker)
 	defer collector.Stop()
 	for _, service := range services {
 		if service.Paused {
@@ -339,13 +352,11 @@ func main() {
 	}
 	imports := newImportManager(tracker, monitor)
 
-	appMux := http.NewServeMux()
-	appMux.Handle("/api/", observeRequestDuration(NewServiceAPIHandler(cfg, tracker, monitor, imports, http.DefaultClient)))
-	appMux.Handle("/api/services", observeRequestDuration(NewListAllServicesHandler(cfg)))
-	//edit this to change the sleep time
-	appMux.Handle("/sleep", observeRequestDuration(SleepHandler(sleep_duration)))
-	//Serve files from static folder
-	appMux.Handle("/", observeRequestDuration(http.FileServer(http.Dir("./ui/dist"))))
+	appMux := newAppMux(
+		observeRequestDuration(NewServiceAPIHandler(cfg, tracker, monitor, imports, http.DefaultClient)),
+		observeRequestDuration(SleepHandler(sleep_duration)),
+		observeRequestDuration(http.FileServer(http.Dir("./ui/dist"))),
+	)
 
 	monitorPort := ":5000"
 	appPort := ":8080"

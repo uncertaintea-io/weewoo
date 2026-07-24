@@ -20,7 +20,7 @@ func Query(ctx context.Context, jointECDF []byte, x float64) (CDF, error) {
 	var points bytes.Buffer
 	err := runJECDF(
 		ctx,
-		[]string{"query", "--xx", strconv.FormatFloat(x, 'g', -1, 64)},
+		[]string{"query", strconv.FormatFloat(x, 'g', -1, 64)},
 		func(ctx context.Context, stdin io.Writer) error {
 			if _, err := io.Copy(stdin, bytes.NewReader(jointECDF)); err != nil {
 				return err
@@ -34,6 +34,9 @@ func Query(ctx context.Context, jointECDF []byte, x float64) (CDF, error) {
 	xs, ys, err := readPoints(&points)
 	if err != nil {
 		return nil, err
+	}
+	if len(xs) == 0 && len(ys) == 0 {
+		return nil, nil
 	}
 	if !(slices.IsSorted(xs) && slices.IsSorted(ys)) {
 		return nil, errors.New("data points not monotonically increasing")
@@ -56,7 +59,7 @@ func readPoints(reader *bytes.Buffer) ([]float64, []float64, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	if n > uint64(reader.Len() / 16) {
+	if n > uint64(reader.Len()/16) {
 		// Each point has two float64s, 8 bytes each. If the tool claims we need
 		// more memory than what was actually read, it means something is wrong.
 		// Catching this now is important for safely allocating memory buffers.

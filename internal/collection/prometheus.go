@@ -90,6 +90,9 @@ func QueryPrometheusRange(ctx context.Context, client *http.Client, baseURL, pro
 	}
 
 	samples := pr.Data.Result[0].Values
+	if len(samples) == 0 {
+		return nil, fmt.Errorf("no samples returned")
+	}
 	values := make([]float64, len(samples))
 	for i, sample := range samples {
 		value, err := parsePromSample(sample)

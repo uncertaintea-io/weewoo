@@ -99,6 +99,32 @@ func TestNewListAllServicesHandlerRejectsNonGetMethods(t *testing.T) {
 	assert.Equal(t, http.MethodGet, recorder.Header().Get("Allow"))
 }
 
+func TestAppRoutesListRequestsThroughLiveServiceAPI(t *testing.T) {
+	cfg := config.NewFakeConfig()
+	service := &config.Service{
+		Name:          "checkout",
+		PrometheusURL: "http://prometheus.example.com",
+		LoadQuery:     "load",
+		LatencyQuery:  "latency",
+		Interval:      time.Minute,
+	}
+	require.NoError(t, cfg.WriteService(service))
+	monitor := newTrackingMonitor()
+	monitor.record(service.Id, "healthy", "collection_succeeded", "collected", time.Now().UTC())
+	tracker := &fakeServiceCollector{}
+	apiHandler := NewServiceAPIHandler(cfg, tracker, monitor, newImportManager(tracker, monitor), http.DefaultClient)
+	appHandler := newAppMux(apiHandler, http.NotFoundHandler(), http.NotFoundHandler())
+
+	recorder := httptest.NewRecorder()
+	appHandler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/services", nil))
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	var services []serviceResponse
+	require.NoError(t, json.NewDecoder(recorder.Body).Decode(&services))
+	require.Len(t, services, 1)
+	assert.Equal(t, "healthy", services[0].Tracking.State)
+}
+
 func TestNewCreateServiceHandlerCreatesSchedulesAndImportsService(t *testing.T) {
 	cfg := config.NewFakeConfig()
 	collector := &fakeServiceCollector{}
