@@ -23,7 +23,7 @@ const (
 
 // analyzeSample evaluates collected samples against the current published joint
 // ECDF. It returns true when the samples appear anomalous.
-func analyzeSample(ctx context.Context, cfg config.Config, jointStore ecdf.JointStore, alerts AlertQueue, service *config.Service, indicatorID int, timestamp time.Time, loads, latencies []ecdf.Sample) (bool, error) {
+func analyzeSample(ctx context.Context, cfg config.Config, jointStore ecdf.JointStore, alerts alerting.AlertQueue, service *config.Service, indicatorID int, timestamp time.Time, loads, latencies []ecdf.Sample) (bool, error) {
 	if cfg == nil {
 		return false, fmt.Errorf("nil config")
 	}

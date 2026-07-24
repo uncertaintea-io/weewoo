@@ -8,8 +8,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/uncertaintea-io/weewoo/internal/alerting"
 	"github.com/uncertaintea-io/weewoo/internal/config"
+	"github.com/uncertaintea-io/weewoo/internal/alerting"
 	"github.com/uncertaintea-io/weewoo/internal/ecdf"
 )
 
@@ -32,15 +32,11 @@ type AnalysisQueue interface {
 	Submit(AnalysisRequest) error
 }
 
-type AlertQueue interface {
-	Submit(alerting.AlertingOptions) error
-}
-
 // AnalysisWorker evaluates samples from a bounded background queue.
 type AnalysisWorker struct {
 	cfg        config.Config
 	jointStore ecdf.JointStore
-	alerts     AlertQueue
+	alerts     alerting.AlertQueue
 	jobs       chan AnalysisRequest
 	ctx        context.Context
 	cancel     context.CancelFunc
@@ -48,7 +44,7 @@ type AnalysisWorker struct {
 	stopOnce   sync.Once
 }
 
-func NewAnalysisWorker(cfg config.Config, jointStore ecdf.JointStore, alerts AlertQueue, capacity int) *AnalysisWorker {
+func NewAnalysisWorker(cfg config.Config, jointStore ecdf.JointStore, alerts alerting.AlertQueue, capacity int) *AnalysisWorker {
 	if capacity <= 0 {
 		capacity = DefaultAnalysisQueueCapacity
 	}

@@ -33,6 +33,10 @@ type Dispatcher struct {
 	stopOnce sync.Once
 }
 
+type AlertQueue interface {
+	Submit(AlertingOptions) error
+}
+
 func NewDispatcher(cfg config.Config, capacity int) *Dispatcher {
 	return newDispatcher(cfg, capacity, SendItContext)
 }

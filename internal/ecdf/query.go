@@ -35,6 +35,9 @@ func Query(ctx context.Context, jointECDF []byte, x float64) (CDF, error) {
 	if err != nil {
 		return nil, err
 	}
+	if len(xs) != len(ys) {
+		return nil, errors.New("number of x and y values do not match")
+	}
 	if len(xs) == 0 && len(ys) == 0 {
 		return nil, nil
 	}

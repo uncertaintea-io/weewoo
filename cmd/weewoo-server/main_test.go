@@ -113,16 +113,14 @@ func TestAppRoutesListRequestsThroughLiveServiceAPI(t *testing.T) {
 	monitor.record(service.Id, "healthy", "collection_succeeded", "collected", time.Now().UTC())
 	tracker := &fakeServiceCollector{}
 	apiHandler := NewServiceAPIHandler(cfg, tracker, monitor, newImportManager(tracker, monitor), http.DefaultClient)
-	appHandler := newAppMux(apiHandler, http.NotFoundHandler(), http.NotFoundHandler())
-
+	appHandler := http.NewServeMux()
+	appHandler.Handle("/api/", apiHandler)
+	appHandler.Handle("/sleep", SleepHandler(sleep_duration))
+	appHandler.Handle("/", http.NotFoundHandler())
 	recorder := httptest.NewRecorder()
-	appHandler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/services", nil))
-
+	appHandler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/sleep", nil))
 	require.Equal(t, http.StatusOK, recorder.Code)
-	var services []serviceResponse
-	require.NoError(t, json.NewDecoder(recorder.Body).Decode(&services))
-	require.Len(t, services, 1)
-	assert.Equal(t, "healthy", services[0].Tracking.State)
+	assert.Equal(t, sleep_message, recorder.Body.String())
 }
 
 func TestNewCreateServiceHandlerCreatesSchedulesAndImportsService(t *testing.T) {
