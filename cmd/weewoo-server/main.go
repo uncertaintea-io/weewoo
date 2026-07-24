@@ -314,7 +314,7 @@ func main() {
 	jointStore := ecdf.NewDatabaseJointStore(db)
 	alertDispatcher := alerting.NewDispatcher(cfg, alerting.DefaultQueueCapacity)
 	defer alertDispatcher.Stop()
-	analysisWorker := collection.NewAnalysisWorker(cfg, jointStore, alertDispatcher, collection.DefaultAnalysisQueueCapacity)
+	analysisWorker := collection.NewAnalysisWorker(cfg, jointStore, chunkStore, alertDispatcher, collection.DefaultAnalysisQueueCapacity)
 	defer analysisWorker.Stop()
 	collector := collection.NewCollector(http.DefaultClient, chunkStore, scheduler, analysisWorker)
 	defer collector.Stop()

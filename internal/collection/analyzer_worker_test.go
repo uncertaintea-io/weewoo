@@ -48,7 +48,7 @@ func validAnalysisRequest() AnalysisRequest {
 
 func TestAnalysisWorkerRecoversFromPanicAndContinues(t *testing.T) {
 	store := &panicThenFailJointStore{secondCall: make(chan struct{})}
-	worker := NewAnalysisWorker(config.NewFakeConfig(), store, nil, 2)
+	worker := NewAnalysisWorker(config.NewFakeConfig(), store, nil, nil, 2)
 	t.Cleanup(worker.Stop)
 
 	require.NoError(t, worker.Submit(validAnalysisRequest()))
@@ -78,7 +78,7 @@ func (s *blockingJointStore) ReadCurrent(ctx context.Context, _ int, _ int) ([]b
 
 func TestAnalysisWorkerBoundsQueueAndStopsActiveWork(t *testing.T) {
 	store := &blockingJointStore{started: make(chan struct{})}
-	worker := NewAnalysisWorker(config.NewFakeConfig(), store, nil, 1)
+	worker := NewAnalysisWorker(config.NewFakeConfig(), store, nil, nil, 1)
 
 	require.NoError(t, worker.Submit(validAnalysisRequest()))
 	select {
@@ -100,4 +100,96 @@ func TestAnalysisWorkerBoundsQueueAndStopsActiveWork(t *testing.T) {
 		t.Fatal("analysis worker did not stop active work")
 	}
 	require.ErrorIs(t, worker.Submit(validAnalysisRequest()), ErrAnalyzerStopped)
+}
+
+type failOnceChunkStore struct {
+	ecdf.ChunkStore
+	mu        sync.Mutex
+	calls     int
+	persisted chan struct{}
+}
+
+func (s *failOnceChunkStore) WriteVerdict(context.Context, int, int, time.Time, bool, float64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.calls++
+	if s.calls == 1 {
+		return errors.New("temporary database failure")
+	}
+	close(s.persisted)
+	return nil
+}
+
+func (s *failOnceChunkStore) Calls() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.calls
+}
+
+func TestAnalysisWorkerRetriesFailedVerdictWrite(t *testing.T) {
+	setFakeJECDF(t, `#!/bin/sh
+if [ "$1" != "query" ]; then
+exit 2
+fi
+cat >/dev/null
+printf '\002\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\077\360\000\000\000\000\000\000\077\360\000\000\000\000\000\000'
+`)
+	verdicts := &failOnceChunkStore{persisted: make(chan struct{})}
+	worker := NewAnalysisWorker(config.NewFakeConfig(), staticJointStore{}, verdicts, nil, 1)
+	t.Cleanup(worker.Stop)
+
+	require.NoError(t, worker.Submit(validAnalysisRequest()))
+
+	select {
+	case <-verdicts.persisted:
+	case <-time.After(time.Second):
+		t.Fatal("analysis worker did not retry the failed verdict write")
+	}
+	require.Equal(t, 2, verdicts.Calls())
+}
+
+type failingChunkStore struct {
+	ecdf.ChunkStore
+	mu       sync.Mutex
+	calls    int
+	finished chan struct{}
+}
+
+func (s *failingChunkStore) WriteVerdict(context.Context, int, int, time.Time, bool, float64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.calls++
+	if s.calls == verdictMaxAttempts {
+		close(s.finished)
+	}
+	return errors.New("persistent database failure")
+}
+
+func (s *failingChunkStore) Calls() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.calls
+}
+
+func TestAnalysisWorkerStopsRetryingVerdictAfterMaximumAttempts(t *testing.T) {
+	setFakeJECDF(t, `#!/bin/sh
+if [ "$1" != "query" ]; then
+exit 2
+fi
+cat >/dev/null
+printf '\002\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\077\360\000\000\000\000\000\000\077\360\000\000\000\000\000\000'
+`)
+	verdicts := &failingChunkStore{finished: make(chan struct{})}
+	worker := NewAnalysisWorker(config.NewFakeConfig(), staticJointStore{}, verdicts, nil, 1)
+	t.Cleanup(worker.Stop)
+
+	require.NoError(t, worker.Submit(validAnalysisRequest()))
+
+	select {
+	case <-verdicts.finished:
+	case <-time.After(time.Second):
+		t.Fatal("analysis worker did not complete the configured verdict attempts")
+	}
+	time.Sleep(50 * time.Millisecond)
+	require.Equal(t, verdictMaxAttempts, verdicts.Calls())
 }

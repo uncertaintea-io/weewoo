@@ -8,16 +8,21 @@ import (
 	"sync"
 	"time"
 
-	"github.com/uncertaintea-io/weewoo/internal/config"
 	"github.com/uncertaintea-io/weewoo/internal/alerting"
+	"github.com/uncertaintea-io/weewoo/internal/config"
 	"github.com/uncertaintea-io/weewoo/internal/ecdf"
 )
 
-const DefaultAnalysisQueueCapacity = 64
+const (
+	DefaultAnalysisQueueCapacity = 64
+	verdictRetryInitialDelay     = 100 * time.Millisecond
+	verdictMaxAttempts           = 3
+)
 
 var (
-	ErrAnalysisQueueFull = errors.New("analysis queue is full")
-	ErrAnalyzerStopped   = errors.New("sample analyzer is stopped")
+	ErrAnalysisQueueFull  = errors.New("analysis queue is full")
+	ErrAnalyzerStopped    = errors.New("sample analyzer is stopped")
+	errVerdictPersistence = errors.New("verdict persistence failed")
 )
 
 type AnalysisRequest struct {
@@ -36,6 +41,7 @@ type AnalysisQueue interface {
 type AnalysisWorker struct {
 	cfg        config.Config
 	jointStore ecdf.JointStore
+	chunks     ecdf.ChunkStore
 	alerts     alerting.AlertQueue
 	jobs       chan AnalysisRequest
 	ctx        context.Context
@@ -44,7 +50,7 @@ type AnalysisWorker struct {
 	stopOnce   sync.Once
 }
 
-func NewAnalysisWorker(cfg config.Config, jointStore ecdf.JointStore, alerts alerting.AlertQueue, capacity int) *AnalysisWorker {
+func NewAnalysisWorker(cfg config.Config, jointStore ecdf.JointStore, chunks ecdf.ChunkStore, alerts alerting.AlertQueue, capacity int) *AnalysisWorker {
 	if capacity <= 0 {
 		capacity = DefaultAnalysisQueueCapacity
 	}
@@ -52,6 +58,7 @@ func NewAnalysisWorker(cfg config.Config, jointStore ecdf.JointStore, alerts ale
 	worker := &AnalysisWorker{
 		cfg:        cfg,
 		jointStore: jointStore,
+		chunks:     chunks,
 		alerts:     alerts,
 		jobs:       make(chan AnalysisRequest, capacity),
 		ctx:        ctx,
@@ -113,25 +120,62 @@ func (w *AnalysisWorker) analyze(request AnalysisRequest) {
 		}
 	}()
 
-	ctx, cancel := context.WithTimeout(w.ctx, analyzeSampleTimeout)
-	defer cancel()
-	if _, err := analyzeSample(
-		ctx,
-		w.cfg,
-		w.jointStore,
-		w.alerts,
-		&request.Service,
-		request.IndicatorID,
-		request.Timestamp,
-		request.Loads,
-		request.Latencies,
-	); err != nil {
-		slog.Error(
-			"failed to analyze sample",
+	retryDelay := verdictRetryInitialDelay
+	for attempt := 1; attempt <= verdictMaxAttempts; attempt++ {
+		ctx, cancel := context.WithTimeout(w.ctx, analyzeSampleTimeout)
+		_, err := analyzeSample(
+			ctx,
+			w.cfg,
+			w.jointStore,
+			w.chunks,
+			w.alerts,
+			&request.Service,
+			request.IndicatorID,
+			request.Timestamp,
+			request.Loads,
+			request.Latencies,
+		)
+		cancel()
+		if err == nil {
+			return
+		}
+		if !errors.Is(err, errVerdictPersistence) {
+			slog.Error(
+				"failed to analyze sample",
+				"service_id", request.Service.Id,
+				"indicator_id", request.IndicatorID,
+				"timestamp", request.Timestamp,
+				"error", err,
+			)
+			return
+		}
+		if attempt == verdictMaxAttempts {
+			slog.Error(
+				"failed to persist chunk verdict after retries",
+				"service_id", request.Service.Id,
+				"indicator_id", request.IndicatorID,
+				"timestamp", request.Timestamp,
+				"attempts", attempt,
+				"error", err,
+			)
+			return
+		}
+
+		slog.Warn(
+			"failed to persist chunk verdict; retrying analysis",
 			"service_id", request.Service.Id,
 			"indicator_id", request.IndicatorID,
 			"timestamp", request.Timestamp,
+			"retry_delay", retryDelay,
 			"error", err,
 		)
+		timer := time.NewTimer(retryDelay)
+		select {
+		case <-w.ctx.Done():
+			timer.Stop()
+			return
+		case <-timer.C:
+		}
+		retryDelay *= 2
 	}
 }

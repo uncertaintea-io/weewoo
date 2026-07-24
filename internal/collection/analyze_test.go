@@ -40,6 +40,30 @@ type recordingAlertQueue struct {
 	count int
 }
 
+type recordedVerdict struct {
+	serviceID   int
+	indicatorID int
+	timestamp   time.Time
+	good        bool
+	pValue      float64
+}
+
+type recordingChunkStore struct {
+	ecdf.ChunkStore
+	verdicts []recordedVerdict
+}
+
+func (s *recordingChunkStore) WriteVerdict(_ context.Context, serviceID, indicatorID int, timestamp time.Time, good bool, pValue float64) error {
+	s.verdicts = append(s.verdicts, recordedVerdict{
+		serviceID:   serviceID,
+		indicatorID: indicatorID,
+		timestamp:   timestamp,
+		good:        good,
+		pValue:      pValue,
+	})
+	return nil
+}
+
 func (q *recordingAlertQueue) Submit(alerting.AlertingOptions) error {
 	q.mu.Lock()
 	defer q.mu.Unlock()
@@ -59,7 +83,7 @@ func TestAnalyseSampleRejectsOverflowingSampleCount(t *testing.T) {
 	loads := []ecdf.Sample{{Value: 12, Count: 1}}
 	latencies := []ecdf.Sample{{Value: 30, Count: math.MaxUint64}, {Value: 31, Count: 1}}
 
-	_, err := analyzeSample(context.Background(), config.NewFakeConfig(), unreadJointStore{}, nil, &config.Service{Id: serviceID, Name: "test"}, indicatorID, timestamp, loads, latencies)
+	_, err := analyzeSample(context.Background(), config.NewFakeConfig(), unreadJointStore{}, nil, nil, &config.Service{Id: serviceID, Name: "test"}, indicatorID, timestamp, loads, latencies)
 	require.EqualError(t, err, "invalid latency samples: observation count overflows uint64")
 }
 
@@ -69,7 +93,7 @@ func TestAnalyseSampleRejectsOverflowingLoadCount(t *testing.T) {
 	loads := []ecdf.Sample{{Value: 12, Count: math.MaxUint64}, {Value: 13, Count: 1}}
 	latencies := []ecdf.Sample{{Value: 30, Count: 1}}
 
-	_, err := analyzeSample(context.Background(), config.NewFakeConfig(), unreadJointStore{}, nil, &config.Service{Id: serviceID, Name: "test"}, indicatorID, timestamp, loads, latencies)
+	_, err := analyzeSample(context.Background(), config.NewFakeConfig(), unreadJointStore{}, nil, nil, &config.Service{Id: serviceID, Name: "test"}, indicatorID, timestamp, loads, latencies)
 	require.EqualError(t, err, "invalid load samples: observation count overflows uint64")
 }
 
@@ -87,7 +111,7 @@ func TestAnalyseSampleRejectsZeroTotalSampleCount(t *testing.T) {
 		{"latency", []ecdf.Sample{{Value: 12, Count: 1}}, []ecdf.Sample{{Value: 30, Count: 0}}, "chunk has no latency observations"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			_, err := analyzeSample(context.Background(), config.NewFakeConfig(), unreadJointStore{}, nil, &config.Service{Id: serviceID, Name: "test"}, indicatorID, timestamp, test.loads, test.latencies)
+			_, err := analyzeSample(context.Background(), config.NewFakeConfig(), unreadJointStore{}, nil, nil, &config.Service{Id: serviceID, Name: "test"}, indicatorID, timestamp, test.loads, test.latencies)
 			require.EqualError(t, err, test.wantError)
 		})
 	}
@@ -127,6 +151,7 @@ printf '\000'
 		context.Background(),
 		config.NewFakeConfig(),
 		staticJointStore{},
+		nil,
 		alerts,
 		&config.Service{Id: 1, Name: "test"},
 		LoadLatencyIndicator,
@@ -138,4 +163,94 @@ printf '\000'
 	require.NoError(t, err)
 	require.False(t, anomalous)
 	require.Zero(t, alerts.Count())
+}
+
+func TestAnalyzeSampleMarksAnomalousChunkBadBeforeAlerting(t *testing.T) {
+	setFakeJECDF(t, `#!/bin/sh
+if [ "$1" != "query" ]; then
+exit 2
+fi
+cat >/dev/null
+printf '\002\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\077\360\000\000\000\000\000\000\077\360\000\000\000\000\000\000'
+`)
+	verdicts := &recordingChunkStore{}
+	alerts := &recordingAlertQueue{}
+	timestamp := time.Unix(1_700_000_000, 0)
+
+	anomalous, err := analyzeSample(
+		context.Background(),
+		config.NewFakeConfig(),
+		staticJointStore{},
+		verdicts,
+		alerts,
+		&config.Service{Id: 7, Name: "checkout"},
+		LoadLatencyIndicator,
+		timestamp,
+		[]ecdf.Sample{{Value: 0.5, Count: 10}},
+		[]ecdf.Sample{{Value: 10, Count: 10}},
+	)
+
+	require.NoError(t, err)
+	require.True(t, anomalous)
+	require.Len(t, verdicts.verdicts, 1)
+	require.Equal(t, 7, verdicts.verdicts[0].serviceID)
+	require.Equal(t, LoadLatencyIndicator, verdicts.verdicts[0].indicatorID)
+	require.Equal(t, timestamp, verdicts.verdicts[0].timestamp)
+	require.False(t, verdicts.verdicts[0].good)
+	require.Less(t, verdicts.verdicts[0].pValue, ksSignificanceLevel)
+	require.Equal(t, 1, alerts.Count())
+}
+
+func TestAnalyzeSampleReplacesBadVerdictWhenReevaluationIsNormal(t *testing.T) {
+	setFakeJECDF(t, `#!/bin/sh
+if [ "$1" != "query" ]; then
+exit 2
+fi
+cat >/dev/null
+printf '\002\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\077\360\000\000\000\000\000\000\077\360\000\000\000\000\000\000'
+`)
+	timestamp := time.Unix(1_700_000_000, 0)
+	verdicts := &recordingChunkStore{
+		verdicts: []recordedVerdict{{
+			serviceID:   7,
+			indicatorID: LoadLatencyIndicator,
+			timestamp:   timestamp,
+			good:        false,
+			pValue:      0,
+		}},
+	}
+
+	anomalous, err := analyzeSample(
+		context.Background(),
+		config.NewFakeConfig(),
+		staticJointStore{},
+		verdicts,
+		nil,
+		&config.Service{Id: 7, Name: "checkout"},
+		LoadLatencyIndicator,
+		timestamp,
+		[]ecdf.Sample{{Value: 0.5, Count: 10}},
+		[]ecdf.Sample{
+			{Value: 0.1, Count: 1},
+			{Value: 0.2, Count: 1},
+			{Value: 0.3, Count: 1},
+			{Value: 0.4, Count: 1},
+			{Value: 0.5, Count: 1},
+			{Value: 0.6, Count: 1},
+			{Value: 0.7, Count: 1},
+			{Value: 0.8, Count: 1},
+			{Value: 0.9, Count: 1},
+			{Value: 1, Count: 1},
+		},
+	)
+
+	require.NoError(t, err)
+	require.False(t, anomalous)
+	require.Len(t, verdicts.verdicts, 2)
+	replacement := verdicts.verdicts[1]
+	require.Equal(t, 7, replacement.serviceID)
+	require.Equal(t, LoadLatencyIndicator, replacement.indicatorID)
+	require.Equal(t, timestamp, replacement.timestamp)
+	require.True(t, replacement.good)
+	require.GreaterOrEqual(t, replacement.pValue, ksSignificanceLevel)
 }

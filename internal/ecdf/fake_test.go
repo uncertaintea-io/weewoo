@@ -53,3 +53,25 @@ func TestFakeChunkStoreFunctions(t *testing.T) {
 	assert.Equal(t, chunk2, scannedChunks[1])
 
 }
+
+func TestFakeChunkStoreVerdictControlsBuildEligibility(t *testing.T) {
+	chunkStore := NewFakeChunkStore()
+	timestamp := time.Unix(1_700_000_000, 0)
+	original := []byte{0x01}
+	replacement := []byte{0x02}
+
+	require.NoError(t, chunkStore.WriteChunk(1, 1, timestamp, original))
+	require.NoError(t, chunkStore.WriteVerdict(context.Background(), 1, 1, timestamp, false, 0.001))
+	require.NoError(t, chunkStore.WriteChunk(1, 1, timestamp, replacement))
+
+	out := make(chan []byte, 1)
+	require.NoError(t, chunkStore.ScanGoodChunks(context.Background(), 1, 1, out))
+	close(out)
+	require.Empty(t, out)
+
+	require.NoError(t, chunkStore.WriteVerdict(context.Background(), 1, 1, timestamp, true, 0.9))
+	out = make(chan []byte, 1)
+	require.NoError(t, chunkStore.ScanGoodChunks(context.Background(), 1, 1, out))
+	close(out)
+	require.Equal(t, replacement, <-out)
+}
