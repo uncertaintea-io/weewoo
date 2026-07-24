@@ -15,6 +15,10 @@ func NewDatabaseChunkStore(db *sql.DB) ChunkStore {
 	return &database{db: db}
 }
 
+func NewDatabaseVerdictStore(db *sql.DB) VerdictStore {
+	return &database{db: db}
+}
+
 // WriteChunk writes a time chunk to the database.
 func (c *database) WriteChunk(serviceId int, indicatorId int, timestamp time.Time, chunk []byte) error {
 	_, err := c.db.Exec(`
@@ -50,6 +54,21 @@ func (c *database) ReadChunk(serviceId int, indicatorId int, timestamp time.Time
 		return nil, fmt.Errorf("failed to read chunk: %w", err)
 	}
 	return chunk, nil
+}
+
+// WriteVerdict records the latest verdict for a time chunk. The upsert permits
+// a later review workflow to reverse a verdict without changing this API.
+func (c *database) WriteVerdict(ctx context.Context, serviceID, indicatorID int, timestamp time.Time, good bool, pValue float64) error {
+	_, err := c.db.ExecContext(ctx, `
+		INSERT INTO verdict (service_id, indicator_id, "timestamp", good, pvalue)
+		VALUES ($1, $2, $3::timestamptz(0), $4, $5)
+		ON CONFLICT (service_id, indicator_id, "timestamp")
+		DO UPDATE SET good = EXCLUDED.good, pvalue = EXCLUDED.pvalue
+	`, serviceID, indicatorID, timestamp, good, pValue)
+	if err != nil {
+		return fmt.Errorf("failed to write verdict: %w", err)
+	}
+	return nil
 }
 
 // ScanGoodChunks finds all chunks from "good" samples in a given time range.

@@ -23,7 +23,7 @@ const (
 
 // analyzeSample evaluates collected samples against the current published joint
 // ECDF. It returns true when the samples appear anomalous.
-func analyzeSample(ctx context.Context, cfg config.Config, jointStore ecdf.JointStore, alerts alerting.AlertQueue, service *config.Service, indicatorID int, timestamp time.Time, loads, latencies []ecdf.Sample) (bool, error) {
+func analyzeSample(ctx context.Context, cfg config.Config, jointStore ecdf.JointStore, verdicts ecdf.VerdictStore, alerts alerting.AlertQueue, service *config.Service, indicatorID int, timestamp time.Time, loads, latencies []ecdf.Sample) (bool, error) {
 	if cfg == nil {
 		return false, fmt.Errorf("nil config")
 	}
@@ -85,6 +85,13 @@ func analyzeSample(ctx context.Context, cfg config.Config, jointStore ecdf.Joint
 	}
 	ksResult := kstests.OneSampleIter(cdf, latencyCount, iter.Seq2[float64, uint64](latencyValues))
 	anomalous := isStatisticallySignificant(ksResult.PValue)
+	if verdicts == nil {
+		return false, fmt.Errorf("nil verdict store")
+	}
+	if err := verdicts.WriteVerdict(ctx, service.Id, indicatorID, timestamp, !anomalous, ksResult.PValue); err != nil {
+		return false, fmt.Errorf("%w: %w", errVerdictPersistence, err)
+	}
+
 	if anomalous {
 		generatorURL, err := cfg.GetConfig("alert_generator_url")
 		if err != nil {

@@ -42,7 +42,7 @@ func TestCollectionSucceedsWhenAnalysisFails(t *testing.T) {
 		LatencyQuery:  "latency",
 		Interval:      time.Minute,
 	}
-	analysisWorker := NewAnalysisWorker(config.NewFakeConfig(), unavailableJointStore{}, nil, 1)
+	analysisWorker := NewAnalysisWorker(config.NewFakeConfig(), unavailableJointStore{}, nil, nil, 1)
 	t.Cleanup(analysisWorker.Stop)
 	collector := &collector{
 		client:     prometheus.Client(),
