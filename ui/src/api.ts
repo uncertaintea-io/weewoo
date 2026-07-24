@@ -43,6 +43,55 @@ export interface CreateServiceInput {
   importEnd?: string;
 }
 
+export interface AlertOccurrence {
+  id: number;
+  kind: string;
+  occurredAt: string;
+  detectedAt: string;
+  windowStart?: string;
+  windowEnd?: string;
+  chunkTimestamp?: string;
+  summary: string;
+  technicalDetails: string;
+  evidence: Record<string, unknown>;
+  reviewRevision: number;
+  reviewOverride?: boolean;
+  reviewedAt?: string;
+  reviewReason?: string;
+}
+
+export interface AlertEvent {
+  type: string;
+  message: string;
+  metadata: Record<string, unknown>;
+  occurredAt: string;
+}
+
+export interface AlertRecord {
+  id: number;
+  serviceId?: number;
+  serviceName: string;
+  indicatorId?: number;
+  kind: string;
+  severity: 'info' | 'warning' | 'critical';
+  status: 'firing' | 'resolved';
+  title: string;
+  description: string;
+  impact: string;
+  suggestedAction: string;
+  technicalDetails: string;
+  startedAt: string;
+  lastOccurredAt: string;
+  resolvedAt?: string;
+  resolutionReason?: string;
+  occurrenceCount: number;
+  consecutiveCount: number;
+  alertmanagerState: 'pending' | 'accepted' | 'failed' | 'missed';
+  alertmanagerError?: string;
+  occurrences: AlertOccurrence[];
+  events: AlertEvent[];
+}
+
 type Fetcher = typeof fetch;
 
 export class ServicesApiError extends Error {
@@ -123,6 +172,65 @@ function parseService(value: unknown): Service {
   };
 }
 
+function optionalString(value: unknown): string | undefined {
+  return typeof value === 'string' ? value : undefined;
+}
+
+function parseAlertOccurrence(value: unknown): AlertOccurrence {
+  if (!isRecord(value)) throw new Error('Alert occurrence must be an object.');
+  return {
+    id: readNumber(value.id, 'occurrence.id'),
+    kind: readString(value.kind, 'occurrence.kind'),
+    occurredAt: readString(value.occurredAt, 'occurrence.occurredAt'),
+    detectedAt: readString(value.detectedAt, 'occurrence.detectedAt'),
+    ...(optionalString(value.windowStart) === undefined ? {} : { windowStart: value.windowStart as string }),
+    ...(optionalString(value.windowEnd) === undefined ? {} : { windowEnd: value.windowEnd as string }),
+    ...(optionalString(value.chunkTimestamp) === undefined ? {} : { chunkTimestamp: value.chunkTimestamp as string }),
+    summary: readString(value.summary, 'occurrence.summary'),
+    technicalDetails: readString(value.technicalDetails, 'occurrence.technicalDetails'),
+    evidence: isRecord(value.evidence) ? value.evidence : {},
+    reviewRevision: readNumber(value.reviewRevision, 'occurrence.reviewRevision'),
+    ...(typeof value.reviewOverride === 'boolean' ? { reviewOverride: value.reviewOverride } : {}),
+    ...(optionalString(value.reviewedAt) === undefined ? {} : { reviewedAt: value.reviewedAt as string }),
+    ...(optionalString(value.reviewReason) === undefined ? {} : { reviewReason: value.reviewReason as string }),
+  };
+}
+
+function parseAlert(value: unknown): AlertRecord {
+  if (!isRecord(value)) throw new Error('Alert response item must be an object.');
+  const occurrences = Array.isArray(value.occurrences) ? value.occurrences.map(parseAlertOccurrence) : [];
+  const events: AlertEvent[] = Array.isArray(value.events) ? value.events.filter(isRecord).map((event) => ({
+    type: readString(event.type, 'event.type'),
+    message: readString(event.message, 'event.message'),
+    metadata: isRecord(event.metadata) ? event.metadata : {},
+    occurredAt: readString(event.occurredAt, 'event.occurredAt'),
+  })) : [];
+  return {
+    id: readNumber(value.id, 'alert.id'),
+    ...(typeof value.serviceId === 'number' ? { serviceId: value.serviceId } : {}),
+    serviceName: readString(value.serviceName, 'alert.serviceName'),
+    ...(typeof value.indicatorId === 'number' ? { indicatorId: value.indicatorId } : {}),
+    kind: readString(value.kind, 'alert.kind'),
+    severity: readString(value.severity, 'alert.severity') as AlertRecord['severity'],
+    status: readString(value.status, 'alert.status') as AlertRecord['status'],
+    title: readString(value.title, 'alert.title'),
+    description: readString(value.description, 'alert.description'),
+    impact: readString(value.impact, 'alert.impact'),
+    suggestedAction: readString(value.suggestedAction, 'alert.suggestedAction'),
+    technicalDetails: readString(value.technicalDetails, 'alert.technicalDetails'),
+    startedAt: readString(value.startedAt, 'alert.startedAt'),
+    lastOccurredAt: readString(value.lastOccurredAt, 'alert.lastOccurredAt'),
+    ...(optionalString(value.resolvedAt) === undefined ? {} : { resolvedAt: value.resolvedAt as string }),
+    ...(optionalString(value.resolutionReason) === undefined ? {} : { resolutionReason: value.resolutionReason as string }),
+    occurrenceCount: readNumber(value.occurrenceCount, 'alert.occurrenceCount'),
+    consecutiveCount: readNumber(value.consecutiveCount, 'alert.consecutiveCount'),
+    alertmanagerState: readString(value.alertmanagerState, 'alert.alertmanagerState') as AlertRecord['alertmanagerState'],
+    ...(optionalString(value.alertmanagerError) === undefined ? {} : { alertmanagerError: value.alertmanagerError as string }),
+    occurrences,
+    events,
+  };
+}
+
 async function serviceRequest(path: string, init: RequestInit, fetcher: Fetcher): Promise<Service> {
   const response = await fetcher(path, init);
   if (!response.ok) throw await readServiceError(response);
@@ -190,4 +298,27 @@ export async function CancelImport(id: number, fetcher: Fetcher = fetch): Promis
 
 export async function SetServicePaused(id: number, paused: boolean, fetcher: Fetcher = fetch): Promise<Service> {
   return serviceRequest(`/api/services/${String(id)}/${paused ? 'pause' : 'resume'}`, { method: 'POST', headers: { Accept: 'application/json' } }, fetcher);
+}
+
+export async function ListAlerts(includeHistory = true, fetcher: Fetcher = fetch): Promise<AlertRecord[]> {
+  const response = await fetcher(`/api/alerts?history=${String(includeHistory)}`, { headers: { Accept: 'application/json' } });
+  if (!response.ok) throw await readServiceError(response);
+  const body: unknown = await response.json();
+  if (!Array.isArray(body)) throw new Error('Alerts response must be an array.');
+  return body.map(parseAlert);
+}
+
+export async function ReviewAlertOccurrence(
+  occurrenceId: number,
+  revision: number,
+  accepted: boolean,
+  reason: string,
+  fetcher: Fetcher = fetch,
+): Promise<void> {
+  const response = await fetcher(`/api/alerts/occurrences/${String(occurrenceId)}/review`, {
+    method: 'POST',
+    headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+    body: JSON.stringify({ revision, accepted, reason }),
+  });
+  if (!response.ok) throw await readServiceError(response);
 }

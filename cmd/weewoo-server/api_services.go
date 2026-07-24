@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/uncertaintea-io/weewoo/internal/alerting"
 	"github.com/uncertaintea-io/weewoo/internal/collection"
 	"github.com/uncertaintea-io/weewoo/internal/config"
 )
@@ -21,10 +22,15 @@ type serviceAPI struct {
 	monitor    *trackingMonitor
 	imports    *importManager
 	httpClient *http.Client
+	alerts     *alerting.Manager
 }
 
-func NewServiceAPIHandler(cfg config.Config, tracker serviceCollector, monitor *trackingMonitor, imports *importManager, client *http.Client) http.Handler {
-	return &serviceAPI{cfg: cfg, tracker: tracker, monitor: monitor, imports: imports, httpClient: client}
+func NewServiceAPIHandler(cfg config.Config, tracker serviceCollector, monitor *trackingMonitor, imports *importManager, client *http.Client, alerts ...*alerting.Manager) http.Handler {
+	var alertManager *alerting.Manager
+	if len(alerts) > 0 {
+		alertManager = alerts[0]
+	}
+	return &serviceAPI{cfg: cfg, tracker: tracker, monitor: monitor, imports: imports, httpClient: client, alerts: alertManager}
 }
 
 func (a *serviceAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -71,6 +77,9 @@ func (a *serviceAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			a.tracker.Unschedule(id)
+			if a.alerts != nil {
+				_ = a.alerts.CloseService(r.Context(), id, "monitoring_paused", time.Now().UTC())
+			}
 			a.monitor.record(id, "paused", "tracking_paused", "Prometheus collection was paused", time.Now().UTC())
 		} else {
 			service.Paused = false
@@ -231,11 +240,19 @@ func (a *serviceAPI) update(w http.ResponseWriter, r *http.Request, id int) {
 }
 
 func (a *serviceAPI) delete(w http.ResponseWriter, id int) {
+	service, err := a.cfg.ReadService(id)
+	if err != nil {
+		http.Error(w, "service not found", http.StatusNotFound)
+		return
+	}
 	if err := a.cfg.DeleteService(id); err != nil {
 		http.Error(w, "service not found", http.StatusNotFound)
 		return
 	}
 	a.tracker.Unschedule(id)
+	if a.alerts != nil {
+		_ = a.alerts.CloseService(context.Background(), service.Id, "service_removed", time.Now().UTC())
+	}
 	a.monitor.remove(id)
 	w.WriteHeader(http.StatusNoContent)
 }

@@ -1,6 +1,6 @@
 import { expect } from 'chai';
 import 'mocha';
-import { CreateService, ListAllServices, ServicesApiError } from './api';
+import { CreateService, ListAlerts, ListAllServices, ReviewAlertOccurrence, ServicesApiError } from './api';
 import { datetimeLocalToUtcISOString } from './datetime';
 import { renderServiceUrl } from './rendering';
 
@@ -111,6 +111,65 @@ describe('CreateService', () => {
 
     expect(service.id).to.equal(7);
     expect(service.name).to.equal('checkout');
+  });
+
+});
+
+describe('Alerts API', () => {
+
+  it('reads durable alert history', async () => {
+    const fetcher = (url: string | URL | Request): Promise<Response> => {
+      expect(url).to.equal('/api/alerts?history=true');
+      return Promise.resolve(new Response(JSON.stringify([{
+        id: 9,
+        serviceName: 'checkout',
+        kind: 'anomaly',
+        severity: 'warning',
+        status: 'firing',
+        title: 'Anomalous service behavior detected',
+        description: 'A time chunk differed from the reference.',
+        impact: 'Latency may be unusual.',
+        suggestedAction: 'Inspect the service.',
+        technicalDetails: '',
+        startedAt: '2026-07-24T10:00:00Z',
+        lastOccurredAt: '2026-07-24T10:00:00Z',
+        occurrenceCount: 1,
+        consecutiveCount: 1,
+        alertmanagerState: 'accepted',
+        occurrences: [{
+          id: 12,
+          kind: 'anomaly',
+          occurredAt: '2026-07-24T10:00:00Z',
+          detectedAt: '2026-07-24T10:01:00Z',
+          chunkTimestamp: '2026-07-24T10:00:00Z',
+          summary: 'Anomalous time chunk',
+          technicalDetails: '',
+          evidence: { pValue: 0.001 },
+          reviewRevision: 0,
+        }],
+        events: [],
+      }])));
+    };
+
+    const alerts = await ListAlerts(true, fetcher);
+
+    expect(alerts).to.have.length(1);
+    expect(alerts[0]?.occurrences[0]?.evidence.pValue).to.equal(0.001);
+  });
+
+  it('submits an optimistic chunk review', async () => {
+    const fetcher = (url: string | URL | Request, init?: RequestInit): Promise<Response> => {
+      expect(url).to.equal('/api/alerts/occurrences/12/review');
+      expect(init?.method).to.equal('POST');
+      expect(JSON.parse(init?.body as string)).to.deep.equal({
+        revision: 3,
+        accepted: true,
+        reason: 'planned deployment',
+      });
+      return Promise.resolve(new Response('{}', { status: 200 }));
+    };
+
+    await ReviewAlertOccurrence(12, 3, true, 'planned deployment', fetcher);
   });
 
 });

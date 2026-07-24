@@ -132,6 +132,8 @@ textarea {
 .api-status-card,
 .summary-card,
 .service-panel,
+.alert-panel,
+.alert-card,
 .metric-card,
 .query-card,
 .error-panel,
@@ -140,6 +142,213 @@ textarea {
   background: var(--glass);
   box-shadow: var(--shadow);
   backdrop-filter: blur(18px);
+}
+
+.alert-panel {
+  overflow: hidden;
+  border-radius: var(--radius);
+}
+
+.alert-list {
+  display: grid;
+  gap: 14px;
+  padding: 18px;
+}
+
+.alert-card {
+  overflow: hidden;
+  border-left: 4px solid var(--warning);
+  border-radius: 16px;
+  padding: 20px;
+}
+
+.alert-card--critical {
+  border-left-color: var(--error);
+}
+
+.alert-card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+}
+
+.alert-card-header h2 {
+  margin: 8px 0 4px;
+}
+
+.alert-card-header p,
+.alert-description,
+.alert-guidance p,
+.resolution-copy,
+.review-reason {
+  color: var(--secondary);
+}
+
+.alert-labels {
+  display: flex;
+  gap: 8px;
+}
+
+.severity-pill,
+.alert-status,
+.review-state {
+  display: inline-flex;
+  padding: 5px 9px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 780;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.severity-pill--critical {
+  border-color: color-mix(in srgb, var(--error) 55%, transparent);
+  color: var(--error);
+}
+
+.severity-pill--warning {
+  border-color: color-mix(in srgb, var(--warning) 55%, transparent);
+  color: var(--warning);
+}
+
+.occurrence-total {
+  display: grid;
+  min-width: 78px;
+  text-align: center;
+  font-size: 1.8rem;
+}
+
+.occurrence-total small {
+  color: var(--muted);
+  font-size: 0.68rem;
+  font-weight: 650;
+  text-transform: uppercase;
+}
+
+.alert-description {
+  max-width: 82ch;
+  margin: 20px 0;
+  line-height: 1.6;
+}
+
+.alert-guidance {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.alert-guidance > div,
+.occurrence-row {
+  border: 1px solid var(--divider);
+  border-radius: 12px;
+  background: var(--field);
+  padding: 14px;
+}
+
+.alert-guidance span {
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 760;
+  text-transform: uppercase;
+}
+
+.alert-guidance p {
+  margin: 7px 0 0;
+}
+
+.delivery-state {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-top: 16px;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.delivery-state--accepted {
+  color: var(--success);
+}
+
+.delivery-state--failed {
+  color: var(--error);
+}
+
+.occurrence-disclosure {
+  margin-top: 18px;
+  border-top: 1px solid var(--divider);
+  padding-top: 14px;
+}
+
+.occurrence-disclosure > summary,
+.occurrence-row details > summary {
+  cursor: pointer;
+  color: var(--accent);
+  font-weight: 720;
+}
+
+.occurrence-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.occurrence-row header {
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.occurrence-row header strong,
+.occurrence-row header time {
+  display: block;
+}
+
+.occurrence-row header time {
+  margin-top: 5px;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.review-state.is-accepted {
+  color: var(--success);
+}
+
+.evidence-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 8px;
+  margin: 14px 0;
+}
+
+.evidence-grid div {
+  padding: 8px;
+  border-radius: 8px;
+  background: var(--soft-accent);
+}
+
+.evidence-grid dt {
+  color: var(--muted);
+  font-size: 0.68rem;
+}
+
+.evidence-grid dd {
+  margin: 4px 0 0;
+  overflow-wrap: anywhere;
+}
+
+.occurrence-row pre {
+  max-height: 220px;
+  overflow: auto;
+  white-space: pre-wrap;
+  color: var(--secondary);
+}
+
+.occurrence-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 12px;
 }
 
 .sidebar {
@@ -1304,6 +1513,15 @@ h1 {
   .query-grid,
   .choice-grid,
   .service-form {
+    grid-template-columns: 1fr;
+  }
+
+  .alert-card-header,
+  .occurrence-row header {
+    display: grid;
+  }
+
+  .alert-guidance {
     grid-template-columns: 1fr;
   }
 

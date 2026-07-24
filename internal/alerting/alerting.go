@@ -19,14 +19,20 @@ import (
 )
 
 type AlertingOptions struct {
-	Service      string
-	Serverity    string
-	Indicator    string
-	AlertName    string
-	Summary      string
-	Description  string
-	Annotations  map[string]string
-	GeneratorURL string
+	Service          string
+	Serverity        string
+	Indicator        string
+	AlertName        string
+	Summary          string
+	Description      string
+	Impact           string
+	SuggestedAction  string
+	TechnicalDetails string
+	Annotations      map[string]string
+	Labels           map[string]string
+	GeneratorURL     string
+	StartsAt         time.Time
+	EndsAt           time.Time
 }
 
 func SendIt(cfg config.Config, options AlertingOptions) error {
@@ -38,7 +44,10 @@ func SendItContext(ctx context.Context, cfg config.Config, options AlertingOptio
 	if err != nil {
 		return fmt.Errorf("failed to get alertmanager host: %w", err)
 	}
+	return sendToAlertmanagerHost(ctx, alertmanagerHost, options)
+}
 
+func sendToAlertmanagerHost(ctx context.Context, alertmanagerHost string, options AlertingOptions) error {
 	// configure the transport to use the alertmanager API
 	transportConfig := amclient.DefaultTransportConfig().WithHost(alertmanagerHost)
 	api := amclient.NewHTTPClientWithConfig(strfmt.Default, transportConfig)
@@ -49,23 +58,41 @@ func SendItContext(ctx context.Context, cfg config.Config, options AlertingOptio
 		"description": options.Description,
 		"summary":     options.Summary,
 	}
+	if options.Impact != "" {
+		annotations["impact"] = options.Impact
+	}
+	if options.SuggestedAction != "" {
+		annotations["suggested_action"] = options.SuggestedAction
+	}
+	if options.TechnicalDetails != "" {
+		annotations["technical_details"] = options.TechnicalDetails
+	}
 	if options.Annotations != nil {
 		maps.Copy(annotations, options.Annotations)
+	}
+	labels := models.LabelSet{
+		"alertname": options.AlertName,
+		"severity":  options.Serverity,
+		"instance":  options.GeneratorURL,
+		"service":   options.Service,
+		"indicator": options.Indicator,
+	}
+	if options.Labels != nil {
+		maps.Copy(labels, options.Labels)
+	}
+	startsAt := options.StartsAt
+	if startsAt.IsZero() {
+		startsAt = time.Now()
 	}
 
 	// build the alert payload
 	alertPayload := models.PostableAlerts{
 		&models.PostableAlert{
-			StartsAt: strfmt.DateTime(time.Now()),
+			StartsAt: strfmt.DateTime(startsAt),
+			EndsAt:   strfmt.DateTime(options.EndsAt),
 			Alert: models.Alert{
 				GeneratorURL: strfmt.URI(options.GeneratorURL),
-				Labels: models.LabelSet{
-					"alertname": options.AlertName,
-					"severity":  options.Serverity,
-					"instance":  options.GeneratorURL,
-					"service":   options.Service,
-					"indicator": options.Indicator,
-				},
+				Labels:       labels,
 			},
 			Annotations: annotations,
 		},
@@ -75,7 +102,7 @@ func SendItContext(ctx context.Context, cfg config.Config, options AlertingOptio
 
 	slog.Debug("params", "params", params)
 	// send the alerts over HTTP v2 API
-	_, err = api.Alert.PostAlerts(params)
+	_, err := api.Alert.PostAlerts(params)
 	if err != nil {
 		return fmt.Errorf("failed to send alert: %w", err)
 	}

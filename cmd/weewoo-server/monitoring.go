@@ -103,6 +103,21 @@ func (m *trackingMonitor) handleSchedulerEvent(event collection.SchedulerEvent) 
 	}
 }
 
+func (m *trackingMonitor) handleCollectorEvent(event collection.CollectorEvent) {
+	switch event.Kind {
+	case "tracking_started":
+		m.record(event.ServiceID, "collecting", event.Kind, event.Message, event.At)
+	case "collection_succeeded":
+		m.record(event.ServiceID, "healthy", event.Kind, event.Message, event.At)
+	case "collection_failed":
+		m.record(event.ServiceID, "degraded", event.Kind, event.Message, event.At)
+	case "collection_delayed":
+		m.record(event.ServiceID, "degraded", event.Kind, event.Message, event.At)
+	case "collection_backlog_recovered":
+		m.record(event.ServiceID, "collecting", event.Kind, event.Message, event.At)
+	}
+}
+
 type importJob struct {
 	ID        int        `json:"id"`
 	ServiceID int        `json:"serviceId"`

@@ -36,8 +36,9 @@ func (staticJointStore) ReadCurrent(context.Context, int, int) ([]byte, error) {
 }
 
 type recordingAlertQueue struct {
-	mu    sync.Mutex
-	count int
+	mu        sync.Mutex
+	outcomes  []alerting.AnalysisOutcome
+	baselines int
 }
 
 type recordedVerdict struct {
@@ -64,17 +65,34 @@ func (s *recordingChunkStore) WriteVerdict(_ context.Context, serviceID, indicat
 	return nil
 }
 
-func (q *recordingAlertQueue) Submit(alerting.AlertingOptions) error {
+func (q *recordingAlertQueue) RecordAnalysis(_ context.Context, outcome alerting.AnalysisOutcome) error {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	q.count++
+	q.outcomes = append(q.outcomes, outcome)
+	return nil
+}
+
+func (q *recordingAlertQueue) RecordBaseline(context.Context, int, int, time.Time) error {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.baselines++
+	return nil
+}
+
+func (q *recordingAlertQueue) RecordAnalysisFailure(context.Context, alerting.AnalysisOutcome, error) error {
 	return nil
 }
 
 func (q *recordingAlertQueue) Count() int {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	return q.count
+	count := 0
+	for _, outcome := range q.outcomes {
+		if outcome.Anomalous {
+			count++
+		}
+	}
+	return count
 }
 
 func TestAnalyseSampleRejectsOverflowingSampleCount(t *testing.T) {
@@ -165,7 +183,7 @@ printf '\000'
 	require.Zero(t, alerts.Count())
 }
 
-func TestAnalyzeSampleMarksAnomalousChunkBadBeforeAlerting(t *testing.T) {
+func TestAnalyzeSampleRecordsAnomalousOutcomeAtomically(t *testing.T) {
 	setFakeJECDF(t, `#!/bin/sh
 if [ "$1" != "query" ]; then
 exit 2
@@ -192,13 +210,14 @@ printf '\002\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\077
 
 	require.NoError(t, err)
 	require.True(t, anomalous)
-	require.Len(t, verdicts.verdicts, 1)
-	require.Equal(t, 7, verdicts.verdicts[0].serviceID)
-	require.Equal(t, LoadLatencyIndicator, verdicts.verdicts[0].indicatorID)
-	require.Equal(t, timestamp, verdicts.verdicts[0].timestamp)
-	require.False(t, verdicts.verdicts[0].good)
-	require.Less(t, verdicts.verdicts[0].pValue, ksSignificanceLevel)
+	require.Empty(t, verdicts.verdicts)
 	require.Equal(t, 1, alerts.Count())
+	require.Len(t, alerts.outcomes, 1)
+	require.Equal(t, 7, alerts.outcomes[0].ServiceID)
+	require.Equal(t, LoadLatencyIndicator, alerts.outcomes[0].IndicatorID)
+	require.Equal(t, timestamp, alerts.outcomes[0].Timestamp)
+	require.True(t, alerts.outcomes[0].Anomalous)
+	require.Less(t, alerts.outcomes[0].PValue, ksSignificanceLevel)
 }
 
 func TestAnalyzeSampleReplacesBadVerdictWhenReevaluationIsNormal(t *testing.T) {
