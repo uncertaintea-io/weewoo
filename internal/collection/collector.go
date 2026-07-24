@@ -23,23 +23,21 @@ type Collector interface {
 
 type collector struct {
 	client     *http.Client
-	chunkStore      ecdf.ChunkStore
-	jointStore ecdf.JointStore
-	cfg        config.Config
+	chunkStore ecdf.ChunkStore
 	scheduler  *IntervalScheduler
+	analyzer   AnalysisQueue
 }
 
 // this creates a collector that can be used to collect samples from the prometheus server
-func NewCollector(client *http.Client, chunkStore ecdf.ChunkStore, jointStore ecdf.JointStore, cfg config.Config, scheduler *IntervalScheduler) Collector {
+func NewCollector(client *http.Client, chunkStore ecdf.ChunkStore, scheduler *IntervalScheduler, analyzer AnalysisQueue) Collector {
 	if client == nil {
 		client = http.DefaultClient
 	}
 	c := &collector{
 		client:     client,
-		chunkStore:      chunkStore,
-		jointStore: jointStore,
-		cfg:        cfg,
+		chunkStore: chunkStore,
 		scheduler:  scheduler,
+		analyzer:   analyzer,
 	}
 	return c
 }
@@ -52,8 +50,10 @@ func (c *collector) Schedule(service *config.Service) error {
 	return c.scheduler.AddCallback(service.Id, service.Interval, func(ctx context.Context, start time.Time, end time.Time) IntervalResult {
 		slog.Info("Collecting sample", "service", service.Name, "start", start, "end", end)
 		if err := c.collectSamples(ctx, service, start, end); err != nil {
+			slog.Error("Failed to collect samples", "error", err)
 			return IntervalRetry(err)
 		}
+		slog.Info("Collected samples", "service", service.Name, "start", start, "end", end)
 		return IntervalSuccess()
 	})
 }
@@ -82,6 +82,23 @@ func (c *collector) collectSamples(ctx context.Context, service *config.Service,
 	if err := c.chunkStore.WriteChunk(service.Id, LoadLatencyIndicator, end, chunk); err != nil {
 		return err
 	}
-	_, err = analyzeSample(c.cfg, c.jointStore, service, LoadLatencyIndicator, end, loads, latencies)
-	return err
+	if c.analyzer != nil {
+		request := AnalysisRequest{
+			Service:     *service,
+			IndicatorID: LoadLatencyIndicator,
+			Timestamp:   end,
+			Loads:       loads,
+			Latencies:   latencies,
+		}
+		if err := c.analyzer.Submit(request); err != nil {
+			slog.Error(
+				"failed to queue sample analysis",
+				"service_id", service.Id,
+				"indicator_id", LoadLatencyIndicator,
+				"timestamp", end,
+				"error", err,
+			)
+		}
+	}
+	return nil
 }

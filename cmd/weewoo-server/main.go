@@ -8,8 +8,8 @@ import (
 	"log"
 	"log/slog"
 	"net/http"
-	"os"
 	"net/url"
+	"os"
 	"os/signal"
 	"strconv"
 	"syscall"
@@ -18,6 +18,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/uncertaintea-io/weewoo/internal/alerting"
 	"github.com/uncertaintea-io/weewoo/internal/collection"
 	"github.com/uncertaintea-io/weewoo/internal/config"
 	"github.com/uncertaintea-io/weewoo/internal/ecdf"
@@ -311,7 +312,11 @@ func main() {
 	defer scheduler.Stop()
 	chunkStore := ecdf.NewDatabaseChunkStore(db)
 	jointStore := ecdf.NewDatabaseJointStore(db)
-	collector := collection.NewCollector(http.DefaultClient, chunkStore, jointStore, cfg, scheduler)
+	alertDispatcher := alerting.NewDispatcher(cfg, alerting.DefaultQueueCapacity)
+	defer alertDispatcher.Stop()
+	analysisWorker := collection.NewAnalysisWorker(cfg, jointStore, alertDispatcher, collection.DefaultAnalysisQueueCapacity)
+	defer analysisWorker.Stop()
+	collector := collection.NewCollector(http.DefaultClient, chunkStore, scheduler, analysisWorker)
 	defer collector.Stop()
 	for _, service := range services {
 		if service.Paused {

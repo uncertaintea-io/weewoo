@@ -102,7 +102,12 @@ func TestIntervalSchedulerRealignsWindowsOnIntervalUpdate(t *testing.T) {
 
 func TestIntervalSchedulerRetryDoesNotBlockOtherCallbackIDs(t *testing.T) {
 	clock := NewFakeClock(time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC))
-	scheduler := newTestScheduler(clock)
+	retryScheduled := make(chan struct{}, 1)
+	scheduler := newTestScheduler(clock, WithSchedulerEventHandler(func(event SchedulerEvent) {
+		if event.Kind == SchedulerEventRetryScheduled && event.ID == 1 {
+			retryScheduled <- struct{}{}
+		}
+	}))
 	defer scheduler.Stop()
 
 	windows := make(chan testWindow, 4)
@@ -127,6 +132,11 @@ func TestIntervalSchedulerRetryDoesNotBlockOtherCallbackIDs(t *testing.T) {
 	assert.True(t, seen[1], "callback 1 should have run")
 	assert.True(t, seen[2], "callback 2 should have run")
 
+	select {
+	case <-retryScheduled:
+	case <-time.After(time.Second):
+		t.Fatal("retry was not scheduled")
+	}
 	clock.Advance(time.Second)
 	retry := waitWindow(t, windows)
 	assert.Equal(t, 1, retry.id)
@@ -140,6 +150,28 @@ func TestIntervalSchedulerRetryDoesNotBlockOtherCallbackIDs(t *testing.T) {
 	require.Contains(t, seenNext, 2)
 	assert.Equal(t, time.Date(2026, 1, 1, 12, 1, 0, 0, time.UTC), seenNext[2].start)
 	assert.Equal(t, time.Date(2026, 1, 1, 12, 2, 0, 0, time.UTC), seenNext[2].end)
+}
+
+func TestIntervalSchedulerRecoversCallbackPanicAndRunsOtherCallbacks(t *testing.T) {
+	clock := NewFakeClock(time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC))
+	scheduler := newTestScheduler(clock)
+	defer scheduler.Stop()
+
+	success := make(chan struct{}, 1)
+	require.NoError(t, scheduler.AddCallback(1, time.Minute, func(context.Context, time.Time, time.Time) IntervalResult {
+		panic("broken collection")
+	}, WithLastEnd(clock.Now())))
+	require.NoError(t, scheduler.AddCallback(2, time.Minute, func(context.Context, time.Time, time.Time) IntervalResult {
+		success <- struct{}{}
+		return IntervalSuccess()
+	}, WithLastEnd(clock.Now())))
+
+	clock.Advance(time.Minute)
+	select {
+	case <-success:
+	case <-time.After(time.Second):
+		t.Fatal("another callback did not run after callback panic")
+	}
 }
 
 func TestIntervalSchedulerPermanentFailureResumesFromLastEndOnUpdate(t *testing.T) {

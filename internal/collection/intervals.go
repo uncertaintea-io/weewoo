@@ -3,6 +3,7 @@ package collection
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"math"
 	"sync"
@@ -51,7 +52,7 @@ const (
 	SchedulerEventCallbackDisabled SchedulerEventKind = "callback_disabled"
 	SchedulerEventCallbackResumed  SchedulerEventKind = "callback_resumed"
 	SchedulerEventSchedulerStopped SchedulerEventKind = "scheduler_stopped"
-	MaxBackoffDelay                time.Duration = time.Hour
+	MaxBackoffDelay                time.Duration      = time.Hour
 )
 
 type SchedulerEvent struct {
@@ -532,7 +533,16 @@ func dispatchCallback(completions chan<- callbackCompletion, state *callbackStat
 	fn := state.fn
 	id := state.id
 	go func() {
-		result := fn(ctx, start, end)
+		result := func() (result IntervalResult) {
+			defer func() {
+				if recovered := recover(); recovered != nil {
+					err := fmt.Errorf("interval callback %d panicked: %v", id, recovered)
+					slog.Error("interval callback panic", "callback_id", id, "error", err)
+					result = IntervalRetry(err)
+				}
+			}()
+			return fn(ctx, start, end)
+		}()
 		if ctx.Err() != nil {
 			result = IntervalPermanent(ctx.Err())
 		}

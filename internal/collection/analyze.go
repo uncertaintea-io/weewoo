@@ -23,7 +23,7 @@ const (
 
 // analyzeSample evaluates collected samples against the current published joint
 // ECDF. It returns true when the samples appear anomalous.
-func analyzeSample(cfg config.Config, jointStore ecdf.JointStore, service *config.Service, indicatorID int, timestamp time.Time, loads, latencies []ecdf.Sample) (bool, error) {
+func analyzeSample(ctx context.Context, cfg config.Config, jointStore ecdf.JointStore, alerts alerting.AlertQueue, service *config.Service, indicatorID int, timestamp time.Time, loads, latencies []ecdf.Sample) (bool, error) {
 	if cfg == nil {
 		return false, fmt.Errorf("nil config")
 	}
@@ -52,9 +52,6 @@ func analyzeSample(cfg config.Config, jointStore ecdf.JointStore, service *confi
 		return false, fmt.Errorf("chunk has no latency observations")
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), analyzeSampleTimeout)
-	defer cancel()
-
 	jointECDF, err := jointStore.ReadCurrent(ctx, service.Id, indicatorID)
 	if err != nil {
 		return false, fmt.Errorf("failed to read current joint ECDF: %w", err)
@@ -64,6 +61,15 @@ func analyzeSample(cfg config.Config, jointStore ecdf.JointStore, service *confi
 	cdf, err := ecdf.Query(ctx, jointECDF, loadValue)
 	if err != nil {
 		return false, fmt.Errorf("failed to query joint ECDF: %w", err)
+	}
+	if cdf == nil {
+		slog.Info(
+			"skipping sample analysis because no JECDF points are available",
+			"service_id", service.Id,
+			"indicator_id", indicatorID,
+			"timestamp", timestamp,
+		)
+		return false, nil
 	}
 
 	sortedLatencies := slices.Clone(latencies)
@@ -84,7 +90,15 @@ func analyzeSample(cfg config.Config, jointStore ecdf.JointStore, service *confi
 		if err != nil {
 			return false, fmt.Errorf("failed to read alert generator URL: %w", err)
 		}
-		if err := alerting.SendItContext(ctx, cfg, alerting.AlertingOptions{
+		if alerts == nil {
+			slog.Error(
+				"cannot queue anomaly alert",
+				"service_id", service.Id,
+				"indicator_id", indicatorID,
+				"timestamp", timestamp,
+				"error", "nil alert queue",
+			)
+		} else if err := alerts.Submit(alerting.AlertingOptions{
 			Service:   service.Name,
 			Serverity: "critical",
 			Indicator: "Load vs. Latency",
@@ -100,7 +114,7 @@ func analyzeSample(cfg config.Config, jointStore ecdf.JointStore, service *confi
 			GeneratorURL: generatorURL,
 		}); err != nil {
 			slog.Error(
-				"failed to send anomaly alert",
+				"failed to queue anomaly alert",
 				"service_id", service.Id,
 				"indicator_id", indicatorID,
 				"timestamp", timestamp,

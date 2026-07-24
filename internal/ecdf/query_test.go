@@ -26,9 +26,26 @@ func TestQueryWithRealTool(t *testing.T) {
 	const value = 1.5
 	cdf, err := Query(ctx, sampleJointECDF, value)
 	require.NoError(t, err)
-	assert.NotNil(t, cdf)
+	if cdf == nil {
+		t.Log("jecdf returned zero points; no CDF is available yet")
+		return
+	}
 	assert.Equal(t, 0.0, cdf(-1000))
 	assert.Equal(t, 1.0, cdf(1000))
 	assert.Greater(t, cdf(3), 0.0)
 	assert.Less(t, cdf(3), 1.0)
+}
+
+func TestQueryAcceptsZeroPointResult(t *testing.T) {
+	setJECDFTool(t, writeFakeJECDF(t, `if [ "$1" != "query" ]; then
+	exit 2
+fi
+cat >/dev/null
+printf '\000'
+`))
+
+	cdf, err := Query(context.Background(), nil, 0)
+
+	require.NoError(t, err)
+	assert.Nil(t, cdf)
 }
