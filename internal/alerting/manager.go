@@ -65,6 +65,15 @@ func (m *Manager) recordGoodAnalysis(ctx context.Context, outcome AnalysisOutcom
 		return fmt.Errorf("record good verdict: %w", err)
 	}
 
+	if err := m.resolveByKey(
+		ctx,
+		tx,
+		monitoringConditionKey(outcome.ServiceID, "anomaly_analysis"),
+		"monitoring_recovered",
+		outcome.Timestamp,
+	); err != nil {
+		return err
+	}
 	if !outcome.Historical {
 		key := anomalyConditionKey(outcome.ServiceID, outcome.IndicatorID, false)
 		if err := m.resolveByKey(ctx, tx, key, "good_chunk", outcome.Timestamp); err != nil {
@@ -93,6 +102,15 @@ func (m *Manager) recordAnomaly(ctx context.Context, outcome AnalysisOutcome) er
 		return fmt.Errorf("record bad verdict: %w", err)
 	}
 
+	if err := m.resolveByKey(
+		ctx,
+		tx,
+		monitoringConditionKey(outcome.ServiceID, "anomaly_analysis"),
+		"monitoring_recovered",
+		outcome.Timestamp,
+	); err != nil {
+		return err
+	}
 	occurrenceKey := fmt.Sprintf("chunk:%d:%d:%s", outcome.ServiceID, outcome.IndicatorID, outcome.Timestamp.UTC().Format(time.RFC3339Nano))
 	var duplicate bool
 	if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM alert_occurrence WHERE occurrence_key = $1)`, occurrenceKey).Scan(&duplicate); err != nil {
@@ -345,7 +363,7 @@ func (m *Manager) RecordMonitoringFailure(ctx context.Context, failure Monitorin
 }
 
 func (m *Manager) recordMonitoringFailureTx(ctx context.Context, tx *sql.Tx, failure MonitoringFailure) error {
-	key := fmt.Sprintf("monitoring:%d:%s", failure.ServiceID, failure.Operation)
+	key := monitoringConditionKey(failure.ServiceID, failure.Operation)
 	var id int64
 	var count int
 	err := tx.QueryRowContext(ctx, `
@@ -413,7 +431,7 @@ func (m *Manager) recordMonitoringFailureTx(ctx context.Context, tx *sql.Tx, fai
 }
 
 func (m *Manager) ResolveMonitoring(ctx context.Context, serviceID int, operation string, at time.Time) error {
-	return m.resolveCondition(ctx, fmt.Sprintf("monitoring:%d:%s", serviceID, operation), "monitoring_recovered", at)
+	return m.resolveCondition(ctx, monitoringConditionKey(serviceID, operation), "monitoring_recovered", at)
 }
 
 // InterruptAnomalies closes only live anomaly conditions when monitoring has
@@ -963,6 +981,10 @@ func anomalyConditionKey(serviceID, indicatorID int, historical bool) string {
 		prefix = "historical-anomaly"
 	}
 	return fmt.Sprintf("%s:%d:%d", prefix, serviceID, indicatorID)
+}
+
+func monitoringConditionKey(serviceID int, operation string) string {
+	return fmt.Sprintf("monitoring:%d:%s", serviceID, operation)
 }
 
 func anomalyKind(historical bool) string {
