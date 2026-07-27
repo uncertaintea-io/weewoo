@@ -107,15 +107,17 @@ func (q *RecoveryQueue) EnqueueFailure(ctx context.Context, service *config.Serv
 		if err := enqueueFailedWindow(ctx, tx, service, start, end, retryAt, retention, failure); err != nil {
 			return err
 		}
-		if err := transactional.RecordCollectionFailureTx(ctx, tx, alerting.CollectionFailure{
+		logCommittedEvents, err := transactional.RecordCollectionFailureTx(ctx, tx, alerting.CollectionFailure{
 			ServiceID: service.Id, ServiceName: service.Name, WindowStart: start, WindowEnd: end,
 			Attempt: 1, RetryAt: retryAt, Error: failure,
-		}); err != nil {
+		})
+		if err != nil {
 			return fmt.Errorf("record collection failure: %w", err)
 		}
 		if err := tx.Commit(); err != nil {
 			return err
 		}
+		logCommittedEvents()
 		q.wake(service.Id)
 		return nil
 	}

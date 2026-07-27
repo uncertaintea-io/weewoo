@@ -51,6 +51,7 @@ func (m *Manager) RecordAnalysis(ctx context.Context, outcome AnalysisOutcome) e
 }
 
 func (m *Manager) recordGoodAnalysis(ctx context.Context, outcome AnalysisOutcome) error {
+	var events pendingLifecycleEvents
 	tx, err := m.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin good analysis transaction: %w", err)
@@ -69,6 +70,7 @@ func (m *Manager) recordGoodAnalysis(ctx context.Context, outcome AnalysisOutcom
 	if err := m.resolveByKey(
 		ctx,
 		tx,
+		&events,
 		monitoringConditionKey(outcome.ServiceID, "anomaly_analysis"),
 		"monitoring_recovered",
 		outcome.Timestamp,
@@ -77,17 +79,19 @@ func (m *Manager) recordGoodAnalysis(ctx context.Context, outcome AnalysisOutcom
 	}
 	if !outcome.Historical {
 		key := anomalyConditionKey(outcome.ServiceID, outcome.IndicatorID, false)
-		if err := m.resolveByKey(ctx, tx, key, "good_chunk", outcome.Timestamp); err != nil {
+		if err := m.resolveByKey(ctx, tx, &events, key, "good_chunk", outcome.Timestamp); err != nil {
 			return err
 		}
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit good analysis transaction: %w", err)
 	}
+	events.log(ctx)
 	return nil
 }
 
 func (m *Manager) recordAnomaly(ctx context.Context, outcome AnalysisOutcome) error {
+	var events pendingLifecycleEvents
 	tx, err := m.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin anomaly transaction: %w", err)
@@ -106,6 +110,7 @@ func (m *Manager) recordAnomaly(ctx context.Context, outcome AnalysisOutcome) er
 	if err := m.resolveByKey(
 		ctx,
 		tx,
+		&events,
 		monitoringConditionKey(outcome.ServiceID, "anomaly_analysis"),
 		"monitoring_recovered",
 		outcome.Timestamp,
@@ -118,7 +123,11 @@ func (m *Manager) recordAnomaly(ctx context.Context, outcome AnalysisOutcome) er
 		return fmt.Errorf("check anomaly occurrence: %w", err)
 	}
 	if duplicate {
-		return tx.Commit()
+		if err := tx.Commit(); err != nil {
+			return err
+		}
+		events.log(ctx)
+		return nil
 	}
 
 	conditionKey := anomalyConditionKey(outcome.ServiceID, outcome.IndicatorID, outcome.Historical)
@@ -161,7 +170,7 @@ func (m *Manager) recordAnomaly(ctx context.Context, outcome AnalysisOutcome) er
 		eventType = "escalated"
 		message = fmt.Sprintf("Escalated to critical after %d consecutive anomalous time chunks", count)
 	}
-	if err := insertEvent(ctx, tx, alertID, eventType, message, nil, m.now()); err != nil {
+	if err := events.insert(ctx, tx, alertID, eventType, message, nil, m.now()); err != nil {
 		return err
 	}
 	alert, err := readAlertForPayload(ctx, tx, alertID)
@@ -181,6 +190,7 @@ func (m *Manager) recordAnomaly(ctx context.Context, outcome AnalysisOutcome) er
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit anomaly transaction: %w", err)
 	}
+	events.log(ctx)
 	return nil
 }
 
@@ -226,6 +236,7 @@ func (m *Manager) ensureAnomalyAlert(ctx context.Context, tx *sql.Tx, conditionK
 }
 
 func (m *Manager) RecordAnalysisFailure(ctx context.Context, outcome AnalysisOutcome, failure error) error {
+	var events pendingLifecycleEvents
 	tx, err := m.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin analysis failure transaction: %w", err)
@@ -240,7 +251,7 @@ func (m *Manager) RecordAnalysisFailure(ctx context.Context, outcome AnalysisOut
 	if verdictErr != nil {
 		return fmt.Errorf("record failed analysis state: %w", verdictErr)
 	}
-	if err := m.recordMonitoringFailureTx(ctx, tx, MonitoringFailure{
+	if err := m.recordMonitoringFailureTx(ctx, tx, &events, MonitoringFailure{
 		ServiceID: outcome.ServiceID, ServiceName: outcome.ServiceName, IndicatorID: outcome.IndicatorID,
 		OccurredAt: outcome.Timestamp, Operation: "anomaly_analysis",
 		Description:      "WeeWoo collected metrics but could not complete anomaly analysis. Service behavior for this interval is unknown.",
@@ -251,6 +262,7 @@ func (m *Manager) RecordAnalysisFailure(ctx context.Context, outcome AnalysisOut
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit analysis failure transaction: %w", err)
 	}
+	events.log(ctx)
 	return nil
 }
 
@@ -260,16 +272,19 @@ func (m *Manager) RecordCollectionFailure(ctx context.Context, failure Collectio
 		return fmt.Errorf("begin collection failure transaction: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	if err := m.RecordCollectionFailureTx(ctx, tx, failure); err != nil {
+	logCommittedEvents, err := m.RecordCollectionFailureTx(ctx, tx, failure)
+	if err != nil {
 		return err
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit collection failure transaction: %w", err)
 	}
+	logCommittedEvents()
 	return nil
 }
 
-func (m *Manager) RecordCollectionFailureTx(ctx context.Context, tx *sql.Tx, failure CollectionFailure) error {
+func (m *Manager) RecordCollectionFailureTx(ctx context.Context, tx *sql.Tx, failure CollectionFailure) (func(), error) {
+	var events pendingLifecycleEvents
 	key := fmt.Sprintf("collection:%d", failure.ServiceID)
 	var alertID int64
 	var count int
@@ -296,7 +311,7 @@ func (m *Manager) RecordCollectionFailureTx(ctx context.Context, tx *sql.Tx, fai
 		count = 0
 	}
 	if err != nil {
-		return fmt.Errorf("read or create collection alert: %w", err)
+		return nil, fmt.Errorf("read or create collection alert: %w", err)
 	}
 	count++
 	severity := severityForCount(count, m.criticalThreshold("collection_critical_consecutive"))
@@ -307,7 +322,7 @@ func (m *Manager) RecordCollectionFailureTx(ctx context.Context, tx *sql.Tx, fai
 			consecutive_count=$6, revision=revision+1, updated_at=$7
 		WHERE id=$1
 	`, alertID, severity, description, sanitizeError(failure.Error), failure.WindowEnd, count, m.now()); err != nil {
-		return fmt.Errorf("update collection alert: %w", err)
+		return nil, fmt.Errorf("update collection alert: %w", err)
 	}
 	occurrenceKey := fmt.Sprintf("collection:%d:%s:%s:%d", failure.ServiceID,
 		failure.WindowStart.UTC().Format(time.RFC3339Nano), failure.WindowEnd.UTC().Format(time.RFC3339Nano), failure.Attempt)
@@ -320,7 +335,7 @@ func (m *Manager) RecordCollectionFailureTx(ctx context.Context, tx *sql.Tx, fai
 		ON CONFLICT (occurrence_key) DO NOTHING
 	`, alertID, occurrenceKey, KindCollectionFailure, m.now(), failure.WindowStart, failure.WindowEnd,
 		failure.ServiceID, "Prometheus metrics collection failed", sanitizeError(failure.Error), evidence); err != nil {
-		return fmt.Errorf("insert collection occurrence: %w", err)
+		return nil, fmt.Errorf("insert collection occurrence: %w", err)
 	}
 	eventType, message := "occurrence_added", "Collection retry failed"
 	if created {
@@ -328,23 +343,23 @@ func (m *Manager) RecordCollectionFailureTx(ctx context.Context, tx *sql.Tx, fai
 	} else if severity == SeverityCritical && count == m.criticalThreshold("collection_critical_consecutive") {
 		eventType, message = "escalated", fmt.Sprintf("Escalated to critical after %d consecutive collection failures", count)
 	}
-	if err := insertEvent(ctx, tx, alertID, eventType, message, nil, m.now()); err != nil {
-		return err
+	if err := events.insert(ctx, tx, alertID, eventType, message, nil, m.now()); err != nil {
+		return nil, err
 	}
 	payload, err := readAlertForPayload(ctx, tx, alertID)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	payload.GeneratorURL = failure.GeneratorURL
 	if severity == SeverityCritical && count == m.criticalThreshold("collection_critical_consecutive") {
 		if err := retireDeliveredSeverity(ctx, tx, alertID, SeverityWarning, m.now()); err != nil {
-			return err
+			return nil, err
 		}
 	}
 	if err := insertOutbox(ctx, tx, alertID, "firing", payload, m.now()); err != nil {
-		return err
+		return nil, err
 	}
-	return nil
+	return func() { events.log(ctx) }, nil
 }
 
 func (m *Manager) ResolveCollection(ctx context.Context, serviceID int, at time.Time) error {
@@ -352,18 +367,23 @@ func (m *Manager) ResolveCollection(ctx context.Context, serviceID int, at time.
 }
 
 func (m *Manager) RecordMonitoringFailure(ctx context.Context, failure MonitoringFailure) error {
+	var events pendingLifecycleEvents
 	tx, err := m.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
-	if err := m.recordMonitoringFailureTx(ctx, tx, failure); err != nil {
+	if err := m.recordMonitoringFailureTx(ctx, tx, &events, failure); err != nil {
 		return err
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	events.log(ctx)
+	return nil
 }
 
-func (m *Manager) recordMonitoringFailureTx(ctx context.Context, tx *sql.Tx, failure MonitoringFailure) error {
+func (m *Manager) recordMonitoringFailureTx(ctx context.Context, tx *sql.Tx, events *pendingLifecycleEvents, failure MonitoringFailure) error {
 	key := monitoringConditionKey(failure.ServiceID, failure.Operation)
 	var id int64
 	var count int
@@ -408,12 +428,12 @@ func (m *Manager) recordMonitoringFailureTx(ctx context.Context, tx *sql.Tx, fai
 	if err != nil {
 		return fmt.Errorf("record monitoring occurrence: %w", err)
 	}
-	if err := insertEvent(ctx, tx, id, "occurrence_added", failure.Description, nil, m.now()); err != nil {
+	if err := events.insert(ctx, tx, id, "occurrence_added", failure.Description, nil, m.now()); err != nil {
 		return err
 	}
 	criticalAt := m.criticalThreshold("monitoring_critical_consecutive")
 	if count == criticalAt {
-		if err := insertEvent(ctx, tx, id, "severity_changed", "Monitoring impairment escalated to critical.", map[string]any{"severity": SeverityCritical}, m.now()); err != nil {
+		if err := events.insert(ctx, tx, id, "severity_changed", "Monitoring impairment escalated to critical.", map[string]any{"severity": SeverityCritical}, m.now()); err != nil {
 			return err
 		}
 		if err := retireDeliveredSeverity(ctx, tx, id, SeverityWarning, m.now()); err != nil {
@@ -439,6 +459,7 @@ func (m *Manager) ResolveMonitoring(ctx context.Context, serviceID int, operatio
 // developed a permanent gap. It does not imply that collection itself
 // recovered and leaves unrelated conditions firing.
 func (m *Manager) InterruptAnomalies(ctx context.Context, serviceID int, at time.Time) error {
+	var events pendingLifecycleEvents
 	tx, err := m.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -470,14 +491,19 @@ func (m *Manager) InterruptAnomalies(ctx context.Context, serviceID int, at time
 		return err
 	}
 	for _, id := range ids {
-		if err := m.resolveAlert(ctx, tx, id, "monitoring_interrupted", at); err != nil {
+		if err := m.resolveAlert(ctx, tx, &events, id, "monitoring_interrupted", at); err != nil {
 			return err
 		}
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	events.log(ctx)
+	return nil
 }
 
 func (m *Manager) CloseService(ctx context.Context, serviceID int, reason string, at time.Time) error {
+	var events pendingLifecycleEvents
 	tx, err := m.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -504,26 +530,36 @@ func (m *Manager) CloseService(ctx context.Context, serviceID int, reason string
 		return err
 	}
 	for _, id := range ids {
-		if err := m.resolveAlert(ctx, tx, id, reason, at); err != nil {
+		if err := m.resolveAlert(ctx, tx, &events, id, reason, at); err != nil {
 			return err
 		}
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	events.log(ctx)
+	return nil
 }
 
 func (m *Manager) resolveCondition(ctx context.Context, key, reason string, at time.Time) error {
+	var events pendingLifecycleEvents
 	tx, err := m.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
-	if err := m.resolveByKey(ctx, tx, key, reason, at); err != nil {
+	if err := m.resolveByKey(ctx, tx, &events, key, reason, at); err != nil {
 		return err
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	events.log(ctx)
+	return nil
 }
 
 func (m *Manager) ResolveAlert(ctx context.Context, id int64, reason string, at time.Time) error {
+	var events pendingLifecycleEvents
 	tx, err := m.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -536,13 +572,17 @@ func (m *Manager) ResolveAlert(ctx context.Context, id int64, reason string, at 
 	if status == StatusResolved {
 		return tx.Commit()
 	}
-	if err := m.resolveAlert(ctx, tx, id, reason, at); err != nil {
+	if err := m.resolveAlert(ctx, tx, &events, id, reason, at); err != nil {
 		return err
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	events.log(ctx)
+	return nil
 }
 
-func (m *Manager) resolveByKey(ctx context.Context, tx *sql.Tx, key, reason string, at time.Time) error {
+func (m *Manager) resolveByKey(ctx context.Context, tx *sql.Tx, events *pendingLifecycleEvents, key, reason string, at time.Time) error {
 	var id int64
 	err := tx.QueryRowContext(ctx, `SELECT id FROM alert WHERE condition_key=$1 AND status='firing' FOR UPDATE`, key).Scan(&id)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -551,17 +591,17 @@ func (m *Manager) resolveByKey(ctx context.Context, tx *sql.Tx, key, reason stri
 	if err != nil {
 		return fmt.Errorf("read firing alert for resolution: %w", err)
 	}
-	return m.resolveAlert(ctx, tx, id, reason, at)
+	return m.resolveAlert(ctx, tx, events, id, reason, at)
 }
 
-func (m *Manager) resolveAlert(ctx context.Context, tx *sql.Tx, id int64, reason string, at time.Time) error {
+func (m *Manager) resolveAlert(ctx context.Context, tx *sql.Tx, events *pendingLifecycleEvents, id int64, reason string, at time.Time) error {
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE alert SET status='resolved', resolved_at=$2, resolution_reason=$3,
 			retention_anchor=$2, revision=revision+1, updated_at=$2 WHERE id=$1
 	`, id, at, reason); err != nil {
 		return fmt.Errorf("resolve alert: %w", err)
 	}
-	if err := insertEvent(ctx, tx, id, "resolved", resolutionMessage(reason), map[string]any{"reason": reason}, at); err != nil {
+	if err := events.insert(ctx, tx, id, "resolved", resolutionMessage(reason), map[string]any{"reason": reason}, at); err != nil {
 		return err
 	}
 	var delivered bool
@@ -592,6 +632,7 @@ func (m *Manager) resolveAlert(ctx context.Context, tx *sql.Tx, id int64, reason
 }
 
 func (m *Manager) ReviewOccurrence(ctx context.Context, occurrenceID, expectedRevision int64, accept bool, reason string) (ReviewResult, error) {
+	var events pendingLifecycleEvents
 	tx, err := m.db.BeginTx(ctx, nil)
 	if err != nil {
 		return ReviewResult{}, err
@@ -637,7 +678,7 @@ func (m *Manager) ReviewOccurrence(ctx context.Context, occurrenceID, expectedRe
 	if accept {
 		eventType, message = "accepted_as_normal", "Bad chunk accepted as normal for future reference builds"
 	}
-	if err := insertEvent(ctx, tx, alertID, eventType, message, map[string]any{"occurrenceId": occurrenceID, "reason": reason}, now); err != nil {
+	if err := events.insert(ctx, tx, alertID, eventType, message, map[string]any{"occurrenceId": occurrenceID, "reason": reason}, now); err != nil {
 		return ReviewResult{}, err
 	}
 	if _, err := tx.ExecContext(ctx, `
@@ -663,7 +704,7 @@ func (m *Manager) ReviewOccurrence(ctx context.Context, occurrenceID, expectedRe
 			return ReviewResult{}, err
 		}
 		if remaining == 0 {
-			if err := m.resolveAlert(ctx, tx, alertID, "accepted_as_normal", now); err != nil {
+			if err := m.resolveAlert(ctx, tx, &events, alertID, "accepted_as_normal", now); err != nil {
 				return ReviewResult{}, err
 			}
 			resolved = true
@@ -676,7 +717,7 @@ func (m *Manager) ReviewOccurrence(ctx context.Context, occurrenceID, expectedRe
 		`, alertID, now); err != nil {
 			return ReviewResult{}, err
 		}
-		if err := insertEvent(ctx, tx, alertID, "reopened", "Anomaly condition reopened after restoring the automated Verdict", nil, now); err != nil {
+		if err := events.insert(ctx, tx, alertID, "reopened", "Anomaly condition reopened after restoring the automated Verdict", nil, now); err != nil {
 			return ReviewResult{}, err
 		}
 		if _, err := tx.ExecContext(ctx, `
@@ -692,6 +733,7 @@ func (m *Manager) ReviewOccurrence(ctx context.Context, occurrenceID, expectedRe
 	if err := tx.Commit(); err != nil {
 		return ReviewResult{}, err
 	}
+	events.log(ctx)
 	return ReviewResult{OccurrenceID: occurrenceID, Revision: newRevision, Accepted: accept, ReviewedAt: now, AlertResolved: resolved}, nil
 }
 
@@ -973,7 +1015,17 @@ func retireDeliveredSeverity(ctx context.Context, tx *sql.Tx, alertID int64, sev
 	return insertOutbox(ctx, tx, alertID, "resolved", payload, at)
 }
 
-func insertEvent(ctx context.Context, tx *sql.Tx, alertID int64, eventType, message string, metadata map[string]any, at time.Time) error {
+type lifecycleEvent struct {
+	alertID   int64
+	eventType string
+	message   string
+	metadata  map[string]any
+	at        time.Time
+}
+
+type pendingLifecycleEvents []lifecycleEvent
+
+func (events *pendingLifecycleEvents) insert(ctx context.Context, tx *sql.Tx, alertID int64, eventType, message string, metadata map[string]any, at time.Time) error {
 	if metadata == nil {
 		metadata = map[string]any{}
 	}
@@ -985,16 +1037,28 @@ func insertEvent(ctx context.Context, tx *sql.Tx, alertID int64, eventType, mess
 	if err != nil {
 		return fmt.Errorf("insert alert event: %w", err)
 	}
-	slog.InfoContext(
-		ctx,
-		"alert lifecycle event recorded",
-		"alert_id", alertID,
-		"event", eventType,
-		"message", message,
-		"occurred_at", at,
-		"metadata", metadata,
-	)
+	*events = append(*events, lifecycleEvent{
+		alertID:   alertID,
+		eventType: eventType,
+		message:   message,
+		metadata:  metadata,
+		at:        at,
+	})
 	return nil
+}
+
+func (events pendingLifecycleEvents) log(ctx context.Context) {
+	for _, event := range events {
+		slog.InfoContext(
+			ctx,
+			"alert lifecycle event recorded",
+			"alert_id", event.alertID,
+			"event", event.eventType,
+			"message", event.message,
+			"occurred_at", event.at,
+			"metadata", event.metadata,
+		)
+	}
 }
 
 func anomalyConditionKey(serviceID, indicatorID int, historical bool) string {

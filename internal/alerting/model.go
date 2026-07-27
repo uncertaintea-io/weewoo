@@ -138,6 +138,11 @@ type AnalysisRecorder interface {
 	RecordAnalysisFailure(context.Context, AnalysisOutcome, error) error
 }
 
+// TransactionalCollectionRecorder records collection failures in a
+// caller-owned database transaction.
 type TransactionalCollectionRecorder interface {
-	RecordCollectionFailureTx(context.Context, *sql.Tx, CollectionFailure) error
+	// RecordCollectionFailureTx writes the failure using tx and returns a
+	// callback that logs the resulting lifecycle events. The caller must invoke
+	// the callback only after tx commits successfully and discard it otherwise.
+	RecordCollectionFailureTx(context.Context, *sql.Tx, CollectionFailure) (func(), error)
 }
