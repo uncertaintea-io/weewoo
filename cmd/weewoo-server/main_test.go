@@ -16,14 +16,17 @@ import (
 )
 
 type fakeServiceCollector struct {
-	scheduled *config.Service
-	imported  *config.Service
-	start     time.Time
-	end       time.Time
+	scheduled   *config.Service
+	unscheduled int
+	imported    *config.Service
+	start       time.Time
+	end         time.Time
 }
 
-func (c *fakeServiceCollector) Stop()          {}
-func (c *fakeServiceCollector) Unschedule(int) {}
+func (c *fakeServiceCollector) Stop() {}
+func (c *fakeServiceCollector) Unschedule(serviceID int) {
+	c.unscheduled = serviceID
+}
 func (c *fakeServiceCollector) Schedule(service *config.Service) error {
 	c.scheduled = service
 	return nil
@@ -48,10 +51,10 @@ func TestLiveServiceTrackerSchedulesCollectionAndPublishing(t *testing.T) {
 }
 
 func TestLiveServiceTrackerUnschedulesCollectionAndPublishing(t *testing.T) {
-	var removed []int
+	removed := make(chan int, 1)
 	scheduler := collection.NewIntervalScheduler(collection.WithSchedulerEventHandler(func(event collection.SchedulerEvent) {
 		if event.Kind == collection.SchedulerEventCallbackRemoved {
-			removed = append(removed, event.ID)
+			removed <- event.ID
 		}
 	}))
 	defer scheduler.Stop()
@@ -62,10 +65,17 @@ func TestLiveServiceTrackerUnschedulesCollectionAndPublishing(t *testing.T) {
 	require.NoError(t, scheduler.AddCallback(collection.CallbackID(serviceID, collection.CollectCallback), time.Hour, callback))
 	require.NoError(t, scheduler.AddCallback(collection.CallbackID(serviceID, collection.BuilderCallback), time.Hour, callback))
 
-	tracker := &liveServiceTracker{scheduler: scheduler}
+	collector := &fakeServiceCollector{}
+	tracker := &liveServiceTracker{collector: collector, scheduler: scheduler}
 	tracker.Unschedule(serviceID)
 
-	assert.ElementsMatch(t, []int{3006, 3007}, removed)
+	assert.Equal(t, serviceID, collector.unscheduled)
+	select {
+	case removedID := <-removed:
+		assert.Equal(t, collection.CallbackID(serviceID, collection.BuilderCallback), removedID)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for builder callback removal")
+	}
 }
 
 func TestAppServerWriteTimeoutExceedsPrometheusTestTimeout(t *testing.T) {

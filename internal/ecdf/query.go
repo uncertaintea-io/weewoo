@@ -20,7 +20,7 @@ func Query(ctx context.Context, jointECDF []byte, x float64) (CDF, error) {
 	var points bytes.Buffer
 	err := runJECDF(
 		ctx,
-		[]string{"query", "--xx", strconv.FormatFloat(x, 'g', -1, 64)},
+		[]string{"query", strconv.FormatFloat(x, 'g', -1, 64)},
 		func(ctx context.Context, stdin io.Writer) error {
 			if _, err := io.Copy(stdin, bytes.NewReader(jointECDF)); err != nil {
 				return err
