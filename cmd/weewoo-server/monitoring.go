@@ -77,31 +77,31 @@ func (m *trackingMonitor) remove(serviceID int) {
 	delete(m.services, serviceID)
 }
 
-func (m *trackingMonitor) handleSchedulerEvent(event collection.SchedulerEvent) {
-	// ECDF callbacks use a separate ID range and are reported by their own logs.
-	if event.ID <= 0 || event.ID >= 1000 {
-		return
-	}
-	now := time.Now().UTC()
-	switch event.Kind {
-	case collection.SchedulerEventCallbackAdded, collection.SchedulerEventCallbackUpdated, collection.SchedulerEventCallbackResumed:
-		m.record(event.ID, "collecting", "tracking_started", "Prometheus collection is scheduled", now)
-	case collection.SchedulerEventWindowSucceeded:
-		m.record(event.ID, "healthy", "collection_succeeded", "Prometheus metrics collected successfully", now)
-	case collection.SchedulerEventRetryScheduled:
-		message := "Collection failed; a retry is scheduled"
-		if event.Err != nil {
-			message = event.Err.Error()
-		}
-		m.record(event.ID, "degraded", "collection_failed", message, now)
-	case collection.SchedulerEventCallbackDisabled:
-		message := "Collection stopped after repeated failures"
-		if event.Err != nil {
-			message = event.Err.Error()
-		}
-		m.record(event.ID, "unavailable", "collection_failed", message, now)
-	}
-}
+// func (m *trackingMonitor) handleSchedulerEvent(event collection.SchedulerEvent) {
+// 	// ECDF callbacks use a separate ID range and are reported by their own logs.
+// 	if event.ID <= 0 || event.ID >= 1000 {
+// 		return
+// 	}
+// 	now := time.Now().UTC()
+// 	switch event.Kind {
+// 	case collection.SchedulerEventCallbackAdded, collection.SchedulerEventCallbackUpdated, collection.SchedulerEventCallbackResumed:
+// 		m.record(event.ID, "collecting", "tracking_started", "Prometheus collection is scheduled", now)
+// 	case collection.SchedulerEventWindowSucceeded:
+// 		m.record(event.ID, "healthy", "collection_succeeded", "Prometheus metrics collected successfully", now)
+// 	case collection.SchedulerEventRetryScheduled:
+// 		message := "Collection failed; a retry is scheduled"
+// 		if event.Err != nil {
+// 			message = event.Err.Error()
+// 		}
+// 		m.record(event.ID, "degraded", "collection_failed", message, now)
+// 	case collection.SchedulerEventCallbackDisabled:
+// 		message := "Collection stopped after repeated failures"
+// 		if event.Err != nil {
+// 			message = event.Err.Error()
+// 		}
+// 		m.record(event.ID, "unavailable", "collection_failed", message, now)
+// 	}
+// }
 
 func (m *trackingMonitor) handleCollectorEvent(event collection.CollectorEvent) {
 	switch event.Kind {
