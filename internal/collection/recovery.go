@@ -84,17 +84,6 @@ func (q *RecoveryQueue) Stop() {
 	q.wg.Wait()
 }
 
-func (q *RecoveryQueue) HasPending(ctx context.Context, serviceID int) (bool, error) {
-	var pending bool
-	err := q.db.QueryRowContext(ctx, `
-		SELECT EXISTS (
-			SELECT 1 FROM collection_backlog
-			WHERE service_id=$1 AND state IN ('pending','collecting')
-		)
-	`, serviceID).Scan(&pending)
-	return pending, err
-}
-
 func (q *RecoveryQueue) EnqueueFailure(ctx context.Context, service *config.Service, start, end time.Time, failure error) error {
 	retention := configuredRecoveryDuration(q.cfg, "collection_backlog_retention", defaultBacklogRetention)
 	retryAt := time.Now().UTC().Add(time.Second)
@@ -165,21 +154,6 @@ func enqueueFailedWindow(ctx context.Context, executor sqlExecutor, service *con
 		return fmt.Errorf("enqueue failed collection window: %w", err)
 	}
 	return nil
-}
-
-func (q *RecoveryQueue) EnqueueDeferred(ctx context.Context, service *config.Service, start, end time.Time) error {
-	retention := configuredRecoveryDuration(q.cfg, "collection_backlog_retention", defaultBacklogRetention)
-	_, err := q.db.ExecContext(ctx, `
-		INSERT INTO collection_backlog (
-			service_id, service_name, window_start, window_end, state,
-			next_attempt_at, expires_at
-		) VALUES ($1,$2,$3,$4,'pending',NOW(),$5)
-		ON CONFLICT (service_id, window_start, window_end) DO NOTHING
-	`, service.Id, service.Name, start, end, time.Now().UTC().Add(retention))
-	if err == nil {
-		q.wake(service.Id)
-	}
-	return err
 }
 
 func (q *RecoveryQueue) wake(serviceID int) {

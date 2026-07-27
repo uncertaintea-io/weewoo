@@ -98,3 +98,133 @@ func TestSuccessfulAnalysisResolvesAnalysisMonitoringFailure(t *testing.T) {
 		})
 	}
 }
+
+func TestHistoricalAnalysisPersistsVerdictWithoutChangingAlerts(t *testing.T) {
+	databaseURL := os.Getenv("DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("DATABASE_URL is not set")
+	}
+	db, err := sql.Open("pgx", databaseURL)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, db.Close()) })
+
+	ctx := context.Background()
+	serviceID := int(time.Now().UnixNano()%1_000_000_000) + 1_000_000_000
+	const indicatorID = 72002
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(ctx, `DELETE FROM alert WHERE service_id = $1`, serviceID)
+		_, _ = db.ExecContext(ctx, `DELETE FROM time_chunk WHERE service_id = $1`, serviceID)
+	})
+
+	failedAt := time.Date(2026, 7, 27, 12, 0, 0, 0, time.UTC)
+	historicalAt := failedAt.Add(-24 * time.Hour)
+	historicalFailureAt := historicalAt.Add(-time.Minute)
+	for _, timestamp := range []time.Time{failedAt, historicalAt, historicalFailureAt} {
+		_, err := db.ExecContext(ctx, `
+			INSERT INTO time_chunk (service_id, indicator_id, "timestamp", chunk)
+			VALUES ($1, $2, $3, '\x00')
+		`, serviceID, indicatorID, timestamp)
+		require.NoError(t, err)
+	}
+
+	manager := NewManager(db, config.NewFakeConfig())
+	require.NoError(t, manager.RecordAnalysisFailure(ctx, AnalysisOutcome{
+		ServiceID: serviceID, ServiceName: "repro-service",
+		IndicatorID: indicatorID, Indicator: "latency", Timestamp: failedAt,
+	}, errors.New("live analysis failed")))
+	require.NoError(t, manager.RecordAnalysis(ctx, AnalysisOutcome{
+		ServiceID: serviceID, ServiceName: "repro-service",
+		IndicatorID: indicatorID, Indicator: "latency", Timestamp: historicalAt,
+		PValue: 0.001, Anomalous: true, Historical: true,
+	}))
+	require.NoError(t, manager.RecordAnalysisFailure(ctx, AnalysisOutcome{
+		ServiceID: serviceID, ServiceName: "repro-service",
+		IndicatorID: indicatorID, Indicator: "latency", Timestamp: historicalFailureAt,
+		Historical: true,
+	}, errors.New("historical analysis failed")))
+
+	var state string
+	var good bool
+	require.NoError(t, db.QueryRowContext(ctx, `
+		SELECT analysis_state, automated_good
+		FROM verdict
+		WHERE service_id=$1 AND indicator_id=$2 AND "timestamp"=$3
+	`, serviceID, indicatorID, historicalAt).Scan(&state, &good))
+	require.Equal(t, "bad", state)
+	require.False(t, good)
+
+	require.NoError(t, db.QueryRowContext(ctx, `
+		SELECT analysis_state
+		FROM verdict
+		WHERE service_id=$1 AND indicator_id=$2 AND "timestamp"=$3
+	`, serviceID, indicatorID, historicalFailureAt).Scan(&state))
+	require.Equal(t, "failed", state)
+
+	var alertCount int
+	require.NoError(t, db.QueryRowContext(ctx, `
+		SELECT count(*) FROM alert WHERE service_id=$1
+	`, serviceID).Scan(&alertCount))
+	require.Equal(t, 1, alertCount, "historical analysis must not open an anomaly alert")
+
+	var monitoringStatus string
+	require.NoError(t, db.QueryRowContext(ctx, `
+		SELECT status FROM alert WHERE condition_key=$1
+	`, monitoringConditionKey(serviceID, "anomaly_analysis")).Scan(&monitoringStatus))
+	require.Equal(t, StatusFiring, monitoringStatus, "historical success must not resolve a live monitoring failure")
+}
+
+func TestOutboxRetiresLegacyHistoricalFiringWithoutDelivery(t *testing.T) {
+	databaseURL := os.Getenv("DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("DATABASE_URL is not set")
+	}
+	db, err := sql.Open("pgx", databaseURL)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, db.Close()) })
+
+	ctx := context.Background()
+	serviceID := int(time.Now().UnixNano()%1_000_000_000) + 1_000_000_000
+	const indicatorID = 72003
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(ctx, `DELETE FROM alert WHERE service_id = $1`, serviceID)
+		_, _ = db.ExecContext(ctx, `DELETE FROM time_chunk WHERE service_id = $1`, serviceID)
+	})
+	timestamp := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
+	_, err = db.ExecContext(ctx, `
+		INSERT INTO time_chunk (service_id, indicator_id, "timestamp", chunk)
+		VALUES ($1, $2, $3, '\x00')
+	`, serviceID, indicatorID, timestamp)
+	require.NoError(t, err)
+
+	manager := NewManager(db, config.NewFakeConfig())
+	require.NoError(t, manager.recordAnomaly(ctx, AnalysisOutcome{
+		ServiceID: serviceID, ServiceName: "legacy-service",
+		IndicatorID: indicatorID, Indicator: "latency", Timestamp: timestamp,
+		PValue: 0.001, Anomalous: true, Historical: true,
+	}))
+	deliveries := 0
+	dispatcher := &OutboxDispatcher{
+		db: db, cfg: config.NewFakeConfig(), manager: manager, ctx: ctx,
+		send: func(context.Context, config.Config, AlertingOptions) error {
+			deliveries++
+			return nil
+		},
+	}
+
+	require.NoError(t, dispatcher.deliverOne())
+	require.Zero(t, deliveries)
+
+	var status, reason, outboxState string
+	require.NoError(t, db.QueryRowContext(ctx, `
+		SELECT status, resolution_reason FROM alert
+		WHERE condition_key=$1
+	`, anomalyConditionKey(serviceID, indicatorID, true)).Scan(&status, &reason))
+	require.Equal(t, StatusResolved, status)
+	require.Equal(t, "historical_notifications_disabled", reason)
+	require.NoError(t, db.QueryRowContext(ctx, `
+		SELECT state FROM alert_outbox
+		WHERE alert_id=(SELECT id FROM alert WHERE condition_key=$1)
+		  AND operation='firing'
+	`, anomalyConditionKey(serviceID, indicatorID, true)).Scan(&outboxState))
+	require.Equal(t, "missed", outboxState)
+}

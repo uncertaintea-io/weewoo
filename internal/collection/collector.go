@@ -25,12 +25,19 @@ type Collector interface {
 	Import(ctx context.Context, service *config.Service, start, end time.Time) error
 }
 
+type collectionRecovery interface {
+	Stop()
+	Register(service *config.Service, collect historicalCollector)
+	Unregister(serviceID int)
+	EnqueueFailure(ctx context.Context, service *config.Service, start, end time.Time, failure error) error
+}
+
 type collector struct {
 	client     *http.Client
 	chunkStore ecdf.ChunkStore
 	scheduler  *IntervalScheduler
 	analyzer   AnalysisQueue
-	recovery   *RecoveryQueue
+	recovery   collectionRecovery
 	events     CollectorEventHandler
 }
 
@@ -96,19 +103,6 @@ func (c *collector) Schedule(service *config.Service) error {
 	callbackID := CallbackID(service.Id, CollectCallback)
 	return c.scheduler.AddCallback(callbackID, service.Interval, func(ctx context.Context, start time.Time, end time.Time) IntervalResult {
 		slog.Info("Collecting sample", "service_id", service.Id, "service", service.Name, "start", start, "end", end)
-		if c.recovery != nil {
-			pending, err := c.recovery.HasPending(ctx, service.Id)
-			if err != nil {
-				return IntervalRetry(err)
-			}
-			if pending {
-				if err := c.recovery.EnqueueDeferred(ctx, service, start, end); err != nil {
-					return IntervalRetry(err)
-				}
-				c.emit(service.Id, "collection_delayed", "Collection is catching up chronologically")
-				return IntervalSuccess()
-			}
-		}
 		if err := c.collectSamples(ctx, service, start, end, false); err != nil {
 			slog.Error("Failed to collect samples", "service_id", service.Id, "service", service.Name, "start", start, "end", end, "error", err)
 			if c.recovery != nil {

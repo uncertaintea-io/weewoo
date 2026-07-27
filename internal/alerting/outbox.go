@@ -199,6 +199,12 @@ func (d *OutboxDispatcher) deliverOne() error {
 		`, id)
 		return err
 	}
+	if kind == KindHistoricalAnomaly && payload.EndsAt.IsZero() {
+		if err := d.manager.ResolveAlert(d.ctx, alertID, "historical_notifications_disabled", time.Now().UTC()); err != nil {
+			return fmt.Errorf("retire historical anomaly notification: %w", err)
+		}
+		return nil
+	}
 	options := AlertingOptions{
 		Service: payload.Service, Serverity: payload.Severity, Indicator: payload.Indicator,
 		AlertName: payload.AlertName, Summary: payload.Summary, Description: payload.Description,
@@ -237,11 +243,6 @@ func (d *OutboxDispatcher) deliverOne() error {
 		return err
 	}
 	events.log(d.ctx)
-	if kind == KindHistoricalAnomaly && payload.EndsAt.IsZero() {
-		if err := d.manager.ResolveAlert(d.ctx, alertID, "historical_occurrence_completed", now); err != nil {
-			return fmt.Errorf("resolve delivered historical anomaly: %w", err)
-		}
-	}
 	return nil
 }
 

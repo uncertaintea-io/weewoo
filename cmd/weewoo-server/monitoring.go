@@ -89,7 +89,7 @@ func (m *trackingMonitor) handleCollectorEvent(event collection.CollectorEvent) 
 	case "collection_delayed":
 		m.record(event.ServiceID, "degraded", event.Kind, event.Message, event.At)
 	case "collection_backlog_recovered":
-		m.record(event.ServiceID, "collecting", event.Kind, event.Message, event.At)
+		m.record(event.ServiceID, "recovered", event.Kind, event.Message, event.At)
 	}
 }
 
@@ -139,7 +139,7 @@ func (m *importManager) start(service *config.Service, start, end time.Time) imp
 			}
 			message := err.Error()
 			m.finish(job.ID, "failed", message, now)
-			m.monitor.record(service.Id, "degraded", "import_failed", message, now)
+			m.monitor.record(service.Id, "", "import_failed", message, now)
 			slog.Error("historical import failed", "import_id", job.ID, "service_id", service.Id, "error", err)
 			return
 		}

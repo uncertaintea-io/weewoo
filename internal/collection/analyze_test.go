@@ -38,6 +38,7 @@ func (staticJointStore) ReadCurrent(context.Context, int, int) ([]byte, error) {
 type recordingAlertQueue struct {
 	mu        sync.Mutex
 	outcomes  []alerting.AnalysisOutcome
+	failures  []alerting.AnalysisOutcome
 	baselines int
 }
 
@@ -79,7 +80,10 @@ func (q *recordingAlertQueue) RecordBaseline(context.Context, int, int, time.Tim
 	return nil
 }
 
-func (q *recordingAlertQueue) RecordAnalysisFailure(context.Context, alerting.AnalysisOutcome, error) error {
+func (q *recordingAlertQueue) RecordAnalysisFailure(_ context.Context, outcome alerting.AnalysisOutcome, _ error) error {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.failures = append(q.failures, outcome)
 	return nil
 }
 
@@ -218,6 +222,40 @@ printf '\002\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\077
 	require.Equal(t, timestamp, alerts.outcomes[0].Timestamp)
 	require.True(t, alerts.outcomes[0].Anomalous)
 	require.Less(t, alerts.outcomes[0].PValue, ksSignificanceLevel)
+}
+
+func TestHistoricalAnomalyRecordsVerdictWithoutAlert(t *testing.T) {
+	setFakeJECDF(t, `#!/bin/sh
+if [ "$1" != "query" ]; then
+exit 2
+fi
+cat >/dev/null
+printf '\002\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\077\360\000\000\000\000\000\000\077\360\000\000\000\000\000\000'
+`)
+	verdicts := &recordingChunkStore{}
+	alerts := &recordingAlertQueue{}
+	timestamp := time.Unix(1_700_000_000, 0)
+
+	anomalous, err := analyzeSample(
+		context.Background(),
+		config.NewFakeConfig(),
+		staticJointStore{},
+		verdicts,
+		alerts,
+		&config.Service{Id: 7, Name: "checkout"},
+		LoadLatencyIndicator,
+		timestamp,
+		[]ecdf.Sample{{Value: 0.5, Count: 10}},
+		[]ecdf.Sample{{Value: 10, Count: 10}},
+		true,
+	)
+
+	require.NoError(t, err)
+	require.True(t, anomalous)
+	require.Empty(t, alerts.outcomes)
+	require.Len(t, verdicts.verdicts, 1)
+	require.False(t, verdicts.verdicts[0].good)
+	require.Equal(t, timestamp, verdicts.verdicts[0].timestamp)
 }
 
 func TestAnalyzeSampleReplacesBadVerdictWhenReevaluationIsNormal(t *testing.T) {
