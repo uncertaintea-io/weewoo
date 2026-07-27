@@ -62,14 +62,20 @@ func TestStartECDFBuilderBuildsIntervalOnceAcrossReplicas(t *testing.T) {
 	setFakeJECDF(t, "#!/bin/sh\ncat >/dev/null\necho -n 'fake-ecdf-output'\n")
 	cfg := config.NewFakeConfig()
 	require.NoError(t, cfg.WriteService(&config.Service{Id: 7, Name: "api"}))
+	require.NoError(t, cfg.SetConfig(ECDFBaselineChunksConfigKey, "1"))
+	chunks := ecdf.NewFakeChunkStore()
+	chunkTime := time.Now().Add(-30 * time.Minute)
+	chunk, err := ecdf.Encode(chunkTime, []ecdf.Sample{{Value: 1, Count: 1}}, []ecdf.Sample{{Value: 2, Count: 1}})
+	require.NoError(t, err)
+	require.NoError(t, chunks.WriteChunk(7, LoadLatencyIndicator, chunkTime, chunk))
 	joint := newRecordingJointStore()
 	schedulerA := NewIntervalScheduler(WithSchedulerEventHandler(nil))
 	schedulerB := NewIntervalScheduler(WithSchedulerEventHandler(nil))
 	defer schedulerA.Stop()
 	defer schedulerB.Stop()
 
-	require.NoError(t, StartECDFBuilder(ecdf.NewFakeChunkStore(), joint, cfg, schedulerA))
-	require.NoError(t, StartECDFBuilder(ecdf.NewFakeChunkStore(), joint, cfg, schedulerB))
+	require.NoError(t, StartECDFBuilder(chunks, joint, cfg, schedulerA))
+	require.NoError(t, StartECDFBuilder(chunks, joint, cfg, schedulerB))
 	select {
 	case <-joint.published:
 	case <-time.After(time.Second):
@@ -123,6 +129,7 @@ func TestStartECDFBuilderPublishesConfiguredServices(t *testing.T) {
 	setFakeJECDF(t, "#!/bin/sh\ncat >/dev/null\necho -n 'fake-ecdf-output'\n")
 	cfg := config.NewFakeConfig()
 	require.NoError(t, cfg.WriteService(&config.Service{Id: 7, Name: "api"}))
+	require.NoError(t, cfg.SetConfig(ECDFBaselineChunksConfigKey, "1"))
 	chunks := ecdf.NewFakeChunkStore()
 	chunkTime := time.Now().Add(-30 * time.Minute)
 	chunk, err := ecdf.Encode(chunkTime, []ecdf.Sample{{Value: 1, Count: 1}}, []ecdf.Sample{{Value: 2, Count: 1}})

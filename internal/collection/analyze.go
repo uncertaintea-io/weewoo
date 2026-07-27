@@ -3,6 +3,8 @@ package collection
 import (
 	"cmp"
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"iter"
 	"log/slog"
@@ -23,7 +25,7 @@ const (
 
 // analyzeSample evaluates collected samples against the current published joint
 // ECDF. It returns true when the samples appear anomalous.
-func analyzeSample(ctx context.Context, cfg config.Config, jointStore ecdf.JointStore, chunks ecdf.ChunkStore, alerts alerting.AlertQueue, service *config.Service, indicatorID int, timestamp time.Time, loads, latencies []ecdf.Sample) (bool, error) {
+func analyzeSample(ctx context.Context, cfg config.Config, jointStore ecdf.JointStore, chunks ecdf.ChunkStore, alerts alerting.AnalysisRecorder, service *config.Service, indicatorID int, timestamp time.Time, loads, latencies []ecdf.Sample, historical ...bool) (bool, error) {
 	if cfg == nil {
 		return false, fmt.Errorf("nil config")
 	}
@@ -54,6 +56,12 @@ func analyzeSample(ctx context.Context, cfg config.Config, jointStore ecdf.Joint
 
 	jointECDF, err := jointStore.ReadCurrent(ctx, service.Id, indicatorID)
 	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) && alerts != nil {
+			if recordErr := alerts.RecordBaseline(ctx, service.Id, indicatorID, timestamp); recordErr != nil {
+				return false, fmt.Errorf("%w: %w", errVerdictPersistence, recordErr)
+			}
+			return false, nil
+		}
 		return false, fmt.Errorf("failed to read current joint ECDF: %w", err)
 	}
 
@@ -69,6 +77,11 @@ func analyzeSample(ctx context.Context, cfg config.Config, jointStore ecdf.Joint
 			"indicator_id", indicatorID,
 			"timestamp", timestamp,
 		)
+		if alerts != nil {
+			if err := alerts.RecordBaseline(ctx, service.Id, indicatorID, timestamp); err != nil {
+				return false, fmt.Errorf("%w: %w", errVerdictPersistence, err)
+			}
+		}
 		return false, nil
 	}
 
@@ -85,48 +98,27 @@ func analyzeSample(ctx context.Context, cfg config.Config, jointStore ecdf.Joint
 	}
 	ksResult := kstests.OneSampleIter(cdf, latencyCount, iter.Seq2[float64, uint64](latencyValues))
 	anomalous := isStatisticallySignificant(ksResult.PValue)
-	if chunks == nil {
-		return false, fmt.Errorf("nil chunk store")
-	}
-	if err := chunks.WriteVerdict(ctx, service.Id, indicatorID, timestamp, !anomalous, ksResult.PValue); err != nil {
-		return false, fmt.Errorf("%w: %w", errVerdictPersistence, err)
-	}
-
-	if anomalous {
-		generatorURL, err := cfg.GetConfig("alert_generator_url")
-		if err != nil {
-			return false, fmt.Errorf("failed to read alert generator URL: %w", err)
-		}
-		if alerts == nil {
-			slog.Error(
-				"cannot queue anomaly alert",
-				"service_id", service.Id,
-				"indicator_id", indicatorID,
-				"timestamp", timestamp,
-				"error", "nil alert queue",
-			)
-		} else if err := alerts.Submit(alerting.AlertingOptions{
-			Service:   service.Name,
-			Serverity: "critical",
-			Indicator: "Load vs. Latency",
-			AlertName: "anomalous_sample",
-			Summary:   "Anomalous sample detected",
-			Description: fmt.Sprintf(
-				"Current latency distribution differs from the reference at load %f (KS p-value %g is below significance level %g).",
-				loadValue,
-				ksResult.PValue,
-				ksSignificanceLevel,
-			),
-			Annotations:  nil,
-			GeneratorURL: generatorURL,
+	generatorURL, _ := cfg.GetConfig("alert_generator_url")
+	description := fmt.Sprintf(
+		"Current latency distribution differs from the reference at load %f (KS p-value %g; threshold %g).",
+		loadValue, ksResult.PValue, ksSignificanceLevel,
+	)
+	if alerts != nil {
+		isHistorical := len(historical) > 0 && historical[0]
+		if err := alerts.RecordAnalysis(ctx, alerting.AnalysisOutcome{
+			ServiceID: service.Id, ServiceName: service.Name, IndicatorID: indicatorID,
+			Indicator: "Load vs. Latency", Timestamp: timestamp, Load: loadValue,
+			PValue: ksResult.PValue, Threshold: ksSignificanceLevel, Anomalous: anomalous,
+			Historical: isHistorical, GeneratorURL: generatorURL, Description: description, TechnicalDetails: description,
 		}); err != nil {
-			slog.Error(
-				"failed to queue anomaly alert",
-				"service_id", service.Id,
-				"indicator_id", indicatorID,
-				"timestamp", timestamp,
-				"error", err,
-			)
+			return false, fmt.Errorf("%w: %w", errVerdictPersistence, err)
+		}
+	} else {
+		if chunks == nil {
+			return false, fmt.Errorf("nil chunk store")
+		}
+		if err := chunks.WriteVerdict(ctx, service.Id, indicatorID, timestamp, !anomalous, ksResult.PValue); err != nil {
+			return false, fmt.Errorf("%w: %w", errVerdictPersistence, err)
 		}
 	}
 

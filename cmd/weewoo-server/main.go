@@ -114,7 +114,7 @@ func (t *liveServiceTracker) Import(ctx context.Context, service *config.Service
 }
 
 func (t *liveServiceTracker) Unschedule(serviceID int) {
-	t.scheduler.RemoveCallback(collection.CallbackID(serviceID, collection.CollectCallback))
+	t.collector.Unschedule(serviceID)
 	t.scheduler.RemoveCallback(collection.CallbackID(serviceID, collection.BuilderCallback))
 }
 
@@ -308,15 +308,23 @@ func main() {
 		log.Fatalf("Failed to read services: %v", err)
 	}
 	monitor := newTrackingMonitor()
-	scheduler := collection.NewIntervalScheduler(collection.WithSchedulerEventHandler(monitor.handleSchedulerEvent))
+	scheduler := collection.NewIntervalScheduler()
 	defer scheduler.Stop()
 	chunkStore := ecdf.NewDatabaseChunkStore(db)
 	jointStore := ecdf.NewDatabaseJointStore(db)
-	alertDispatcher := alerting.NewDispatcher(cfg, alerting.DefaultQueueCapacity)
+	alertManager := alerting.NewManager(db, cfg)
+	alertDispatcher := alerting.NewOutboxDispatcher(db, cfg, alertManager)
 	defer alertDispatcher.Stop()
-	analysisWorker := collection.NewAnalysisWorker(cfg, jointStore, chunkStore, alertDispatcher, collection.DefaultAnalysisQueueCapacity)
+	analysisWorker := collection.NewAnalysisWorker(cfg, jointStore, chunkStore, alertManager, collection.DefaultAnalysisQueueCapacity)
 	defer analysisWorker.Stop()
-	collector := collection.NewCollector(http.DefaultClient, chunkStore, scheduler, analysisWorker)
+	collector := collection.NewCollector(
+		http.DefaultClient,
+		chunkStore,
+		scheduler,
+		analysisWorker,
+		collection.WithRecoveryQueue(db, cfg, alertManager),
+		collection.WithCollectorEventHandler(monitor.handleCollectorEvent),
+	)
 	defer collector.Stop()
 	for _, service := range services {
 		if service.Paused {
@@ -345,7 +353,9 @@ func main() {
 	imports := newImportManager(tracker, monitor)
 
 	appMux := http.NewServeMux()
-	appMux.Handle("/api/", observeRequestDuration(NewServiceAPIHandler(cfg, tracker, monitor, imports, http.DefaultClient)))
+	appMux.Handle("/api/alerts", observeRequestDuration(NewAlertAPIHandler(alertManager)))
+	appMux.Handle("/api/alerts/", observeRequestDuration(NewAlertAPIHandler(alertManager)))
+	appMux.Handle("/api/", observeRequestDuration(NewServiceAPIHandler(cfg, tracker, monitor, imports, http.DefaultClient, alertManager)))
 	appMux.Handle("/api/services", observeRequestDuration(NewListAllServicesHandler(cfg)))
 	//edit this to change the sleep time
 	appMux.Handle("/sleep", observeRequestDuration(SleepHandler(sleep_duration)))

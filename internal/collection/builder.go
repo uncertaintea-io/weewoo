@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"strconv"
 	"time"
 
 	"github.com/uncertaintea-io/weewoo/internal/config"
@@ -23,7 +24,9 @@ const (
 	ReservedCallbackIds = 1000
 
 	ECDFScheduledBuildTimeoutConfigKey = "ecdf_scheduled_build_timeout"
+	ECDFBaselineChunksConfigKey        = "ecdf_baseline_chunks"
 	defaultECDFScheduledBuildTimeout   = 5 * time.Minute
+	defaultECDFBaselineChunks          = 10
 )
 
 type CallbackType int
@@ -102,6 +105,28 @@ func ScheduleECDFBuilder(serviceID int, chunkStore ecdf.ChunkStore, jointStore e
 		buildCtx, cancel := context.WithTimeout(ctx, buildTimeout)
 		defer cancel()
 
+		pendingRecovery, err := chunkStore.HasPendingRecovery(buildCtx, serviceID)
+		if err != nil {
+			return IntervalRetry(fmt.Errorf("check recovery backlog: %w", err))
+		}
+		if pendingRecovery {
+			slog.Info("deferring joint ECDF build while collection recovery is pending", "service_id", serviceID)
+			return IntervalSuccess()
+		}
+		minimumChunks, err := configuredPositiveInt(cfg, ECDFBaselineChunksConfigKey, defaultECDFBaselineChunks)
+		if err != nil {
+			return IntervalPermanent(err)
+		}
+		eligibleChunks, err := chunkStore.CountEligibleChunks(buildCtx, serviceID, LoadLatencyIndicator)
+		if err != nil {
+			return IntervalRetry(err)
+		}
+		if eligibleChunks < minimumChunks {
+			slog.Info("deferring first joint ECDF build until baseline is ready",
+				"service_id", serviceID, "eligible_chunks", eligibleChunks, "required_chunks", minimumChunks)
+			return IntervalSuccess()
+		}
+
 		bytesWritten, published, err := jointStore.Publish(buildCtx, serviceID, LoadLatencyIndicator, end, func(out io.Writer) error {
 			if err := ecdf.BuildJointECDFContext(buildCtx, chunkStore, serviceID, LoadLatencyIndicator, out); err != nil {
 				return fmt.Errorf("ECDF generation failed: %w", err)
@@ -128,6 +153,21 @@ func ScheduleECDFBuilder(serviceID int, chunkStore ecdf.ChunkStore, jointStore e
 		return fmt.Errorf("failed to add callback for service %d: %w", serviceID, err)
 	}
 	return nil
+}
+
+func configuredPositiveInt(cfg config.Config, key string, fallback int) (int, error) {
+	value, err := cfg.GetConfig(key)
+	if err != nil {
+		return 0, fmt.Errorf("failed to read %s: %w", key, err)
+	}
+	if value == "" {
+		return fallback, nil
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil || parsed <= 0 {
+		return 0, fmt.Errorf("invalid %s %q: must be a positive integer", key, value)
+	}
+	return parsed, nil
 }
 
 func configuredDuration(cfg config.Config, key string, fallback time.Duration) (time.Duration, error) {

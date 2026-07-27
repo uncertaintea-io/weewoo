@@ -31,6 +31,7 @@ type AnalysisRequest struct {
 	Timestamp   time.Time
 	Loads       []ecdf.Sample
 	Latencies   []ecdf.Sample
+	Historical  bool
 }
 
 type AnalysisQueue interface {
@@ -42,7 +43,7 @@ type AnalysisWorker struct {
 	cfg        config.Config
 	jointStore ecdf.JointStore
 	chunks     ecdf.ChunkStore
-	alerts     alerting.AlertQueue
+	alerts     alerting.AnalysisRecorder
 	jobs       chan AnalysisRequest
 	ctx        context.Context
 	cancel     context.CancelFunc
@@ -50,7 +51,7 @@ type AnalysisWorker struct {
 	stopOnce   sync.Once
 }
 
-func NewAnalysisWorker(cfg config.Config, jointStore ecdf.JointStore, chunks ecdf.ChunkStore, alerts alerting.AlertQueue, capacity int) *AnalysisWorker {
+func NewAnalysisWorker(cfg config.Config, jointStore ecdf.JointStore, chunks ecdf.ChunkStore, alerts alerting.AnalysisRecorder, capacity int) *AnalysisWorker {
 	if capacity <= 0 {
 		capacity = DefaultAnalysisQueueCapacity
 	}
@@ -134,6 +135,7 @@ func (w *AnalysisWorker) analyze(request AnalysisRequest) {
 			request.Timestamp,
 			request.Loads,
 			request.Latencies,
+			request.Historical,
 		)
 		cancel()
 		if err == nil {
@@ -147,6 +149,17 @@ func (w *AnalysisWorker) analyze(request AnalysisRequest) {
 				"timestamp", request.Timestamp,
 				"error", err,
 			)
+			if w.alerts != nil && !errors.Is(err, context.Canceled) {
+				recordCtx, recordCancel := context.WithTimeout(w.ctx, analyzeSampleTimeout)
+				recordErr := w.alerts.RecordAnalysisFailure(recordCtx, alerting.AnalysisOutcome{
+					ServiceID: request.Service.Id, ServiceName: request.Service.Name,
+					IndicatorID: request.IndicatorID, Timestamp: request.Timestamp,
+				}, err)
+				recordCancel()
+				if recordErr != nil {
+					slog.Error("failed to record analysis impairment", "error", recordErr)
+				}
+			}
 			return
 		}
 		if attempt == verdictMaxAttempts {

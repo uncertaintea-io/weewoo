@@ -18,6 +18,10 @@ git diff  # if there are diffs, merge changes before continuing
 go test ./...
 pre-commit run --all-files
 
+# Confirm the target database has every migration, including alert history:
+go run ./cmd/migrate -config config.yaml status
+go run ./cmd/migrate -config config.yaml up
+
 # Choose a new version, use the scheme v${MAJOR}.${MINOR}.${PATCH}
 # See references for a description of module version numbering.
 TAG="v0.2.0"

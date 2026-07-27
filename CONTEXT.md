@@ -9,12 +9,42 @@ A service's collected load and latency observations for one sampling interval.
 _Avoid_: Sample
 
 **Verdict**:
-The mutable assessment that determines whether a time chunk is eligible for joint ECDF builds.
+The automated assessment of a time chunk. A later Review override may change
+the chunk's eligibility without erasing this assessment.
 
 **Good chunk**:
-A time chunk with no negative verdict, or with a positive verdict. Good chunks are eligible for joint ECDF builds.
-_Avoid_: Pending chunk
+A time chunk with a positive Verdict. Good chunks are eligible for joint ECDF
+builds.
 
 **Bad chunk**:
 A time chunk whose anomaly test crossed the alerting threshold. Its negative verdict excludes it from future joint ECDF builds.
 _Avoid_: Deleted chunk
+
+**Baseline chunk**:
+A time chunk intentionally admitted while a service is learning its first
+reference distribution.
+
+**Pending chunk**:
+A post-baseline time chunk awaiting a Verdict. Pending chunks are not eligible
+for joint ECDF builds.
+
+**Review**:
+An optional human decision that accepts a Bad chunk as normal or restores its
+automated Verdict. A Review applies only to the selected time chunk.
+_Avoid_: Verdict correction
+
+**Alert**:
+A user-visible condition that may contain one or more Occurrences and has a
+firing or resolved lifecycle.
+
+**Occurrence**:
+Immutable evidence that contributed to an Alert, such as one Bad chunk or one
+failed collection attempt.
+
+**Notification**:
+An Alertmanager handoff for an Alert firing, changing severity, or resolving.
+_Avoid_: Alert
+
+**Monitoring gap**:
+A collection window for which WeeWoo could not recover metrics. A Monitoring
+gap is neither a Good chunk nor a Bad chunk.

@@ -1,5 +1,5 @@
 import './index.scss'
-import { CancelImport, CreateService, DeleteService, GetService, ListAllServices, ServicesApiError, SetServicePaused, TestService, UpdateService, type CreateServiceInput, type Service } from './api';
+import { CancelImport, CreateService, DeleteService, GetService, ListAlerts, ListAllServices, ReviewAlertOccurrence, ServicesApiError, SetServicePaused, TestService, UpdateService, type AlertOccurrence, type AlertRecord, type CreateServiceInput, type Service } from './api';
 import { datetimeLocalToUtcISOString } from './datetime';
 import { escapeHtml, renderServiceUrl } from './rendering';
 
@@ -47,7 +47,14 @@ function formatTimestamp(value?: string): string {
   return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value));
 }
 
-function renderShell(content: string, apiResponse = 'Ready'): void {
+interface PageMeta {
+  eyebrow?: string;
+  title?: string;
+  description?: string;
+  endpoint?: string;
+}
+
+function renderShell(content: string, apiResponse = 'Ready', page: PageMeta = {}): void {
   if (app === null) {
     return;
   }
@@ -63,8 +70,8 @@ function renderShell(content: string, apiResponse = 'Ready'): void {
           </div>
         </div>
         <nav class="sidebar-nav">
-          <a class="${window.location.hash === '#settings' ? '' : 'is-active'}" href="#services">Services</a>
-          <a href="#alerts">Alerts</a>
+          <a class="${window.location.hash === '#services' || window.location.hash === '' || window.location.hash.startsWith('#service') ? 'is-active' : ''}" href="#services">Services</a>
+          <a class="${window.location.hash === '#alerts' ? 'is-active' : ''}" href="#alerts">Alerts</a>
           <a href="#incidents">Incidents</a>
           <a href="#integrations">Integrations</a>
           <a class="${window.location.hash === '#settings' ? 'is-active' : ''}" href="#settings">Settings</a>
@@ -96,14 +103,14 @@ function renderShell(content: string, apiResponse = 'Ready'): void {
         <main class="page-shell">
           <section class="page-header">
             <div>
-              <p class="eyebrow">WeeWoo Services</p>
-              <h1>Service health dashboard</h1>
-              <p>Live from the WeeWoo server configuration API.</p>
+              <p class="eyebrow">${escapeHtml(page.eyebrow ?? 'WeeWoo Services')}</p>
+              <h1>${escapeHtml(page.title ?? 'Service health dashboard')}</h1>
+              <p>${escapeHtml(page.description ?? 'Live from the WeeWoo server configuration API.')}</p>
             </div>
             <article class="api-status-card">
               <div>
                 <span>API Endpoint</span>
-                <strong>/api/services</strong>
+                <strong>${escapeHtml(page.endpoint ?? '/api/services')}</strong>
               </div>
               <div>
                 <span>Response</span>
@@ -123,10 +130,153 @@ function bindShellInteractions(): void {
   const search = document.querySelector<HTMLInputElement>('.search-box input');
   search?.addEventListener('input', () => {
     const term = search.value.trim().toLowerCase();
-    document.querySelectorAll<HTMLElement>('.service-dashboard').forEach((row) => {
+    document.querySelectorAll<HTMLElement>('.service-dashboard, .alert-card').forEach((row) => {
       row.hidden = term !== '' && !(row.dataset.serviceName ?? '').includes(term);
     });
   });
+}
+
+function alertmanagerLabel(state: AlertRecord['alertmanagerState']): string {
+  switch (state) {
+    case 'accepted': return 'Accepted by Alertmanager';
+    case 'failed': return 'Alertmanager handoff failed';
+    case 'missed': return 'Alertmanager handoff missed';
+    default: return 'Alertmanager handoff pending';
+  }
+}
+
+function reviewLabel(occurrence: AlertOccurrence): string {
+  if (occurrence.reviewOverride === true) return 'Accepted as normal';
+  if (occurrence.reviewOverride === false) return 'Automated Verdict restored';
+  return 'No manual override';
+}
+
+function renderEvidence(evidence: Record<string, unknown>): string {
+  const entries = Object.entries(evidence);
+  if (entries.length === 0) return '';
+  return `<dl class="evidence-grid">${entries.map(([key, value]) => `
+    <div><dt>${escapeHtml(key)}</dt><dd>${escapeHtml(String(value))}</dd></div>
+  `).join('')}</dl>`;
+}
+
+function renderOccurrence(occurrence: AlertOccurrence): string {
+  const reviewable = occurrence.chunkTimestamp !== undefined;
+  const accepted = occurrence.reviewOverride === true;
+  return `
+    <article class="occurrence-row">
+      <header>
+        <div><strong>${escapeHtml(occurrence.summary)}</strong><time>${escapeHtml(formatTimestamp(occurrence.occurredAt))}</time></div>
+        <span class="review-state${accepted ? ' is-accepted' : ''}">${escapeHtml(reviewLabel(occurrence))}</span>
+      </header>
+      ${renderEvidence(occurrence.evidence)}
+      ${occurrence.technicalDetails === '' ? '' : `<details><summary>Technical details</summary><pre>${escapeHtml(occurrence.technicalDetails)}</pre></details>`}
+      ${occurrence.reviewReason === undefined || occurrence.reviewReason === '' ? '' : `<p class="review-reason">Review note: ${escapeHtml(occurrence.reviewReason)}</p>`}
+      ${reviewable ? `
+        <div class="occurrence-actions">
+          <button class="${accepted ? 'secondary-button' : 'primary-button'} review-occurrence" type="button"
+            data-occurrence-id="${String(occurrence.id)}"
+            data-review-revision="${String(occurrence.reviewRevision)}"
+            data-review-accepted="${String(!accepted)}">
+            ${accepted ? 'Restore automated Verdict' : 'Accept as normal'}
+          </button>
+        </div>
+      ` : ''}
+    </article>
+  `;
+}
+
+function renderAlertCard(alert: AlertRecord): string {
+  return `
+    <article class="alert-card alert-card--${escapeHtml(alert.severity)}" data-service-name="${escapeHtml(`${alert.serviceName} ${alert.title}`.toLowerCase())}">
+      <header class="alert-card-header">
+        <div>
+          <div class="alert-labels">
+            <span class="severity-pill severity-pill--${escapeHtml(alert.severity)}">${escapeHtml(alert.severity)}</span>
+            <span class="alert-status">${escapeHtml(alert.status)}</span>
+          </div>
+          <h2>${escapeHtml(alert.title)}</h2>
+          <p>${escapeHtml(alert.serviceName)} · Last observed ${escapeHtml(formatTimestamp(alert.lastOccurredAt))}</p>
+        </div>
+        <strong class="occurrence-total">${String(alert.occurrenceCount)}<small>occurrence${alert.occurrenceCount === 1 ? '' : 's'}</small></strong>
+      </header>
+      <p class="alert-description">${escapeHtml(alert.description)}</p>
+      <div class="alert-guidance">
+        <div><span>Impact</span><p>${escapeHtml(alert.impact)}</p></div>
+        <div><span>Suggested action</span><p>${escapeHtml(alert.suggestedAction)}</p></div>
+      </div>
+      <div class="delivery-state delivery-state--${escapeHtml(alert.alertmanagerState)}">
+        ${escapeHtml(alertmanagerLabel(alert.alertmanagerState))}
+        ${alert.alertmanagerError === undefined ? '' : `<small>${escapeHtml(alert.alertmanagerError)}</small>`}
+      </div>
+      ${alert.resolutionReason === undefined || alert.resolutionReason === '' ? '' : `<p class="resolution-copy">Resolved: ${escapeHtml(alert.resolutionReason.replaceAll('_', ' '))}</p>`}
+      <details class="occurrence-disclosure">
+        <summary>View ${String(alert.occurrences.length)} occurrence${alert.occurrences.length === 1 ? '' : 's'} and evidence</summary>
+        <div class="occurrence-list">${alert.occurrences.map(renderOccurrence).join('')}</div>
+      </details>
+    </article>
+  `;
+}
+
+function renderAlerts(alerts: AlertRecord[]): void {
+  const active = alerts.filter((alert) => alert.status === 'firing');
+  const critical = active.filter((alert) => alert.severity === 'critical').length;
+  const warning = active.filter((alert) => alert.severity === 'warning').length;
+  renderShell(`
+    <section class="summary-grid" aria-label="Alert summary">
+      ${renderSummaryCard('Active alerts', active.length, 'unavailable')}
+      ${renderSummaryCard('Critical', critical, 'unavailable')}
+      ${renderSummaryCard('Warnings', warning, 'degraded')}
+      ${renderSummaryCard('History', alerts.length - active.length, 'total')}
+    </section>
+    <section class="alert-panel">
+      <div class="panel-header"><h2>Alerts</h2><span>Active conditions and 90-day history</span></div>
+      ${alerts.length === 0 ? '<div class="empty-state"><h2>No alerts recorded</h2><p>Detected anomalies and monitoring failures will appear here.</p></div>' : `<div class="alert-list">${alerts.map(renderAlertCard).join('')}</div>`}
+    </section>
+  `, '200 OK', {
+    eyebrow: 'WeeWoo Alerts',
+    title: 'Alerts and anomaly history',
+    description: 'User-visible conditions, evidence, recovery, and optional Bad-chunk review.',
+    endpoint: '/api/alerts',
+  });
+  document.querySelector('#service-count')?.replaceChildren(`${String(active.length)} active alert${active.length === 1 ? '' : 's'}`);
+  document.querySelectorAll<HTMLButtonElement>('.review-occurrence').forEach((button) => {
+    button.addEventListener('click', () => { void reviewOccurrence(button); });
+  });
+}
+
+async function reviewOccurrence(button: HTMLButtonElement): Promise<void> {
+  const accepted = button.dataset.reviewAccepted === 'true';
+  if (accepted && !window.confirm('Accept this Bad chunk as normal and make it eligible for future ECDF builds?')) return;
+  const reason = window.prompt(accepted ? 'Optional reason for accepting this chunk:' : 'Optional reason for restoring the automated Verdict:', '');
+  if (reason === null) return;
+  button.disabled = true;
+  try {
+    await ReviewAlertOccurrence(
+      Number(button.dataset.occurrenceId),
+      Number(button.dataset.reviewRevision),
+      accepted,
+      reason,
+    );
+    await loadAlerts();
+  } catch (error) {
+    window.alert(error instanceof Error ? error.message : 'Unable to review this occurrence.');
+    button.disabled = false;
+  }
+}
+
+async function loadAlerts(): Promise<void> {
+  renderShell('<section class="alert-panel" aria-busy="true"><div class="skeleton-list"><div class="skeleton-row"></div><div class="skeleton-row"></div></div></section>', 'Loading', {
+    eyebrow: 'WeeWoo Alerts', title: 'Alerts and anomaly history', description: 'Loading durable alert history.', endpoint: '/api/alerts',
+  });
+  try {
+    renderAlerts(await ListAlerts(true));
+  } catch (error) {
+    const response = apiResponseForError(error);
+    renderShell(`<section class="error-panel"><strong class="error-code">${escapeHtml(response)}</strong><h2>Unable to load alerts</h2><p>Check the alert history database and retry.</p><button id="retry-alerts" class="retry-button" type="button">Retry</button></section>`, response, {
+      eyebrow: 'WeeWoo Alerts', title: 'Alerts and anomaly history', description: 'Durable alert history is unavailable.', endpoint: '/api/alerts',
+    });
+    document.querySelector('#retry-alerts')?.addEventListener('click', () => { void loadAlerts(); });
+  }
 }
 
 function renderMetricBox(label: string, value: string, detail: string, modifier = ''): string {
@@ -547,6 +697,7 @@ async function boot(): Promise<void> {
   if (route === 'add/new') { renderServiceForm(false); return; }
   if (route === 'add/import') { renderServiceForm(true); return; }
   if (route === 'settings') { renderSettings(); return; }
+  if (route === 'alerts') { await loadAlerts(); return; }
   const detailMatch = /^service\/(\d+)$/.exec(route);
   if (detailMatch !== null) { await loadServiceDetail(Number(detailMatch[1])); return; }
   const editMatch = /^service\/(\d+)\/edit$/.exec(route);
