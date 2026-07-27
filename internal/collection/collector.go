@@ -82,7 +82,7 @@ func (c *collector) Stop() {
 }
 
 func (c *collector) Unschedule(serviceID int) {
-	c.scheduler.RemoveCallback(serviceID)
+	c.scheduler.RemoveCallback(CallbackID(serviceID, CollectCallback))
 	if c.recovery != nil {
 		c.recovery.Unregister(serviceID)
 	}
