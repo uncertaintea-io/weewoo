@@ -159,3 +159,72 @@ func TestECDFPublisherDisabledSkipsScheduling(t *testing.T) {
 	case <-time.After(50 * time.Millisecond):
 	}
 }
+
+func TestCallbackID(t *testing.T) {
+	tests := []struct {
+		name         string
+		serviceID    int
+		callbackType CallbackType
+		want         int
+	}{
+		{name: "first service collect callback", serviceID: 1, callbackType: CollectCallback, want: 1002},
+		{name: "first service builder callback", serviceID: 1, callbackType: BuilderCallback, want: 1003},
+		{name: "service IDs do not overlap", serviceID: 1001, callbackType: BuilderCallback, want: 3003},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := CallbackID(tt.serviceID, tt.callbackType); got != tt.want {
+				t.Fatalf("CallbackID(%d, %d) = %d, want %d", tt.serviceID, tt.callbackType, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestCollectionAndBuilderCallbacksUseDistinctIDsRegardlessOfRegistrationOrder(t *testing.T) {
+	tests := []struct {
+		name            string
+		scheduleBuilder bool
+	}{
+		{name: "collection before builder"},
+		{name: "builder before collection", scheduleBuilder: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var events []SchedulerEvent
+			scheduler := NewIntervalScheduler(WithSchedulerEventHandler(func(event SchedulerEvent) {
+				events = append(events, event)
+			}))
+			defer scheduler.Stop()
+
+			cfg := config.NewFakeConfig()
+			collector := NewCollector(nil, ecdf.NewFakeChunkStore(), scheduler, nil)
+			service := &config.Service{Id: 1003, Name: "collision", Interval: time.Hour}
+			scheduleCollection := func() { require.NoError(t, collector.Schedule(service)) }
+			scheduleBuilder := func() {
+				require.NoError(t, ScheduleECDFBuilder(1, ecdf.NewFakeChunkStore(), newRecordingJointStore(), cfg, scheduler))
+			}
+
+			if tt.scheduleBuilder {
+				scheduleBuilder()
+				scheduleCollection()
+			} else {
+				scheduleCollection()
+				scheduleBuilder()
+			}
+
+			var added, updated []int
+			for _, event := range events {
+				switch event.Kind {
+				case SchedulerEventCallbackAdded:
+					added = append(added, event.ID)
+				case SchedulerEventCallbackUpdated:
+					updated = append(updated, event.ID)
+				}
+			}
+			assert.ElementsMatch(t, []int{1003, 3006}, added)
+			assert.Empty(t, updated)
+		})
+	}
+}

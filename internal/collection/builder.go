@@ -18,12 +18,27 @@ type ecdfBuilderTarget struct {
 }
 
 const (
-	serviceInterval             = time.Hour
-	ecdfBuilderCallbackIDOffset = 1000
+	serviceInterval = time.Hour
+
+	ReservedCallbackIds = 1000
 
 	ECDFScheduledBuildTimeoutConfigKey = "ecdf_scheduled_build_timeout"
 	defaultECDFScheduledBuildTimeout   = 5 * time.Minute
 )
+
+type CallbackType int
+
+const (
+	CollectCallback CallbackType = iota
+	BuilderCallback
+
+	MaxCallbackType
+)
+
+// CallbackID returns the scheduler ID for one kind of service callback.
+func CallbackID(serviceID int, callbackType CallbackType) int {
+	return ReservedCallbackIds + serviceID*int(MaxCallbackType) + int(callbackType)
+}
 
 // Gets the ID if the service from the config object
 func getTargets(cfg config.Config) ([]ecdfBuilderTarget, error) {
@@ -38,7 +53,7 @@ func getTargets(cfg config.Config) ([]ecdfBuilderTarget, error) {
 		}
 		targets = append(targets, ecdfBuilderTarget{
 			ServiceID:  service.Id,
-			CallbackID: ecdfBuilderCallbackIDOffset + service.Id,
+			CallbackID: CallbackID(service.Id, CollectCallback),
 		})
 	}
 	return targets, nil
@@ -82,7 +97,7 @@ func ScheduleECDFBuilder(serviceID int, chunkStore ecdf.ChunkStore, jointStore e
 	if err != nil {
 		return fmt.Errorf("failed to get build timeout: %w", err)
 	}
-	callbackID := ecdfBuilderCallbackIDOffset + serviceID
+	callbackID := CallbackID(serviceID, BuilderCallback)
 	err = scheduler.AddCallback(callbackID, serviceInterval, func(ctx context.Context, start time.Time, end time.Time) IntervalResult {
 		buildCtx, cancel := context.WithTimeout(ctx, buildTimeout)
 		defer cancel()
