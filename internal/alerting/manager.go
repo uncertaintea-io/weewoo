@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"regexp"
 	"strconv"
 	"strings"
@@ -461,6 +462,10 @@ func (m *Manager) InterruptAnomalies(ctx context.Context, serviceID int, at time
 		}
 		ids = append(ids, id)
 	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return err
+	}
 	if err := rows.Close(); err != nil {
 		return err
 	}
@@ -490,6 +495,10 @@ func (m *Manager) CloseService(ctx context.Context, serviceID int, reason string
 			return err
 		}
 		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return err
 	}
 	if err := rows.Close(); err != nil {
 		return err
@@ -920,6 +929,10 @@ func insertDeliveredResolutions(ctx context.Context, tx *sql.Tx, alertID int64, 
 		}
 		payloads[payload.Severity] = payload
 	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return err
+	}
 	if err := rows.Close(); err != nil {
 		return err
 	}
@@ -972,6 +985,15 @@ func insertEvent(ctx context.Context, tx *sql.Tx, alertID int64, eventType, mess
 	if err != nil {
 		return fmt.Errorf("insert alert event: %w", err)
 	}
+	slog.InfoContext(
+		ctx,
+		"alert lifecycle event recorded",
+		"alert_id", alertID,
+		"event", eventType,
+		"message", message,
+		"occurred_at", at,
+		"metadata", metadata,
+	)
 	return nil
 }
 

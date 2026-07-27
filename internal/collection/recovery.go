@@ -256,7 +256,18 @@ func (q *RecoveryQueue) processOne(target *recoveryTarget) (time.Duration, bool)
 		return time.Minute, false
 	}
 	if !expires.After(now) {
-		_, _ = q.db.ExecContext(q.ctx, `UPDATE collection_backlog SET state='expired', updated_at=$2 WHERE id=$1`, id, now)
+		if _, updateErr := q.db.ExecContext(q.ctx, `UPDATE collection_backlog SET state='expired', updated_at=$2 WHERE id=$1`, id, now); updateErr != nil {
+			slog.Error("failed to expire collection recovery window", "backlog_id", id, "service_id", service.Id, "error", updateErr)
+		} else {
+			slog.Warn(
+				"collection recovery window expired",
+				"backlog_id", id,
+				"service_id", service.Id,
+				"start", start,
+				"end", end,
+				"attempts", attempts,
+			)
+		}
 		_ = q.recorder.RecordMonitoringFailure(q.ctx, alerting.MonitoringFailure{
 			ServiceID: service.Id, ServiceName: service.Name, OccurredAt: now,
 			Operation:        "collection_gap",
@@ -269,7 +280,17 @@ func (q *RecoveryQueue) processOne(target *recoveryTarget) (time.Duration, bool)
 	if nextAttempt.After(now) {
 		return nextAttempt.Sub(now), false
 	}
-	_, _ = q.db.ExecContext(q.ctx, `UPDATE collection_backlog SET state='collecting', updated_at=$2 WHERE id=$1`, id, now)
+	if _, updateErr := q.db.ExecContext(q.ctx, `UPDATE collection_backlog SET state='collecting', updated_at=$2 WHERE id=$1`, id, now); updateErr != nil {
+		slog.Error("failed to mark collection recovery window collecting", "backlog_id", id, "service_id", service.Id, "error", updateErr)
+	}
+	slog.Info(
+		"collecting recovery window",
+		"backlog_id", id,
+		"service_id", service.Id,
+		"start", start,
+		"end", end,
+		"attempt", attempts+1,
+	)
 	// A prior recovery attempt may have collected the chunk but failed its
 	// analysis. Put only that failed state back into Pending so waitForAnalysis
 	// cannot mistake the stale failure for completion of this attempt.
@@ -298,6 +319,14 @@ func (q *RecoveryQueue) processOne(target *recoveryTarget) (time.Duration, bool)
 			slog.Error("failed to mark collection window recovered", "id", id, "error", updateErr)
 			return time.Minute, false
 		}
+		slog.Info(
+			"collection recovery window recovered",
+			"backlog_id", id,
+			"service_id", service.Id,
+			"start", start,
+			"end", end,
+			"attempt", attempts+1,
+		)
 		return 0, true
 	}
 	attempts++
@@ -311,6 +340,16 @@ func (q *RecoveryQueue) processOne(target *recoveryTarget) (time.Duration, bool)
 		slog.Error("failed to reschedule collection recovery", "id", id, "error", updateErr)
 		return time.Minute, false
 	}
+	slog.Warn(
+		"collection recovery retry scheduled",
+		"backlog_id", id,
+		"service_id", service.Id,
+		"start", start,
+		"end", end,
+		"attempt", attempts,
+		"retry_at", retryAt,
+		"error", err,
+	)
 	_ = q.recorder.RecordCollectionFailure(q.ctx, alerting.CollectionFailure{
 		ServiceID: service.Id, ServiceName: service.Name,
 		WindowStart: start, WindowEnd: end, Attempt: attempts, RetryAt: retryAt, Error: err,

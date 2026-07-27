@@ -214,7 +214,6 @@ func NewIntervalScheduler(options ...SchedulerOption) *IntervalScheduler {
 	opts := schedulerOptions{
 		clock:   realClock{},
 		backoff: ExponentialBackoffPolicy{},
-		events:  defaultSchedulerEventHandler,
 	}
 	for _, option := range options {
 		option(&opts)
@@ -293,9 +292,7 @@ func (s *IntervalScheduler) run(opts schedulerOptions) {
 		if timer != nil {
 			timer.Stop()
 		}
-		if opts.events != nil {
-			opts.events(SchedulerEvent{Kind: SchedulerEventSchedulerStopped})
-		}
+		emit(opts, SchedulerEvent{Kind: SchedulerEventSchedulerStopped})
 		close(s.done)
 		if stopReq != nil {
 			close(stopReq.done)
@@ -594,12 +591,13 @@ func maxDuration(a, b time.Duration) time.Duration {
 }
 
 func emit(opts schedulerOptions, event SchedulerEvent) {
+	logSchedulerEvent(event)
 	if opts.events != nil {
 		opts.events(event)
 	}
 }
 
-func defaultSchedulerEventHandler(event SchedulerEvent) {
+func logSchedulerEvent(event SchedulerEvent) {
 	attrs := []slog.Attr{
 		slog.String("event", string(event.Kind)),
 	}
