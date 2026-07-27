@@ -53,7 +53,7 @@ func getTargets(cfg config.Config) ([]ecdfBuilderTarget, error) {
 		}
 		targets = append(targets, ecdfBuilderTarget{
 			ServiceID:  service.Id,
-			CallbackID: CallbackID(service.Id, BuilderCallback),
+			CallbackID: CallbackID(service.Id, CollectCallback),
 		})
 	}
 	return targets, nil
