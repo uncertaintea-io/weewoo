@@ -4,38 +4,47 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
-	"fmt"
-	"os"
-	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-func TestReadRenderResponse(t *testing.T) {
-	payload := renderPayload(t, []float64{
-		10, 20, 100, 200,
-		0.1, 0.2,
-		0.3, 0.4,
-	})
+func TestRenderJointECDFWithRealTool(t *testing.T) {
+	setJECDFTool(t, "../../jecdf")
+	if !jecdfExists(t) {
+		t.Skip("jecdf tool not found or not executable, skipping test")
+	}
 
-	response, err := readRenderResponse(bytes.NewBuffer(payload), 2, 2)
+	const serviceID, indicatorID = 1, 1
+	timestamp := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	chunk, err := Encode(
+		timestamp,
+		[]Sample{{Value: 10, Count: 1}, {Value: 20, Count: 1}},
+		[]Sample{{Value: 100, Count: 1}, {Value: 200, Count: 1}},
+	)
+	require.NoError(t, err)
+	store := NewFakeChunkStore()
+	require.NoError(t, store.WriteChunk(serviceID, indicatorID, timestamp, chunk))
+
+	var jointECDF bytes.Buffer
+	require.NoError(t, BuildJointECDFContext(context.Background(), store, serviceID, indicatorID, &jointECDF))
+
+	response, err := Render(context.Background(), jointECDF.Bytes(), 2, 2)
 
 	require.NoError(t, err)
-	assert.Equal(t, &RenderResponse{
-		Width:  2,
-		Height: 2,
-		XMin:   10,
-		XMax:   20,
-		YMin:   100,
-		YMax:   200,
-		Masses: []float64{0.1, 0.2, 0.3, 0.4},
-	}, response)
+	assert.Equal(t, 2, response.Width)
+	assert.Equal(t, 2, response.Height)
+	assert.Equal(t, 10.0, response.XMin)
+	assert.Equal(t, 20.0, response.XMax)
+	assert.Equal(t, 100.0, response.YMin)
+	assert.Equal(t, 200.0, response.YMax)
+	assert.InDeltaSlice(t, []float64{0, 0.125, 0.125, 0}, response.Masses, 1e-12)
 }
 
 func TestReadRenderResponseRejectsUnexpectedSize(t *testing.T) {
-	_, err := readRenderResponse(bytes.NewBuffer(renderPayload(t, []float64{0, 1, 0, 1})), 2, 2)
+	_, err := readRenderResponse(bytes.NewBuffer(invalidRenderPayload(t, []float64{0, 1, 0, 1})), 2, 2)
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "got 32 bytes, want 64")
@@ -53,7 +62,7 @@ func TestReadRenderResponseRejectsInvalidValues(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := readRenderResponse(bytes.NewBuffer(renderPayload(t, tt.values)), 2, 2)
+			_, err := readRenderResponse(bytes.NewBuffer(invalidRenderPayload(t, tt.values)), 2, 2)
 
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), tt.error)
@@ -71,36 +80,7 @@ func TestRenderRejectsInvalidDimensionsBeforeRunningTool(t *testing.T) {
 	assert.Contains(t, err.Error(), "dimensions must be at least 2")
 }
 
-func TestRenderCapturesToolOutput(t *testing.T) {
-	payload := renderPayload(t, []float64{
-		10, 20, 100, 200,
-		0.1, 0.2, 0.3,
-		0.4, 0.5, 0.6,
-	})
-	outputPath := filepath.Join(t.TempDir(), "render.bin")
-	require.NoError(t, os.WriteFile(outputPath, payload, 0600))
-	setJECDFTool(t, writeFakeJECDF(t, fmt.Sprintf(`if [ "$1" != "render" ] || [ "$2" != "3" ] || [ "$3" != "2" ]; then
-	exit 2
-fi
-cat >/dev/null
-cat %q
-`, outputPath)))
-
-	response, err := Render(context.Background(), []byte("jecdf"), 3, 2)
-
-	require.NoError(t, err)
-	assert.Equal(t, &RenderResponse{
-		Width:  3,
-		Height: 2,
-		XMin:   10,
-		XMax:   20,
-		YMin:   100,
-		YMax:   200,
-		Masses: []float64{0.1, 0.2, 0.3, 0.4, 0.5, 0.6},
-	}, response)
-}
-
-func renderPayload(t *testing.T, values []float64) []byte {
+func invalidRenderPayload(t *testing.T, values []float64) []byte {
 	t.Helper()
 	var payload bytes.Buffer
 	require.NoError(t, binary.Write(&payload, binary.BigEndian, values))
