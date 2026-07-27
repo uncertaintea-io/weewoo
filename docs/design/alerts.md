@@ -76,10 +76,13 @@ window into the backlog; only a failed attempt does. After one hour of
 continuous failure WeeWoo probes hourly rather than stopping permanently.
 Backlog entries expire after 24 hours and become Monitoring gaps.
 
-ECDF publication is deferred only for services with a non-empty recovery
-backlog. A permanent gap breaks anomaly streaks. Historical analysis records
-Good or Bad Verdicts for ECDF eligibility, but never opens, resolves, or sends
-alerts. Only live time chunks affect alert conditions and notifications.
+ECDF publication uses the eligible chunks currently available and does not wait
+for collection recovery. This lets a new service publish its first reference
+and begin live anomaly alerting while historical work remains pending. Later
+builds incorporate recovered eligible chunks. A permanent gap breaks anomaly
+streaks. Historical analysis records Good or Bad Verdicts for ECDF eligibility,
+but never opens, resolves, or sends alerts. Only live time chunks affect alert
+conditions and notifications.
 Undelivered historical notifications created by an older version are retired
 without handoff; resolutions may still be sent for historical alerts that were
 already handed off so Alertmanager does not retain stale firing state.

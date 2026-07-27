@@ -89,7 +89,7 @@ func (m *trackingMonitor) handleCollectorEvent(event collection.CollectorEvent) 
 	case "collection_delayed":
 		m.record(event.ServiceID, "degraded", event.Kind, event.Message, event.At)
 	case "collection_backlog_recovered":
-		m.record(event.ServiceID, "recovered", event.Kind, event.Message, event.At)
+		m.record(event.ServiceID, "", event.Kind, event.Message, event.At)
 	}
 }
 
