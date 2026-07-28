@@ -1431,6 +1431,85 @@ h1 {
   padding: 18px;
 }
 
+.jecdf-panel {
+  margin-bottom: 18px;
+}
+
+.jecdf-panel .panel-header > div p {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.jecdf-content {
+  display: grid;
+  grid-template-columns: minmax(0, 560px) minmax(190px, 1fr);
+  gap: clamp(20px, 4vw, 52px);
+  align-items: center;
+  padding: 24px;
+}
+
+.jecdf-plot {
+  min-width: 0;
+}
+
+.jecdf-plot canvas {
+  display: block;
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  border-radius: 12px;
+  cursor: crosshair;
+}
+
+.jecdf-plot canvas.is-loading {
+  cursor: progress;
+  opacity: 0.35;
+}
+
+.jecdf-status {
+  min-height: 1.4em;
+  margin: 10px 0 0 76px;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.jecdf-status.is-error {
+  margin: 20px 0;
+  color: var(--secondary);
+}
+
+.jecdf-key {
+  display: grid;
+  gap: 24px;
+  align-content: center;
+  max-width: 340px;
+  color: var(--secondary);
+  font-size: 0.84rem;
+  line-height: 1.6;
+}
+
+.jecdf-key p {
+  margin: 0;
+}
+
+.jecdf-gradient {
+  height: 16px;
+  margin-top: 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: linear-gradient(90deg, #440154, #3b528b 28%, #21918c 54%, #5ec962 76%, #fde725);
+}
+
+.jecdf-gradient-labels {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 650;
+  text-transform: uppercase;
+}
+
 .form-actions {
   justify-content: flex-end;
 }
@@ -1620,6 +1699,15 @@ h1 {
   .detail-grid,
   .detail-columns {
     grid-template-columns: 1fr;
+  }
+
+  .jecdf-content {
+    grid-template-columns: 1fr;
+    padding: 16px;
+  }
+
+  .jecdf-key {
+    max-width: none;
   }
 
   .theme-picker {

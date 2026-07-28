@@ -1,6 +1,7 @@
 import './index.scss'
 import { CancelImport, CreateService, DeleteService, GetService, GetServiceDetail, ListAlerts, ListAllServices, ResetServiceBaseline, ReviewAlertOccurrence, ServicesApiError, SetServicePaused, TestService, UpdateService, type AlertOccurrence, type AlertRecord, type CreateServiceInput, type Service, type ServiceChange } from './api';
 import { historicalRangeToUtc } from './datetime';
+import { renderJECDF } from './jecdf';
 import { liveRefreshDelay } from './live-refresh';
 import { searchValueForRender } from './navigation';
 import { alertCardClasses, escapeHtml, groupAlertsByStatus, renderServiceUrl, reviewableAnomalousOccurrencesByService, type AlertReviewTarget } from './rendering';
@@ -8,6 +9,7 @@ import { alertCardClasses, escapeHtml, groupAlertsByStatus, renderServiceUrl, re
 const app = document.querySelector<HTMLDivElement>('#app');
 let liveRefreshTimer: number | undefined;
 let lastRenderedRoute: string | undefined;
+let detailVisualizationCleanup: (() => void) | undefined;
 type Theme = 'light' | 'dark' | 'system';
 
 function savedTheme(): Theme {
@@ -711,6 +713,26 @@ function renderServiceDetail(service: Service, history: ServiceChange[] = [], hi
       <article class="detail-card"><span>Last collection error</span><strong>${escapeHtml(formatTimestamp(service.tracking.lastError))}</strong><p>${escapeHtml(service.tracking.error ?? 'No errors recorded')}</p></article>
       <article class="detail-card"><span>Load vs. UTC Time of Day</span><strong>${escapeHtml(timeOfDay.state === 'ready' ? 'Ready' : timeOfDay.state === 'degraded' ? 'Degraded' : 'Learning')}</strong><p>${String(Math.round(timeOfDay.coverage * 100))}% slot coverage · ${String(timeOfDay.requiredDays)} UTC days required · latest build ${escapeHtml(formatTimestamp(timeOfDay.latestBuild))}</p></article>
     </section>
+    <section class="detail-panel jecdf-panel" aria-labelledby="joint-ecdf-heading">
+      <div class="panel-header">
+        <div><h2 id="joint-ecdf-heading">Load vs. Latency</h2><p>Relative density of the Joint ECDF baseline</p></div>
+        <span>Viridis scale</span>
+      </div>
+      <div class="jecdf-content">
+        <div class="jecdf-plot">
+          <canvas id="joint-ecdf" class="is-loading" aria-label="Load versus latency relative density plot">Load versus latency relative density plot.</canvas>
+          <p id="joint-ecdf-status" class="jecdf-status" role="status">Loading distribution…</p>
+        </div>
+        <aside class="jecdf-key" aria-label="Density scale">
+          <div>
+            <p class="eyebrow">Relative density</p>
+            <div class="jecdf-gradient" aria-hidden="true"></div>
+            <div class="jecdf-gradient-labels"><span>Low</span><span>High</span></div>
+          </div>
+          <p>Brighter cells contain more of the baseline’s probability mass. Values are normalized to the densest cell so the distribution’s shape stays legible.</p>
+        </aside>
+      </div>
+    </section>
     <section class="detail-columns">
       <article class="detail-panel"><div class="panel-header"><h2>Collection activity</h2><span>Latest first</span></div>${renderActivity(service)}</article>
       <article class="detail-panel"><div class="panel-header"><h2>Historical imports</h2><span>${String(service.imports.length)} jobs</span></div>${renderImports(service)}</article>
@@ -718,6 +740,7 @@ function renderServiceDetail(service: Service, history: ServiceChange[] = [], hi
     <section class="detail-panel query-detail"><div class="panel-header"><h2>Prometheus configuration</h2></div><dl class="query-grid">${renderQueryBox('Load signal', service.loadQuery)}${renderQueryBox('Latency signal', service.latencyQuery)}</dl></section>
     <section class="detail-panel"><div class="panel-header"><h2>Configuration history</h2><span>Revision ${String(service.revision ?? 1)} · generation ${String(service.generation ?? 1)}</span></div>${historyUnavailable ? '<p class="muted-copy">Configuration history is temporarily unavailable.</p>' : renderServiceHistory(history)}</section>
   `, '200 OK');
+  detailVisualizationCleanup = renderJECDF('joint-ecdf', service.id);
   document.querySelector('#delete-service')?.addEventListener('click', () => { void deleteServiceFromDetail(service); });
   document.querySelector('#reset-baseline')?.addEventListener('click', () => { void resetBaselineFromDetail(service); });
   document.querySelector('#toggle-tracking')?.addEventListener('click', () => {
@@ -746,6 +769,8 @@ async function deleteServiceFromDetail(service: Service): Promise<void> {
 }
 
 async function loadServiceDetail(id: number, showLoading = true): Promise<void> {
+  detailVisualizationCleanup?.();
+  detailVisualizationCleanup = undefined;
   if (showLoading) renderLoading();
   try {
     const detail = await GetServiceDetail(id);
@@ -843,6 +868,8 @@ function scheduleLiveRefresh(route: string): void {
 }
 
 async function boot(): Promise<void> {
+  detailVisualizationCleanup?.();
+  detailVisualizationCleanup = undefined;
   clearLiveRefresh();
   const route = currentRoute();
   if (route === 'add') { renderAddChoice(); return; }

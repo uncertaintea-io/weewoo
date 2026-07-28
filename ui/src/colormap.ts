@@ -8,26 +8,25 @@ export interface RGBA {
 // Adapted from: https://github.com/d3/d3-scale-chromatic
 
 function colors(specifier: string): RGBA[] {
-  let n = specifier.length / 6;
-  let colors = new Array(n);
-  let i = 0;
+  const n = specifier.length / 6;
+  const parsedColors = new Array<RGBA>(n);
   for (let idx = 0; idx < n; idx++) {
     let i = idx * 6;
     let j = i + 2;
-    let r = Number('0x' + specifier.slice(i, j));
+    const r = Number('0x' + specifier.slice(i, j));
     i = j;
     j = i + 2;
-    let g = Number('0x' + specifier.slice(i, j));
+    const g = Number('0x' + specifier.slice(i, j));
     i = j;
     j = i + 2;
-    let b = Number('0x' + specifier.slice(i, j));
-    colors[idx] = {r: r, g: g, b: b, a: 0xff};
+    const b = Number('0x' + specifier.slice(i, j));
+    parsedColors[idx] = {r: r, g: g, b: b, a: 0xff};
   }
-  return colors;
+  return parsedColors;
 }
 
 function ramp(range: RGBA[]) {
-  var n = range.length;
+  const n = range.length;
   return function(t: number) {
     return range[Math.max(0, Math.min(n - 1, Math.floor(t * n)))];
   };
