@@ -44,10 +44,33 @@ func (m *Manager) RecordBaseline(ctx context.Context, serviceID, indicatorID int
 }
 
 func (m *Manager) RecordAnalysis(ctx context.Context, outcome AnalysisOutcome) error {
+	if outcome.Historical {
+		return m.recordHistoricalAnalysis(ctx, outcome)
+	}
 	if !outcome.Anomalous {
 		return m.recordGoodAnalysis(ctx, outcome)
 	}
 	return m.recordAnomaly(ctx, outcome)
+}
+
+// recordHistoricalAnalysis persists ECDF eligibility without opening,
+// resolving, or notifying any user-visible condition.
+func (m *Manager) recordHistoricalAnalysis(ctx context.Context, outcome AnalysisOutcome) error {
+	state := "good"
+	if outcome.Anomalous {
+		state = "bad"
+	}
+	_, err := m.db.ExecContext(ctx, `
+		INSERT INTO verdict (service_id, indicator_id, "timestamp", automated_good, pvalue, analysis_state)
+		VALUES ($1, $2, $3::timestamptz(0), $4, $5, $6)
+		ON CONFLICT (service_id, indicator_id, "timestamp")
+		DO UPDATE SET automated_good = EXCLUDED.automated_good,
+			pvalue = EXCLUDED.pvalue, analysis_state = EXCLUDED.analysis_state
+	`, outcome.ServiceID, outcome.IndicatorID, outcome.Timestamp, !outcome.Anomalous, outcome.PValue, state)
+	if err != nil {
+		return fmt.Errorf("record historical verdict: %w", err)
+	}
+	return nil
 }
 
 func (m *Manager) recordGoodAnalysis(ctx context.Context, outcome AnalysisOutcome) error {
@@ -236,6 +259,18 @@ func (m *Manager) ensureAnomalyAlert(ctx context.Context, tx *sql.Tx, conditionK
 }
 
 func (m *Manager) RecordAnalysisFailure(ctx context.Context, outcome AnalysisOutcome, failure error) error {
+	if outcome.Historical {
+		_, err := m.db.ExecContext(ctx, `
+			INSERT INTO verdict (service_id, indicator_id, "timestamp", automated_good, pvalue, analysis_state)
+			VALUES ($1, $2, $3::timestamptz(0), NULL, NULL, 'failed')
+			ON CONFLICT (service_id, indicator_id, "timestamp")
+			DO UPDATE SET automated_good = NULL, pvalue = NULL, analysis_state = 'failed'
+		`, outcome.ServiceID, outcome.IndicatorID, outcome.Timestamp)
+		if err != nil {
+			return fmt.Errorf("record failed historical analysis state: %w", err)
+		}
+		return nil
+	}
 	var events pendingLifecycleEvents
 	tx, err := m.db.BeginTx(ctx, nil)
 	if err != nil {

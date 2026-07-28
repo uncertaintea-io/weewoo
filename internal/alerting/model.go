@@ -23,7 +23,8 @@ const (
 var ErrReviewConflict = errors.New("alert occurrence review changed")
 
 // AnalysisOutcome is the complete durable result of analyzing one time chunk.
-// Recording it updates the Verdict and the matching alert condition atomically.
+// Recording a live outcome updates the Verdict and matching alert condition
+// atomically. A historical outcome updates only the Verdict.
 type AnalysisOutcome struct {
 	ServiceID        int
 	ServiceName      string

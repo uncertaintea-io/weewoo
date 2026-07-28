@@ -40,15 +40,16 @@ type AnalysisQueue interface {
 
 // AnalysisWorker evaluates samples from a bounded background queue.
 type AnalysisWorker struct {
-	cfg        config.Config
-	jointStore ecdf.JointStore
-	chunks     ecdf.ChunkStore
-	alerts     alerting.AnalysisRecorder
-	jobs       chan AnalysisRequest
-	ctx        context.Context
-	cancel     context.CancelFunc
-	done       chan struct{}
-	stopOnce   sync.Once
+	cfg         config.Config
+	jointStore  ecdf.JointStore
+	chunks      ecdf.ChunkStore
+	alerts      alerting.AnalysisRecorder
+	liveJobs    chan AnalysisRequest
+	historyJobs chan AnalysisRequest
+	ctx         context.Context
+	cancel      context.CancelFunc
+	done        chan struct{}
+	stopOnce    sync.Once
 }
 
 func NewAnalysisWorker(cfg config.Config, jointStore ecdf.JointStore, chunks ecdf.ChunkStore, alerts alerting.AnalysisRecorder, capacity int) *AnalysisWorker {
@@ -57,14 +58,15 @@ func NewAnalysisWorker(cfg config.Config, jointStore ecdf.JointStore, chunks ecd
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	worker := &AnalysisWorker{
-		cfg:        cfg,
-		jointStore: jointStore,
-		chunks:     chunks,
-		alerts:     alerts,
-		jobs:       make(chan AnalysisRequest, capacity),
-		ctx:        ctx,
-		cancel:     cancel,
-		done:       make(chan struct{}),
+		cfg:         cfg,
+		jointStore:  jointStore,
+		chunks:      chunks,
+		alerts:      alerts,
+		liveJobs:    make(chan AnalysisRequest, capacity),
+		historyJobs: make(chan AnalysisRequest, capacity),
+		ctx:         ctx,
+		cancel:      cancel,
+		done:        make(chan struct{}),
 	}
 	go worker.run()
 	return worker
@@ -81,8 +83,12 @@ func (w *AnalysisWorker) Submit(request AnalysisRequest) error {
 	default:
 	}
 
+	jobs := w.liveJobs
+	if request.Historical {
+		jobs = w.historyJobs
+	}
 	select {
-	case w.jobs <- request:
+	case jobs <- request:
 		return nil
 	case <-w.done:
 		return ErrAnalyzerStopped
@@ -99,10 +105,22 @@ func (w *AnalysisWorker) Stop() {
 func (w *AnalysisWorker) run() {
 	defer close(w.done)
 	for {
+		// Prefer a live chunk whenever one is already waiting. Historical work
+		// still progresses whenever the live queue is empty.
 		select {
 		case <-w.ctx.Done():
 			return
-		case request := <-w.jobs:
+		case request := <-w.liveJobs:
+			w.analyze(request)
+			continue
+		default:
+		}
+		select {
+		case <-w.ctx.Done():
+			return
+		case request := <-w.liveJobs:
+			w.analyze(request)
+		case request := <-w.historyJobs:
 			w.analyze(request)
 		}
 	}
@@ -154,6 +172,7 @@ func (w *AnalysisWorker) analyze(request AnalysisRequest) {
 				recordErr := w.alerts.RecordAnalysisFailure(recordCtx, alerting.AnalysisOutcome{
 					ServiceID: request.Service.Id, ServiceName: request.Service.Name,
 					IndicatorID: request.IndicatorID, Timestamp: request.Timestamp,
+					Historical: request.Historical,
 				}, err)
 				recordCancel()
 				if recordErr != nil {

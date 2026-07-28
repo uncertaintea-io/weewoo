@@ -84,15 +84,8 @@ func (q *RecoveryQueue) Stop() {
 	q.wg.Wait()
 }
 
-func (q *RecoveryQueue) HasPending(ctx context.Context, serviceID int) (bool, error) {
-	var pending bool
-	err := q.db.QueryRowContext(ctx, `
-		SELECT EXISTS (
-			SELECT 1 FROM collection_backlog
-			WHERE service_id=$1 AND state IN ('pending','collecting')
-		)
-	`, serviceID).Scan(&pending)
-	return pending, err
+func (q *RecoveryQueue) ResolveCollection(ctx context.Context, serviceID int, at time.Time) error {
+	return q.recorder.ResolveCollection(ctx, serviceID, at)
 }
 
 func (q *RecoveryQueue) EnqueueFailure(ctx context.Context, service *config.Service, start, end time.Time, failure error) error {
@@ -165,21 +158,6 @@ func enqueueFailedWindow(ctx context.Context, executor sqlExecutor, service *con
 		return fmt.Errorf("enqueue failed collection window: %w", err)
 	}
 	return nil
-}
-
-func (q *RecoveryQueue) EnqueueDeferred(ctx context.Context, service *config.Service, start, end time.Time) error {
-	retention := configuredRecoveryDuration(q.cfg, "collection_backlog_retention", defaultBacklogRetention)
-	_, err := q.db.ExecContext(ctx, `
-		INSERT INTO collection_backlog (
-			service_id, service_name, window_start, window_end, state,
-			next_attempt_at, expires_at
-		) VALUES ($1,$2,$3,$4,'pending',NOW(),$5)
-		ON CONFLICT (service_id, window_start, window_end) DO NOTHING
-	`, service.Id, service.Name, start, end, time.Now().UTC().Add(retention))
-	if err == nil {
-		q.wake(service.Id)
-	}
-	return err
 }
 
 func (q *RecoveryQueue) wake(serviceID int) {
@@ -293,26 +271,9 @@ func (q *RecoveryQueue) processOne(target *recoveryTarget) (time.Duration, bool)
 		"end", end,
 		"attempt", attempts+1,
 	)
-	// A prior recovery attempt may have collected the chunk but failed its
-	// analysis. Put only that failed state back into Pending so waitForAnalysis
-	// cannot mistake the stale failure for completion of this attempt.
-	if _, resetErr := q.db.ExecContext(q.ctx, `
-		UPDATE verdict
-		SET automated_good=NULL, pvalue=NULL, analysis_state='pending'
-		WHERE service_id=$1 AND indicator_id=$2 AND "timestamp"=$3::timestamptz(0)
-		  AND analysis_state='failed'
-	`, service.Id, LoadLatencyIndicator, end); resetErr != nil {
-		slog.Error("failed to reset recovery analysis state", "id", id, "error", resetErr)
-		return time.Minute, false
-	}
 	collectCtx, cancel := context.WithTimeout(q.ctx, maxDuration(service.Interval, time.Minute))
 	err = collect(collectCtx, service, start, end)
 	cancel()
-	if err == nil {
-		analysisCtx, analysisCancel := context.WithTimeout(q.ctx, 30*time.Second)
-		err = q.waitForAnalysis(analysisCtx, service.Id, LoadLatencyIndicator, end)
-		analysisCancel()
-	}
 	if err == nil {
 		_, updateErr := q.db.ExecContext(q.ctx, `
 			UPDATE collection_backlog SET state='recovered', updated_at=$2, last_error=NULL WHERE id=$1
@@ -357,29 +318,6 @@ func (q *RecoveryQueue) processOne(target *recoveryTarget) (time.Duration, bool)
 		WindowStart: start, WindowEnd: end, Attempt: attempts, RetryAt: retryAt, Error: err,
 	})
 	return delay, false
-}
-
-func (q *RecoveryQueue) waitForAnalysis(ctx context.Context, serviceID, indicatorID int, timestamp time.Time) error {
-	timer := time.NewTicker(100 * time.Millisecond)
-	defer timer.Stop()
-	for {
-		var state string
-		err := q.db.QueryRowContext(ctx, `
-			SELECT analysis_state FROM verdict
-			WHERE service_id=$1 AND indicator_id=$2 AND "timestamp"=$3::timestamptz(0)
-		`, serviceID, indicatorID, timestamp).Scan(&state)
-		if err == nil && state != "pending" {
-			return nil
-		}
-		if err != nil && !errors.Is(err, sql.ErrNoRows) {
-			return err
-		}
-		select {
-		case <-ctx.Done():
-			return fmt.Errorf("wait for recovered window analysis: %w", ctx.Err())
-		case <-timer.C:
-		}
-	}
 }
 
 func recoveryDelay(cfg config.Config, attempt int, failingFor time.Duration) time.Duration {
