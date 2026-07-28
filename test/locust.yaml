@@ -9,16 +9,10 @@ spec:
       from locust import HttpUser, task
 
 
-      class MainHandlerUser(HttpUser):
-          weight = 1
-
+      class HandlerUser(HttpUser):
           @task
           def call_main_handler(self):
               self.client.get("/", name="Main UI/API")
-
-
-      class SleepHandlerUser(HttpUser):
-          weight = 1
 
           @task
           def call_sleep_handler(self):
