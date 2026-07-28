@@ -1,10 +1,11 @@
 import './index.scss'
 import { CancelImport, CreateService, DeleteService, GetService, ListAlerts, ListAllServices, ReviewAlertOccurrence, ServicesApiError, SetServicePaused, TestService, UpdateService, type AlertOccurrence, type AlertRecord, type CreateServiceInput, type Service } from './api';
 import { datetimeLocalToUtcISOString } from './datetime';
-import { escapeHtml, renderServiceUrl } from './rendering';
+import { alertVisualClasses, escapeHtml, renderServiceUrl } from './rendering';
 
 const app = document.querySelector<HTMLDivElement>('#app');
 let detailRefreshTimer: number | undefined;
+let alertRefreshTimer: number | undefined;
 type Theme = 'light' | 'dark' | 'system';
 
 function savedTheme(): Theme {
@@ -186,13 +187,14 @@ function renderOccurrence(occurrence: AlertOccurrence): string {
 }
 
 function renderAlertCard(alert: AlertRecord): string {
+  const visualClasses = alertVisualClasses(alert.severity, alert.status);
   return `
-    <article class="alert-card alert-card--${escapeHtml(alert.severity)}" data-service-name="${escapeHtml(`${alert.serviceName} ${alert.title}`.toLowerCase())}">
+    <article class="${visualClasses.card}" data-service-name="${escapeHtml(`${alert.serviceName} ${alert.title}`.toLowerCase())}">
       <header class="alert-card-header">
         <div>
           <div class="alert-labels">
-            <span class="severity-pill severity-pill--${escapeHtml(alert.severity)}">${escapeHtml(alert.severity)}</span>
-            <span class="alert-status">${escapeHtml(alert.status)}</span>
+            <span class="${visualClasses.severity}">${escapeHtml(alert.severity)}</span>
+            <span class="${visualClasses.status}">${escapeHtml(alert.status)}</span>
           </div>
           <h2>${escapeHtml(alert.title)}</h2>
           <p>${escapeHtml(alert.serviceName)} · Last observed ${escapeHtml(formatTimestamp(alert.lastOccurredAt))}</p>
@@ -257,26 +259,44 @@ async function reviewOccurrence(button: HTMLButtonElement): Promise<void> {
       accepted,
       reason,
     );
-    await loadAlerts();
+    await loadAlerts(false);
   } catch (error) {
     window.alert(error instanceof Error ? error.message : 'Unable to review this occurrence.');
     button.disabled = false;
   }
 }
 
-async function loadAlerts(): Promise<void> {
-  renderShell('<section class="alert-panel" aria-busy="true"><div class="skeleton-list"><div class="skeleton-row"></div><div class="skeleton-row"></div></div></section>', 'Loading', {
-    eyebrow: 'WeeWoo Alerts', title: 'Alerts and anomaly history', description: 'Loading durable alert history.', endpoint: '/api/alerts',
-  });
+function scheduleAlertRefresh(): void {
+  if (alertRefreshTimer !== undefined) window.clearTimeout(alertRefreshTimer);
+  if (window.location.hash !== '#alerts') return;
+  alertRefreshTimer = window.setTimeout(() => { void loadAlerts(false); }, 1000);
+}
+
+async function loadAlerts(showLoading = true): Promise<void> {
+  if (alertRefreshTimer !== undefined) {
+    window.clearTimeout(alertRefreshTimer);
+    alertRefreshTimer = undefined;
+  }
+  if (showLoading) {
+    renderShell('<section class="alert-panel" aria-busy="true"><div class="skeleton-list"><div class="skeleton-row"></div><div class="skeleton-row"></div></div></section>', 'Loading', {
+      eyebrow: 'WeeWoo Alerts', title: 'Alerts and anomaly history', description: 'Loading durable alert history.', endpoint: '/api/alerts',
+    });
+  }
   try {
     renderAlerts(await ListAlerts(true));
   } catch (error) {
+    if (!showLoading) {
+      scheduleAlertRefresh();
+      return;
+    }
     const response = apiResponseForError(error);
     renderShell(`<section class="error-panel"><strong class="error-code">${escapeHtml(response)}</strong><h2>Unable to load alerts</h2><p>Check the alert history database and retry.</p><button id="retry-alerts" class="retry-button" type="button">Retry</button></section>`, response, {
       eyebrow: 'WeeWoo Alerts', title: 'Alerts and anomaly history', description: 'Durable alert history is unavailable.', endpoint: '/api/alerts',
     });
     document.querySelector('#retry-alerts')?.addEventListener('click', () => { void loadAlerts(); });
+    return;
   }
+  scheduleAlertRefresh();
 }
 
 function renderMetricBox(label: string, value: string, detail: string, modifier = ''): string {
@@ -691,6 +711,10 @@ async function boot(): Promise<void> {
   if (detailRefreshTimer !== undefined) {
     window.clearTimeout(detailRefreshTimer);
     detailRefreshTimer = undefined;
+  }
+  if (alertRefreshTimer !== undefined) {
+    window.clearTimeout(alertRefreshTimer);
+    alertRefreshTimer = undefined;
   }
   const route = window.location.hash.slice(1) || 'services';
   if (route === 'add') { renderAddChoice(); return; }

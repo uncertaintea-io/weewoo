@@ -2,7 +2,7 @@ import { expect } from 'chai';
 import 'mocha';
 import { CreateService, ListAlerts, ListAllServices, ReviewAlertOccurrence, ServicesApiError } from './api';
 import { datetimeLocalToUtcISOString } from './datetime';
-import { renderServiceUrl } from './rendering';
+import { alertVisualClasses, renderServiceUrl } from './rendering';
 
 describe('datetimeLocalToUtcISOString', () => {
 
@@ -32,6 +32,42 @@ describe('renderServiceUrl', () => {
     expect(renderServiceUrl('javascript:alert(1)')).to.equal(
       '<span class="service-url">javascript:alert(1)</span>',
     );
+  });
+
+});
+
+describe('alertVisualClasses', () => {
+
+  it('uses warning accents for an active warning alert', () => {
+    expect(alertVisualClasses('warning', 'firing')).to.deep.equal({
+      card: 'alert-card alert-card--warning',
+      severity: 'severity-pill severity-pill--warning',
+      status: 'alert-status alert-status--firing',
+    });
+  });
+
+  it('uses critical accents for an active critical alert', () => {
+    expect(alertVisualClasses('critical', 'firing')).to.deep.equal({
+      card: 'alert-card alert-card--critical',
+      severity: 'severity-pill severity-pill--critical',
+      status: 'alert-status alert-status--firing',
+    });
+  });
+
+  it('makes resolved status take precedence over critical severity', () => {
+    expect(alertVisualClasses('critical', 'resolved')).to.deep.equal({
+      card: 'alert-card alert-card--resolved',
+      severity: 'severity-pill severity-pill--resolved',
+      status: 'alert-status alert-status--resolved',
+    });
+  });
+
+  it('makes resolved status take precedence over warning severity', () => {
+    expect(alertVisualClasses('warning', 'resolved')).to.deep.equal({
+      card: 'alert-card alert-card--resolved',
+      severity: 'severity-pill severity-pill--resolved',
+      status: 'alert-status alert-status--resolved',
+    });
   });
 
 });

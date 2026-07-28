@@ -10,6 +10,18 @@ export function escapeHtml(value: string): string {
   return value.replace(/[&<>"']/g, (character) => entityMap[character] ?? character);
 }
 
+export function alertVisualClasses(
+  severity: 'critical' | 'warning' | 'info',
+  status: 'firing' | 'resolved',
+): { card: string; severity: string; status: string } {
+  const accent = status === 'resolved' ? 'resolved' : severity;
+  return {
+    card: `alert-card alert-card--${accent}`,
+    severity: `severity-pill severity-pill--${accent}`,
+    status: `alert-status alert-status--${status}`,
+  };
+}
+
 export function renderServiceUrl(prometheusUrl: string): string {
   let parsedUrl: URL;
 

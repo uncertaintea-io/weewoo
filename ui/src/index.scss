@@ -157,13 +157,21 @@ textarea {
 
 .alert-card {
   overflow: hidden;
-  border-left: 4px solid var(--warning);
+  border-left-width: 4px;
   border-radius: 16px;
   padding: 20px;
 }
 
+.alert-card--warning {
+  border-left-color: var(--warning);
+}
+
 .alert-card--critical {
   border-left-color: var(--error);
+}
+
+.alert-card--resolved {
+  border-color: var(--success);
 }
 
 .alert-card-header {
@@ -211,6 +219,13 @@ textarea {
 .severity-pill--warning {
   border-color: color-mix(in srgb, var(--warning) 55%, transparent);
   color: var(--warning);
+}
+
+.severity-pill--resolved,
+.alert-status--resolved {
+  border-color: color-mix(in srgb, var(--success) 55%, transparent);
+  background: color-mix(in srgb, var(--success) 10%, transparent);
+  color: var(--success);
 }
 
 .occurrence-total {
