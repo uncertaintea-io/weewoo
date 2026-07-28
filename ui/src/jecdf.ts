@@ -45,10 +45,10 @@ export function densityPixels(data: JointECDFRender, gamma = DEFAULT_GAMMA): Uin
 
 function formatAxisValue(value: number): string {
   if (value === 0) return '0';
-  const magnitude = Math.abs(value);
-  if (magnitude >= 10000 || magnitude < 0.001) {
-    return value.toExponential(1);
-  }
+  // const magnitude = Math.abs(value);
+  // if (magnitude >= 10000 || magnitude < 0.001) {
+  //   return value.toExponential(1);
+  // }
   return new Intl.NumberFormat(undefined, { maximumSignificantDigits: 3 }).format(value);
 }
 
@@ -252,7 +252,8 @@ class JointECDFPlot {
 }
 
 function selectionText(selection: CellSelection): string {
-  return `Load: ${formatAxisValue(selection.load)} · Latency: ${formatLatencySeconds(selection.latency)} · Cell mass: ${new Intl.NumberFormat(undefined, { maximumSignificantDigits: 3 }).format(selection.mass)}`;
+  return `Load: ${formatAxisValue(selection.load)} · Latency: ${formatLatencySeconds(selection.latency)}`;
+  // · Cell mass: ${new Intl.NumberFormat(undefined, { maximumSignificantDigits: 3 }).format(selection.mass)}
 }
 
 // Take ownership of a canvas and create a visualization of a service's Load vs. Latency Joint ECDF.

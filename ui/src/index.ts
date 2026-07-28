@@ -716,7 +716,6 @@ function renderServiceDetail(service: Service, history: ServiceChange[] = [], hi
     <section class="detail-panel jecdf-panel" aria-labelledby="joint-ecdf-heading">
       <div class="panel-header">
         <div><h2 id="joint-ecdf-heading">Load vs. Latency</h2><p>Relative density of the Joint ECDF baseline</p></div>
-        <span>Viridis scale</span>
       </div>
       <div class="jecdf-content">
         <div class="jecdf-plot">
