@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"sort"
 	"sync"
 	"time"
@@ -77,32 +78,6 @@ func (m *trackingMonitor) remove(serviceID int) {
 	delete(m.services, serviceID)
 }
 
-// func (m *trackingMonitor) handleSchedulerEvent(event collection.SchedulerEvent) {
-// 	// ECDF callbacks use a separate ID range and are reported by their own logs.
-// 	if event.ID <= 0 || event.ID >= 1000 {
-// 		return
-// 	}
-// 	now := time.Now().UTC()
-// 	switch event.Kind {
-// 	case collection.SchedulerEventCallbackAdded, collection.SchedulerEventCallbackUpdated, collection.SchedulerEventCallbackResumed:
-// 		m.record(event.ID, "collecting", "tracking_started", "Prometheus collection is scheduled", now)
-// 	case collection.SchedulerEventWindowSucceeded:
-// 		m.record(event.ID, "healthy", "collection_succeeded", "Prometheus metrics collected successfully", now)
-// 	case collection.SchedulerEventRetryScheduled:
-// 		message := "Collection failed; a retry is scheduled"
-// 		if event.Err != nil {
-// 			message = event.Err.Error()
-// 		}
-// 		m.record(event.ID, "degraded", "collection_failed", message, now)
-// 	case collection.SchedulerEventCallbackDisabled:
-// 		message := "Collection stopped after repeated failures"
-// 		if event.Err != nil {
-// 			message = event.Err.Error()
-// 		}
-// 		m.record(event.ID, "unavailable", "collection_failed", message, now)
-// 	}
-// }
-
 func (m *trackingMonitor) handleCollectorEvent(event collection.CollectorEvent) {
 	switch event.Kind {
 	case "tracking_started":
@@ -114,7 +89,7 @@ func (m *trackingMonitor) handleCollectorEvent(event collection.CollectorEvent) 
 	case "collection_delayed":
 		m.record(event.ServiceID, "degraded", event.Kind, event.Message, event.At)
 	case "collection_backlog_recovered":
-		m.record(event.ServiceID, "collecting", event.Kind, event.Message, event.At)
+		m.record(event.ServiceID, "", event.Kind, event.Message, event.At)
 	}
 }
 
@@ -149,6 +124,7 @@ func (m *importManager) start(service *config.Service, start, end time.Time) imp
 	m.jobs[job.ID] = job
 	m.mu.Unlock()
 	m.monitor.record(service.Id, "", "import_started", "Historical Prometheus import started", job.StartedAt)
+	slog.Info("historical import started", "import_id", job.ID, "service_id", service.Id, "start", start, "end", end)
 	go func() {
 		m.update(job.ID, "running", 10, "")
 		err := m.tracker.Import(ctx, service, start, end)
@@ -158,15 +134,18 @@ func (m *importManager) start(service *config.Service, start, end time.Time) imp
 				message := "Historical import cancelled"
 				m.finish(job.ID, "cancelled", message, now)
 				m.monitor.record(service.Id, "", "import_cancelled", message, now)
+				slog.Info("historical import cancelled", "import_id", job.ID, "service_id", service.Id)
 				return
 			}
 			message := err.Error()
 			m.finish(job.ID, "failed", message, now)
-			m.monitor.record(service.Id, "degraded", "import_failed", message, now)
+			m.monitor.record(service.Id, "", "import_failed", message, now)
+			slog.Error("historical import failed", "import_id", job.ID, "service_id", service.Id, "error", err)
 			return
 		}
 		m.finish(job.ID, "complete", "", now)
 		m.monitor.record(service.Id, "", "import_completed", "Historical Prometheus import completed", now)
+		slog.Info("historical import completed", "import_id", job.ID, "service_id", service.Id)
 	}()
 	return m.get(job.ID)
 }

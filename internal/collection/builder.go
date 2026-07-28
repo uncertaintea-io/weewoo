@@ -105,14 +105,6 @@ func ScheduleECDFBuilder(serviceID int, chunkStore ecdf.ChunkStore, jointStore e
 		buildCtx, cancel := context.WithTimeout(ctx, buildTimeout)
 		defer cancel()
 
-		pendingRecovery, err := chunkStore.HasPendingRecovery(buildCtx, serviceID)
-		if err != nil {
-			return IntervalRetry(fmt.Errorf("check recovery backlog: %w", err))
-		}
-		if pendingRecovery {
-			slog.Info("deferring joint ECDF build while collection recovery is pending", "service_id", serviceID)
-			return IntervalSuccess()
-		}
 		minimumChunks, err := configuredPositiveInt(cfg, ECDFBaselineChunksConfigKey, defaultECDFBaselineChunks)
 		if err != nil {
 			return IntervalPermanent(err)

@@ -25,12 +25,20 @@ type Collector interface {
 	Import(ctx context.Context, service *config.Service, start, end time.Time) error
 }
 
+type collectionRecovery interface {
+	Stop()
+	Register(service *config.Service, collect historicalCollector)
+	Unregister(serviceID int)
+	EnqueueFailure(ctx context.Context, service *config.Service, start, end time.Time, failure error) error
+	ResolveCollection(ctx context.Context, serviceID int, at time.Time) error
+}
+
 type collector struct {
 	client     *http.Client
 	chunkStore ecdf.ChunkStore
 	scheduler  *IntervalScheduler
 	analyzer   AnalysisQueue
-	recovery   *RecoveryQueue
+	recovery   collectionRecovery
 	events     CollectorEventHandler
 }
 
@@ -95,22 +103,9 @@ func (c *collector) Schedule(service *config.Service) error {
 	c.emit(service.Id, "tracking_started", "Prometheus collection is scheduled")
 	callbackID := CallbackID(service.Id, CollectCallback)
 	return c.scheduler.AddCallback(callbackID, service.Interval, func(ctx context.Context, start time.Time, end time.Time) IntervalResult {
-		slog.Info("Collecting sample", "service", service.Name, "start", start, "end", end)
-		if c.recovery != nil {
-			pending, err := c.recovery.HasPending(ctx, service.Id)
-			if err != nil {
-				return IntervalRetry(err)
-			}
-			if pending {
-				if err := c.recovery.EnqueueDeferred(ctx, service, start, end); err != nil {
-					return IntervalRetry(err)
-				}
-				c.emit(service.Id, "collection_delayed", "Collection is catching up chronologically")
-				return IntervalSuccess()
-			}
-		}
+		slog.Info("Collecting sample", "service_id", service.Id, "service", service.Name, "start", start, "end", end)
 		if err := c.collectSamples(ctx, service, start, end, false); err != nil {
-			slog.Error("Failed to collect samples", "error", err)
+			slog.Error("Failed to collect samples", "service_id", service.Id, "service", service.Name, "start", start, "end", end, "error", err)
 			if c.recovery != nil {
 				if queueErr := c.recovery.EnqueueFailure(ctx, service, start, end, err); queueErr != nil {
 					return IntervalRetry(errors.Join(err, queueErr))
@@ -120,8 +115,18 @@ func (c *collector) Schedule(service *config.Service) error {
 			}
 			return IntervalRetry(err)
 		}
+		if c.recovery != nil {
+			if err := c.recovery.ResolveCollection(ctx, service.Id, time.Now().UTC()); err != nil {
+				slog.Error(
+					"failed to resolve collection alert after successful live collection",
+					"service_id", service.Id,
+					"service", service.Name,
+					"error", err,
+				)
+			}
+		}
 		c.emit(service.Id, "collection_succeeded", "Prometheus metrics collected successfully")
-		slog.Info("Collected samples", "service", service.Name, "start", start, "end", end)
+		slog.Info("Collected samples", "service_id", service.Id, "service", service.Name, "start", start, "end", end)
 		return IntervalSuccess()
 	})
 }
@@ -182,7 +187,18 @@ func (c *collector) collectSamples(ctx context.Context, service *config.Service,
 }
 
 func (c *collector) emit(serviceID int, kind, message string) {
+	event := CollectorEvent{ServiceID: serviceID, Kind: kind, Message: message, At: time.Now().UTC()}
+	attrs := []slog.Attr{
+		slog.Int("service_id", serviceID),
+		slog.String("event", kind),
+		slog.String("message", message),
+	}
+	level := slog.LevelInfo
+	if kind == "collection_failed" || kind == "collection_delayed" {
+		level = slog.LevelWarn
+	}
+	slog.Default().LogAttrs(context.Background(), level, "collector event", attrs...)
 	if c.events != nil {
-		c.events(CollectorEvent{ServiceID: serviceID, Kind: kind, Message: message, At: time.Now().UTC()})
+		c.events(event)
 	}
 }

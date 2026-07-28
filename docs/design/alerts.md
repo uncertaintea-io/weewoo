@@ -63,20 +63,32 @@ but does not claim exact version membership without a build manifest.
 A new service stays in Learning baseline until ten baseline chunks exist.
 Baseline chunks are explicitly eligible. After the first reference is
 published, new chunks begin Pending and are excluded until analysis produces a
-Good Verdict or a Review accepts a Bad Verdict. Analysis failures remain
-excluded and open a Monitoring impaired alert.
+Good Verdict or a Review accepts a Bad Verdict. Live analysis failures remain
+excluded and open a Monitoring impaired alert; historical analysis failures
+remain excluded without changing alerts.
 
 ## Collection recovery
 
-Failed windows are persisted in chronological order. Scheduling continues, but
-recovery processes the oldest missing window first and reports monitoring lag.
-After one hour of continuous failure WeeWoo probes hourly rather than stopping
-permanently. Backlog entries expire after 24 hours and become Monitoring gaps.
+Failed windows are persisted in chronological order. Live collection continues
+independently while a background worker recovers the oldest missing window
+first and reports monitoring lag. A pending recovery never diverts a newer live
+window into the backlog; only a failed attempt does. After one hour of
+continuous failure WeeWoo probes hourly rather than stopping permanently.
+Backlog entries expire after 24 hours and become Monitoring gaps.
+Recovery completes when the Time chunk is fetched and persisted. Its
+low-priority historical analysis may remain Pending without causing another
+collection attempt or a Monitoring gap.
 
-ECDF publication is deferred only for services with a non-empty recovery
-backlog. A permanent gap breaks anomaly streaks. Anomalies found in recovered
-historical data notify as historical anomalies without changing the current
-live condition.
+ECDF publication uses the eligible chunks currently available and does not wait
+for collection recovery. This lets a new service publish its first reference
+and begin live anomaly alerting while historical work remains pending. Later
+builds incorporate recovered eligible chunks. A permanent gap breaks anomaly
+streaks. Historical analysis records Good or Bad Verdicts for ECDF eligibility,
+but never opens, resolves, or sends alerts. Only live time chunks affect alert
+conditions and notifications.
+Undelivered historical notifications created by an older version are retired
+without handoff; resolutions may still be sent for historical alerts that were
+already handed off so Alertmanager does not retain stale firing state.
 
 ## Delivery and resolution
 

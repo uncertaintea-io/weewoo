@@ -199,6 +199,12 @@ func (d *OutboxDispatcher) deliverOne() error {
 		`, id)
 		return err
 	}
+	if kind == KindHistoricalAnomaly && payload.EndsAt.IsZero() {
+		if err := d.manager.ResolveAlert(d.ctx, alertID, "historical_notifications_disabled", time.Now().UTC()); err != nil {
+			return fmt.Errorf("retire historical anomaly notification: %w", err)
+		}
+		return nil
+	}
 	options := AlertingOptions{
 		Service: payload.Service, Serverity: payload.Severity, Indicator: payload.Indicator,
 		AlertName: payload.AlertName, Summary: payload.Summary, Description: payload.Description,
@@ -217,6 +223,7 @@ func (d *OutboxDispatcher) deliverOne() error {
 	if err != nil {
 		return err
 	}
+	var events pendingLifecycleEvents
 	defer func() { _ = tx.Rollback() }()
 	if _, err := tx.ExecContext(d.ctx, `
 		UPDATE alert_outbox SET state='delivered', delivered_at=$2, last_error=NULL WHERE id=$1
@@ -229,17 +236,13 @@ func (d *OutboxDispatcher) deliverOne() error {
 	`, alertID, now); err != nil {
 		return err
 	}
-	if err := insertEvent(d.ctx, tx, alertID, "alertmanager_accepted", "Alertmanager accepted the alert update", nil, now); err != nil {
+	if err := events.insert(d.ctx, tx, alertID, "alertmanager_accepted", "Alertmanager accepted the alert update", nil, now); err != nil {
 		return err
 	}
 	if err := tx.Commit(); err != nil {
 		return err
 	}
-	if kind == KindHistoricalAnomaly && payload.EndsAt.IsZero() {
-		if err := d.manager.ResolveAlert(d.ctx, alertID, "historical_occurrence_completed", now); err != nil {
-			return fmt.Errorf("resolve delivered historical anomaly: %w", err)
-		}
-	}
+	events.log(d.ctx)
 	return nil
 }
 

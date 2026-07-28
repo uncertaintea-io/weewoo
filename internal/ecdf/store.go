@@ -16,7 +16,6 @@ type ChunkStore interface {
 	ReadChunk(serviceId int, indicatorId int, timestamp time.Time) ([]byte, error)
 	WriteVerdict(ctx context.Context, serviceID, indicatorID int, timestamp time.Time, good bool, pValue float64) error
 	CountEligibleChunks(ctx context.Context, serviceID, indicatorID int) (int, error)
-	HasPendingRecovery(ctx context.Context, serviceID int) (bool, error)
 	ScanGoodChunks(ctx context.Context, serviceId int, indicatorId int, out chan<- []byte) error
 }
 

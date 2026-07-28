@@ -101,20 +101,6 @@ func (c *database) CountEligibleChunks(ctx context.Context, serviceID, indicator
 	return count, nil
 }
 
-func (c *database) HasPendingRecovery(ctx context.Context, serviceID int) (bool, error) {
-	var pending bool
-	err := c.db.QueryRowContext(ctx, `
-		SELECT EXISTS (
-			SELECT 1 FROM collection_backlog
-			WHERE service_id=$1 AND state IN ('pending', 'collecting')
-		)
-	`, serviceID).Scan(&pending)
-	if err != nil {
-		return false, fmt.Errorf("check collection recovery backlog: %w", err)
-	}
-	return pending, nil
-}
-
 // ScanGoodChunks finds all chunks from "good" samples in a given time range.
 func (c *database) ScanGoodChunks(ctx context.Context, serviceId int, indicatorId int, out chan<- []byte) error {
 	rows, err := c.db.QueryContext(ctx, `

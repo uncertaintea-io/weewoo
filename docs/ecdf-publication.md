@@ -20,6 +20,9 @@ Each publication also records the scheduler's aligned `interval_end`. After a
 publisher acquires the advisory lock, it skips the build if that service and
 indicator already have a version for the same interval. A unique database index
 provides a final safeguard that at most one version is stored per interval.
+Publications use the eligible chunks available at build time and are not
+deferred by pending collection recovery. Subsequent builds incorporate
+recovered eligible chunks.
 
 Configuration:
 

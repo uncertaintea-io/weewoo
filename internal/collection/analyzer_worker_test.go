@@ -61,6 +61,74 @@ func TestAnalysisWorkerRecoversFromPanicAndContinues(t *testing.T) {
 	}
 }
 
+type orderedJointStore struct {
+	calls   chan int
+	release chan struct{}
+}
+
+func (*orderedJointStore) Publish(context.Context, int, int, time.Time, func(io.Writer) error) (int64, bool, error) {
+	return 0, false, errors.New("unexpected publish")
+}
+
+func (s *orderedJointStore) ReadCurrent(ctx context.Context, serviceID, _ int) ([]byte, error) {
+	select {
+	case s.calls <- serviceID:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	if serviceID == 1 {
+		select {
+		case <-s.release:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	return nil, errors.New("analysis probe complete")
+}
+
+func TestAnalysisWorkerPrioritizesLiveWorkOverHistoricalBacklog(t *testing.T) {
+	store := &orderedJointStore{calls: make(chan int, 3), release: make(chan struct{})}
+	worker := NewAnalysisWorker(config.NewFakeConfig(), store, nil, nil, 2)
+	t.Cleanup(worker.Stop)
+
+	firstHistorical := validAnalysisRequest()
+	firstHistorical.Service.Id = 1
+	firstHistorical.Historical = true
+	require.NoError(t, worker.Submit(firstHistorical))
+	require.Equal(t, 1, <-store.calls)
+
+	secondHistorical := validAnalysisRequest()
+	secondHistorical.Service.Id = 2
+	secondHistorical.Historical = true
+	require.NoError(t, worker.Submit(secondHistorical))
+	live := validAnalysisRequest()
+	live.Service.Id = 3
+	require.NoError(t, worker.Submit(live))
+	close(store.release)
+
+	require.Equal(t, 3, <-store.calls)
+	require.Equal(t, 2, <-store.calls)
+}
+
+func TestAnalysisWorkerPreservesHistoricalFlagOnFailure(t *testing.T) {
+	alerts := &recordingAlertQueue{}
+	worker := NewAnalysisWorker(config.NewFakeConfig(), unavailableJointStore{}, nil, alerts, 1)
+	t.Cleanup(worker.Stop)
+	request := validAnalysisRequest()
+	request.Historical = true
+
+	require.NoError(t, worker.Submit(request))
+
+	require.Eventually(t, func() bool {
+		alerts.mu.Lock()
+		defer alerts.mu.Unlock()
+		return len(alerts.failures) == 1
+	}, time.Second, time.Millisecond)
+	alerts.mu.Lock()
+	defer alerts.mu.Unlock()
+	require.True(t, alerts.failures[0].Historical)
+}
+
 type blockingJointStore struct {
 	started chan struct{}
 	once    sync.Once

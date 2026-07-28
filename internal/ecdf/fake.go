@@ -98,10 +98,6 @@ func (c *fakeChunkStore) CountEligibleChunks(_ context.Context, serviceID, indic
 	return count, nil
 }
 
-func (c *fakeChunkStore) HasPendingRecovery(context.Context, int) (bool, error) {
-	return false, nil
-}
-
 func (c *fakeChunkStore) ScanGoodChunks(ctx context.Context, serviceId int, indicatorId int, out chan<- []byte) error {
 	indicators, ok := c.chunks[serviceId]
 	if !ok {

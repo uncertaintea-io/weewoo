@@ -23,7 +23,8 @@ const (
 var ErrReviewConflict = errors.New("alert occurrence review changed")
 
 // AnalysisOutcome is the complete durable result of analyzing one time chunk.
-// Recording it updates the Verdict and the matching alert condition atomically.
+// Recording a live outcome updates the Verdict and matching alert condition
+// atomically. A historical outcome updates only the Verdict.
 type AnalysisOutcome struct {
 	ServiceID        int
 	ServiceName      string
@@ -138,6 +139,11 @@ type AnalysisRecorder interface {
 	RecordAnalysisFailure(context.Context, AnalysisOutcome, error) error
 }
 
+// TransactionalCollectionRecorder records collection failures in a
+// caller-owned database transaction.
 type TransactionalCollectionRecorder interface {
-	RecordCollectionFailureTx(context.Context, *sql.Tx, CollectionFailure) error
+	// RecordCollectionFailureTx writes the failure using tx and returns a
+	// callback that logs the resulting lifecycle events. The caller must invoke
+	// the callback only after tx commits successfully and discard it otherwise.
+	RecordCollectionFailureTx(context.Context, *sql.Tx, CollectionFailure) (func(), error)
 }
