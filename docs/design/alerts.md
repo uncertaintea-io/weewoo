@@ -75,6 +75,9 @@ first and reports monitoring lag. A pending recovery never diverts a newer live
 window into the backlog; only a failed attempt does. After one hour of
 continuous failure WeeWoo probes hourly rather than stopping permanently.
 Backlog entries expire after 24 hours and become Monitoring gaps.
+Recovery completes when the Time chunk is fetched and persisted. Its
+low-priority historical analysis may remain Pending without causing another
+collection attempt or a Monitoring gap.
 
 ECDF publication uses the eligible chunks currently available and does not wait
 for collection recovery. This lets a new service publish its first reference
