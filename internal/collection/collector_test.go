@@ -58,7 +58,7 @@ func TestCollectionSucceedsWhenAnalysisFails(t *testing.T) {
 }
 
 type pendingRecovery struct {
-	deferred chan struct{}
+	resolved chan int
 }
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
@@ -73,19 +73,15 @@ func (*pendingRecovery) Register(*config.Service, historicalCollector) {}
 
 func (*pendingRecovery) Unregister(int) {}
 
-func (*pendingRecovery) HasPending(context.Context, int) (bool, error) {
-	return true, nil
-}
-
-func (r *pendingRecovery) EnqueueDeferred(context.Context, *config.Service, time.Time, time.Time) error {
-	select {
-	case r.deferred <- struct{}{}:
-	default:
-	}
+func (*pendingRecovery) EnqueueFailure(context.Context, *config.Service, time.Time, time.Time, error) error {
 	return nil
 }
 
-func (*pendingRecovery) EnqueueFailure(context.Context, *config.Service, time.Time, time.Time, error) error {
+func (r *pendingRecovery) ResolveCollection(_ context.Context, serviceID int, _ time.Time) error {
+	select {
+	case r.resolved <- serviceID:
+	default:
+	}
 	return nil
 }
 
@@ -110,7 +106,7 @@ func TestScheduledCollectionContinuesWhileRecoveryIsPending(t *testing.T) {
 
 	clock := NewFakeClock(time.Date(2026, 7, 27, 12, 0, 30, 0, time.UTC))
 	scheduler := newTestScheduler(clock)
-	recovery := &pendingRecovery{deferred: make(chan struct{}, 1)}
+	recovery := &pendingRecovery{resolved: make(chan int, 1)}
 	events := make(chan CollectorEvent, 4)
 	collector := &collector{
 		client:     client,
@@ -142,6 +138,12 @@ func TestScheduledCollectionContinuesWhileRecoveryIsPending(t *testing.T) {
 				requestsMu.Lock()
 				defer requestsMu.Unlock()
 				require.Equal(t, 2, requests)
+				select {
+				case serviceID := <-recovery.resolved:
+					require.Equal(t, service.Id, serviceID)
+				case <-time.After(time.Second):
+					t.Fatal("collection alert was not resolved after live collection succeeded")
+				}
 				return
 			}
 			if event.Kind == "collection_delayed" {
@@ -150,5 +152,54 @@ func TestScheduledCollectionContinuesWhileRecoveryIsPending(t *testing.T) {
 		case <-deadline:
 			t.Fatal("timed out waiting for live collection")
 		}
+	}
+}
+
+func TestFailedScheduledCollectionDoesNotResolveCollectionAlert(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return nil, errors.New("prometheus unavailable")
+	})}
+	clock := NewFakeClock(time.Date(2026, 7, 27, 12, 0, 30, 0, time.UTC))
+	scheduler := newTestScheduler(clock)
+	recovery := &pendingRecovery{resolved: make(chan int, 1)}
+	events := make(chan CollectorEvent, 4)
+	collector := &collector{
+		client:     client,
+		chunkStore: ecdf.NewFakeChunkStore(),
+		scheduler:  scheduler,
+		recovery:   recovery,
+		events: func(event CollectorEvent) {
+			events <- event
+		},
+	}
+	t.Cleanup(collector.Stop)
+	service := &config.Service{
+		Id:            1,
+		Name:          "checkout",
+		PrometheusURL: "http://prometheus.example",
+		LoadQuery:     "load",
+		LatencyQuery:  "latency",
+		Interval:      time.Minute,
+	}
+
+	require.NoError(t, collector.Schedule(service))
+	clock.Advance(30 * time.Second)
+
+	select {
+	case event := <-events:
+		require.Equal(t, "tracking_started", event.Kind)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for tracking event")
+	}
+	select {
+	case event := <-events:
+		require.Equal(t, "collection_failed", event.Kind)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for collection failure")
+	}
+	select {
+	case serviceID := <-recovery.resolved:
+		t.Fatalf("collection alert resolved for failed service %d", serviceID)
+	default:
 	}
 }

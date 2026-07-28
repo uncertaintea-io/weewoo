@@ -84,6 +84,10 @@ func (q *RecoveryQueue) Stop() {
 	q.wg.Wait()
 }
 
+func (q *RecoveryQueue) ResolveCollection(ctx context.Context, serviceID int, at time.Time) error {
+	return q.recorder.ResolveCollection(ctx, serviceID, at)
+}
+
 func (q *RecoveryQueue) EnqueueFailure(ctx context.Context, service *config.Service, start, end time.Time, failure error) error {
 	retention := configuredRecoveryDuration(q.cfg, "collection_backlog_retention", defaultBacklogRetention)
 	retryAt := time.Now().UTC().Add(time.Second)

@@ -30,6 +30,7 @@ type collectionRecovery interface {
 	Register(service *config.Service, collect historicalCollector)
 	Unregister(serviceID int)
 	EnqueueFailure(ctx context.Context, service *config.Service, start, end time.Time, failure error) error
+	ResolveCollection(ctx context.Context, serviceID int, at time.Time) error
 }
 
 type collector struct {
@@ -113,6 +114,16 @@ func (c *collector) Schedule(service *config.Service) error {
 				return IntervalSuccess()
 			}
 			return IntervalRetry(err)
+		}
+		if c.recovery != nil {
+			if err := c.recovery.ResolveCollection(ctx, service.Id, time.Now().UTC()); err != nil {
+				slog.Error(
+					"failed to resolve collection alert after successful live collection",
+					"service_id", service.Id,
+					"service", service.Name,
+					"error", err,
+				)
+			}
 		}
 		c.emit(service.Id, "collection_succeeded", "Prometheus metrics collected successfully")
 		slog.Info("Collected samples", "service_id", service.Id, "service", service.Name, "start", start, "end", end)
