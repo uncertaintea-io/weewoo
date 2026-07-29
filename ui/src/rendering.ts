@@ -26,3 +26,8 @@ export function renderServiceUrl(prometheusUrl: string): string {
   const safeUrl = escapeHtml(prometheusUrl);
   return `<a class="service-url" href="${safeUrl}" target="_blank" rel="noreferrer">${safeUrl}</a>`;
 }
+
+export function alertCardClasses(severity: string, status: string): string {
+  const statusClass = status === 'resolved' ? ' alert-card--resolved' : '';
+  return `alert-card alert-card--${severity}${statusClass}`;
+}

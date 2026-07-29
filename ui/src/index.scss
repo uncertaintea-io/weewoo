@@ -166,6 +166,16 @@ textarea {
   border-left-color: var(--error);
 }
 
+.alert-card--resolved {
+  border-left-color: var(--success);
+}
+
+.alert-card--resolved .severity-pill,
+.alert-card--resolved .alert-status {
+  border-color: color-mix(in srgb, var(--success) 55%, transparent);
+  color: var(--success);
+}
+
 .alert-card-header {
   display: flex;
   align-items: flex-start;

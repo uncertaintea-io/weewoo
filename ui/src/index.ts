@@ -1,7 +1,7 @@
 import './index.scss'
 import { CancelImport, CreateService, DeleteService, GetService, ListAlerts, ListAllServices, ReviewAlertOccurrence, ServicesApiError, SetServicePaused, TestService, UpdateService, type AlertOccurrence, type AlertRecord, type CreateServiceInput, type Service } from './api';
 import { datetimeLocalToUtcISOString } from './datetime';
-import { escapeHtml, renderServiceUrl } from './rendering';
+import { alertCardClasses, escapeHtml, renderServiceUrl } from './rendering';
 
 const app = document.querySelector<HTMLDivElement>('#app');
 let detailRefreshTimer: number | undefined;
@@ -187,7 +187,7 @@ function renderOccurrence(occurrence: AlertOccurrence): string {
 
 function renderAlertCard(alert: AlertRecord): string {
   return `
-    <article class="alert-card alert-card--${escapeHtml(alert.severity)}" data-service-name="${escapeHtml(`${alert.serviceName} ${alert.title}`.toLowerCase())}">
+    <article class="${escapeHtml(alertCardClasses(alert.severity, alert.status))}" data-service-name="${escapeHtml(`${alert.serviceName} ${alert.title}`.toLowerCase())}">
       <header class="alert-card-header">
         <div>
           <div class="alert-labels">

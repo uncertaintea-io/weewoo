@@ -2,7 +2,7 @@ import { expect } from 'chai';
 import 'mocha';
 import { CreateService, ListAlerts, ListAllServices, ReviewAlertOccurrence, ServicesApiError } from './api';
 import { datetimeLocalToUtcISOString } from './datetime';
-import { renderServiceUrl } from './rendering';
+import { alertCardClasses, renderServiceUrl } from './rendering';
 
 describe('datetimeLocalToUtcISOString', () => {
 
@@ -31,6 +31,19 @@ describe('renderServiceUrl', () => {
   it('renders unsafe URL schemes as plain text', () => {
     expect(renderServiceUrl('javascript:alert(1)')).to.equal(
       '<span class="service-url">javascript:alert(1)</span>',
+    );
+  });
+
+});
+
+describe('alertCardClasses', () => {
+
+  it('marks resolved alerts independently of their previous severity', () => {
+    expect(alertCardClasses('critical', 'resolved')).to.equal(
+      'alert-card alert-card--critical alert-card--resolved',
+    );
+    expect(alertCardClasses('warning', 'resolved')).to.equal(
+      'alert-card alert-card--warning alert-card--resolved',
     );
   });
 
