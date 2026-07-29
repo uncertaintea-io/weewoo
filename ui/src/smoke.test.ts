@@ -2,7 +2,11 @@ import { expect } from 'chai';
 import 'mocha';
 import { CreateService, ListAlerts, ListAllServices, ReviewAlertOccurrence, ServicesApiError } from './api';
 import { datetimeLocalToUtcISOString } from './datetime';
-import { LIVE_REFRESH_MILLISECONDS, liveRefreshDelay } from './live-refresh';
+import {
+  LIVE_REFRESH_MILLISECONDS,
+  LIVE_REFRESH_OFFSET_MILLISECONDS,
+  liveRefreshDelay,
+} from './live-refresh';
 import { searchValueForRender } from './navigation';
 import { alertCardClasses, groupAlertsByStatus, renderServiceUrl } from './rendering';
 
@@ -16,16 +20,19 @@ describe('datetimeLocalToUtcISOString', () => {
 
 describe('liveRefreshDelay', () => {
 
-  it('refreshes every data-backed page', () => {
-    expect(liveRefreshDelay('services')).to.equal(LIVE_REFRESH_MILLISECONDS);
-    expect(liveRefreshDelay('service/42')).to.equal(LIVE_REFRESH_MILLISECONDS);
-    expect(liveRefreshDelay('alerts')).to.equal(LIVE_REFRESH_MILLISECONDS);
+  it('refreshes data-backed pages two seconds after each thirty-second boundary', () => {
+    const atThirtyTwoSeconds = LIVE_REFRESH_MILLISECONDS + LIVE_REFRESH_OFFSET_MILLISECONDS;
+    const atFiftyNineSeconds = 59_000;
+
+    expect(liveRefreshDelay('services', atThirtyTwoSeconds)).to.equal(LIVE_REFRESH_MILLISECONDS);
+    expect(liveRefreshDelay('service/42', atFiftyNineSeconds)).to.equal(3_000);
+    expect(liveRefreshDelay('alerts', 61_000)).to.equal(1_000);
   });
 
   it('does not refresh static pages or forms', () => {
-    expect(liveRefreshDelay('settings')).to.equal(undefined);
-    expect(liveRefreshDelay('service/42/edit')).to.equal(undefined);
-    expect(liveRefreshDelay('add/new')).to.equal(undefined);
+    expect(liveRefreshDelay('settings', 59_000)).to.equal(undefined);
+    expect(liveRefreshDelay('service/42/edit', 59_000)).to.equal(undefined);
+    expect(liveRefreshDelay('add/new', 59_000)).to.equal(undefined);
   });
 
 });
