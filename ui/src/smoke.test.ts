@@ -2,12 +2,39 @@ import { expect } from 'chai';
 import 'mocha';
 import { CreateService, ListAlerts, ListAllServices, ReviewAlertOccurrence, ServicesApiError } from './api';
 import { datetimeLocalToUtcISOString } from './datetime';
-import { renderServiceUrl } from './rendering';
+import { LIVE_REFRESH_MILLISECONDS, liveRefreshDelay } from './live-refresh';
+import { searchValueForRender } from './navigation';
+import { alertCardClasses, groupAlertsByStatus, renderServiceUrl } from './rendering';
 
 describe('datetimeLocalToUtcISOString', () => {
 
   it('interprets a timezone-less form value as UTC', () => {
     expect(datetimeLocalToUtcISOString('2026-07-01T00:00')).to.equal('2026-07-01T00:00:00.000Z');
+  });
+
+});
+
+describe('liveRefreshDelay', () => {
+
+  it('refreshes every data-backed page', () => {
+    expect(liveRefreshDelay('services')).to.equal(LIVE_REFRESH_MILLISECONDS);
+    expect(liveRefreshDelay('service/42')).to.equal(LIVE_REFRESH_MILLISECONDS);
+    expect(liveRefreshDelay('alerts')).to.equal(LIVE_REFRESH_MILLISECONDS);
+  });
+
+  it('does not refresh static pages or forms', () => {
+    expect(liveRefreshDelay('settings')).to.equal(undefined);
+    expect(liveRefreshDelay('service/42/edit')).to.equal(undefined);
+    expect(liveRefreshDelay('add/new')).to.equal(undefined);
+  });
+
+});
+
+describe('searchValueForRender', () => {
+
+  it('preserves a filter only when refreshing the same route', () => {
+    expect(searchValueForRender('services', 'services', 'checkout')).to.equal('checkout');
+    expect(searchValueForRender('services', 'alerts', 'checkout')).to.equal('');
   });
 
 });
@@ -32,6 +59,36 @@ describe('renderServiceUrl', () => {
     expect(renderServiceUrl('javascript:alert(1)')).to.equal(
       '<span class="service-url">javascript:alert(1)</span>',
     );
+  });
+
+});
+
+describe('alertCardClasses', () => {
+
+  it('marks resolved alerts independently of their previous severity', () => {
+    expect(alertCardClasses('critical', 'resolved')).to.equal(
+      'alert-card alert-card--critical alert-card--resolved',
+    );
+    expect(alertCardClasses('warning', 'resolved')).to.equal(
+      'alert-card alert-card--warning alert-card--resolved',
+    );
+  });
+
+});
+
+describe('groupAlertsByStatus', () => {
+
+  it('separates active alerts from resolved history', () => {
+    const alerts = [
+      { id: 1, status: 'resolved' },
+      { id: 2, status: 'firing' },
+      { id: 3, status: 'resolved' },
+    ];
+
+    const grouped = groupAlertsByStatus(alerts);
+
+    expect(grouped.active.map((alert) => alert.id)).to.deep.equal([2]);
+    expect(grouped.resolved.map((alert) => alert.id)).to.deep.equal([1, 3]);
   });
 
 });

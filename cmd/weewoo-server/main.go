@@ -157,6 +157,12 @@ func NewListAllServicesHandler(cfg config.Config) http.Handler {
 	})
 }
 
+func registerAPIHandlers(mux *http.ServeMux, alerts, services http.Handler) {
+	mux.Handle("/api/alerts", alerts)
+	mux.Handle("/api/alerts/", alerts)
+	mux.Handle("/api/", services)
+}
+
 func validateCreateService(request createServiceRequest) error {
 	if request.Name == "" || request.PrometheusURL == "" || request.LoadQuery == "" || request.LatencyQuery == "" {
 		return fmt.Errorf("name, prometheusUrl, loadQuery, and latencyQuery are required")
@@ -353,10 +359,11 @@ func main() {
 	imports := newImportManager(tracker, monitor)
 
 	appMux := http.NewServeMux()
-	appMux.Handle("/api/alerts", observeRequestDuration(NewAlertAPIHandler(alertManager)))
-	appMux.Handle("/api/alerts/", observeRequestDuration(NewAlertAPIHandler(alertManager)))
-	appMux.Handle("/api/", observeRequestDuration(NewServiceAPIHandler(cfg, tracker, monitor, imports, http.DefaultClient, alertManager)))
-	appMux.Handle("/api/services", observeRequestDuration(NewListAllServicesHandler(cfg)))
+	registerAPIHandlers(
+		appMux,
+		observeRequestDuration(NewAlertAPIHandler(alertManager)),
+		observeRequestDuration(NewServiceAPIHandler(cfg, tracker, monitor, imports, http.DefaultClient, alertManager)),
+	)
 	//edit this to change the sleep time
 	appMux.Handle("/sleep", observeRequestDuration(SleepHandler(sleep_duration)))
 	//Serve files from static folder
