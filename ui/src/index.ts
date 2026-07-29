@@ -2,10 +2,12 @@ import './index.scss'
 import { CancelImport, CreateService, DeleteService, GetService, ListAlerts, ListAllServices, ReviewAlertOccurrence, ServicesApiError, SetServicePaused, TestService, UpdateService, type AlertOccurrence, type AlertRecord, type CreateServiceInput, type Service } from './api';
 import { datetimeLocalToUtcISOString } from './datetime';
 import { liveRefreshDelay } from './live-refresh';
+import { searchValueForRender } from './navigation';
 import { alertCardClasses, escapeHtml, groupAlertsByStatus, renderServiceUrl } from './rendering';
 
 const app = document.querySelector<HTMLDivElement>('#app');
 let liveRefreshTimer: number | undefined;
+let lastRenderedRoute: string | undefined;
 type Theme = 'light' | 'dark' | 'system';
 
 function savedTheme(): Theme {
@@ -59,7 +61,13 @@ function renderShell(content: string, apiResponse = 'Ready', page: PageMeta = {}
   if (app === null) {
     return;
   }
-  const searchValue = document.querySelector<HTMLInputElement>('.search-box input')?.value ?? '';
+  const route = currentRoute();
+  const searchValue = searchValueForRender(
+    lastRenderedRoute,
+    route,
+    document.querySelector<HTMLInputElement>('.search-box input')?.value ?? '',
+  );
+  lastRenderedRoute = route;
 
   app.innerHTML = `
     <div class="app-frame">

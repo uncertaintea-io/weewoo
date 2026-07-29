@@ -197,8 +197,8 @@ textarea {
   justify-content: center;
   border-radius: 999px;
   padding: 3px 8px;
-  background: color-mix(in srgb, var(--success) 14%, transparent);
-  color: var(--success);
+  background: color-mix(in srgb, var(--muted) 14%, transparent);
+  color: var(--muted);
   font-size: 0.76rem;
 }
 
@@ -219,13 +219,13 @@ textarea {
 }
 
 .alert-card--resolved {
-  border-left-color: var(--success);
+  border-left-color: var(--muted);
 }
 
 .alert-card--resolved .severity-pill,
 .alert-card--resolved .alert-status {
-  border-color: color-mix(in srgb, var(--success) 55%, transparent);
-  color: var(--success);
+  border-color: color-mix(in srgb, var(--muted) 55%, transparent);
+  color: var(--muted);
 }
 
 .alert-card-header {

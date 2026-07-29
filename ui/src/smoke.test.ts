@@ -3,6 +3,7 @@ import 'mocha';
 import { CreateService, ListAlerts, ListAllServices, ReviewAlertOccurrence, ServicesApiError } from './api';
 import { datetimeLocalToUtcISOString } from './datetime';
 import { LIVE_REFRESH_MILLISECONDS, liveRefreshDelay } from './live-refresh';
+import { searchValueForRender } from './navigation';
 import { alertCardClasses, groupAlertsByStatus, renderServiceUrl } from './rendering';
 
 describe('datetimeLocalToUtcISOString', () => {
@@ -18,13 +19,22 @@ describe('liveRefreshDelay', () => {
   it('refreshes every data-backed page', () => {
     expect(liveRefreshDelay('services')).to.equal(LIVE_REFRESH_MILLISECONDS);
     expect(liveRefreshDelay('service/42')).to.equal(LIVE_REFRESH_MILLISECONDS);
-    expect(liveRefreshDelay('alerts')).to.equal(1000);
+    expect(liveRefreshDelay('alerts')).to.equal(LIVE_REFRESH_MILLISECONDS);
   });
 
   it('does not refresh static pages or forms', () => {
     expect(liveRefreshDelay('settings')).to.equal(undefined);
     expect(liveRefreshDelay('service/42/edit')).to.equal(undefined);
     expect(liveRefreshDelay('add/new')).to.equal(undefined);
+  });
+
+});
+
+describe('searchValueForRender', () => {
+
+  it('preserves a filter only when refreshing the same route', () => {
+    expect(searchValueForRender('services', 'services', 'checkout')).to.equal('checkout');
+    expect(searchValueForRender('services', 'alerts', 'checkout')).to.equal('');
   });
 
 });
