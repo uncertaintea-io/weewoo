@@ -1,7 +1,7 @@
 import './index.scss'
 import { CancelImport, CreateService, DeleteService, GetService, ListAlerts, ListAllServices, ReviewAlertOccurrence, ServicesApiError, SetServicePaused, TestService, UpdateService, type AlertOccurrence, type AlertRecord, type CreateServiceInput, type Service } from './api';
 import { datetimeLocalToUtcISOString } from './datetime';
-import { alertCardClasses, escapeHtml, renderServiceUrl } from './rendering';
+import { alertCardClasses, escapeHtml, groupAlertsByStatus, renderServiceUrl } from './rendering';
 
 const app = document.querySelector<HTMLDivElement>('#app');
 let detailRefreshTimer: number | undefined;
@@ -218,7 +218,7 @@ function renderAlertCard(alert: AlertRecord): string {
 }
 
 function renderAlerts(alerts: AlertRecord[]): void {
-  const active = alerts.filter((alert) => alert.status === 'firing');
+  const { active, resolved } = groupAlertsByStatus(alerts);
   const critical = active.filter((alert) => alert.severity === 'critical').length;
   const warning = active.filter((alert) => alert.severity === 'warning').length;
   renderShell(`
@@ -229,8 +229,14 @@ function renderAlerts(alerts: AlertRecord[]): void {
       ${renderSummaryCard('History', alerts.length - active.length, 'total')}
     </section>
     <section class="alert-panel">
-      <div class="panel-header"><h2>Alerts</h2><span>Active conditions and 90-day history</span></div>
-      ${alerts.length === 0 ? '<div class="empty-state"><h2>No alerts recorded</h2><p>Detected anomalies and monitoring failures will appear here.</p></div>' : `<div class="alert-list">${alerts.map(renderAlertCard).join('')}</div>`}
+      <div class="panel-header"><h2>Active alerts</h2><span>Conditions requiring attention</span></div>
+      ${active.length === 0 ? '<div class="empty-state alert-empty-state"><h2>No active alerts</h2><p>There are currently no conditions requiring attention.</p></div>' : `<div class="alert-list">${active.map(renderAlertCard).join('')}</div>`}
+      ${resolved.length === 0 ? '' : `
+        <details class="resolved-alerts-group">
+          <summary><span>Resolved alerts</span><strong>${String(resolved.length)}</strong><small>Retained for 90 days</small></summary>
+          <div class="alert-list">${resolved.map(renderAlertCard).join('')}</div>
+        </details>
+      `}
     </section>
   `, '200 OK', {
     eyebrow: 'WeeWoo Alerts',

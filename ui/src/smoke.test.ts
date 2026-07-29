@@ -2,7 +2,7 @@ import { expect } from 'chai';
 import 'mocha';
 import { CreateService, ListAlerts, ListAllServices, ReviewAlertOccurrence, ServicesApiError } from './api';
 import { datetimeLocalToUtcISOString } from './datetime';
-import { alertCardClasses, renderServiceUrl } from './rendering';
+import { alertCardClasses, groupAlertsByStatus, renderServiceUrl } from './rendering';
 
 describe('datetimeLocalToUtcISOString', () => {
 
@@ -45,6 +45,23 @@ describe('alertCardClasses', () => {
     expect(alertCardClasses('warning', 'resolved')).to.equal(
       'alert-card alert-card--warning alert-card--resolved',
     );
+  });
+
+});
+
+describe('groupAlertsByStatus', () => {
+
+  it('separates active alerts from resolved history', () => {
+    const alerts = [
+      { id: 1, status: 'resolved' },
+      { id: 2, status: 'firing' },
+      { id: 3, status: 'resolved' },
+    ];
+
+    const grouped = groupAlertsByStatus(alerts);
+
+    expect(grouped.active.map((alert) => alert.id)).to.deep.equal([2]);
+    expect(grouped.resolved.map((alert) => alert.id)).to.deep.equal([1, 3]);
   });
 
 });

@@ -31,3 +31,10 @@ export function alertCardClasses(severity: string, status: string): string {
   const statusClass = status === 'resolved' ? ' alert-card--resolved' : '';
   return `alert-card alert-card--${severity}${statusClass}`;
 }
+
+export function groupAlertsByStatus<T extends { status: string }>(alerts: T[]): { active: T[]; resolved: T[] } {
+  return {
+    active: alerts.filter((alert) => alert.status === 'firing'),
+    resolved: alerts.filter((alert) => alert.status === 'resolved'),
+  };
+}
