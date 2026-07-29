@@ -52,7 +52,11 @@ func (c *fakeConfig) WriteDataSource(dataSource *DataSource) error {
 func (c *fakeConfig) WriteService(service *Service) error {
 	if service.Id == 0 {
 		service.Id = len(c.services) + 1
+	}
+	if service.Revision == 0 {
 		service.Revision = 1
+	}
+	if service.Generation == 0 {
 		service.Generation = 1
 	}
 	c.services[service.Id] = service

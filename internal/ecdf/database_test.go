@@ -29,7 +29,7 @@ func TestDatabaseChunkStoreFunctions(t *testing.T) {
 	dummyChunk := []byte{0x01, 0x02, 0x03}
 
 	t.Run("WriteChunk", func(t *testing.T) {
-		err = chunkStore.WriteChunk(1, 1, now, dummyChunk)
+		err = chunkStore.WriteChunk(1, 1, 1, now, dummyChunk)
 		require.NoError(t, err)
 	})
 

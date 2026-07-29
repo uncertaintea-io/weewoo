@@ -16,34 +16,33 @@ func NewDatabaseChunkStore(db *sql.DB) ChunkStore {
 }
 
 // WriteChunk writes a time chunk to the database.
-func (c *database) WriteChunk(serviceId int, indicatorId int, timestamp time.Time, chunk []byte) error {
+func (c *database) WriteChunk(serviceID, indicatorID int, generation int64, timestamp time.Time, chunk []byte) error {
 	tx, err := c.db.Begin()
 	if err != nil {
 		return fmt.Errorf("begin chunk write: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 	_, err = tx.Exec(`
-			WITH updated AS (
-				UPDATE time_chunk
-				SET chunk = $1, collected_at = CURRENT_TIMESTAMP
-				WHERE service_id = $2
-				  AND indicator_id = $3
-				  AND "timestamp" = $4::timestamptz(0)
-				RETURNING 1
-			)
-			INSERT INTO time_chunk (service_id, indicator_id, "timestamp", chunk)
-			SELECT $2, $3, $4, $1
-			WHERE NOT EXISTS (SELECT 1 FROM updated)
-	`, chunk, serviceId, indicatorId, timestamp)
+		WITH written AS (
+			INSERT INTO time_chunk (service_id, indicator_id, "timestamp", chunk, generation)
+			VALUES ($2, $3, $4::timestamptz(0), $1, $5)
+			ON CONFLICT (service_id, indicator_id, "timestamp")
+			DO UPDATE SET chunk=EXCLUDED.chunk, collected_at=CURRENT_TIMESTAMP,
+			              generation=EXCLUDED.generation
+			WHERE time_chunk.generation <= EXCLUDED.generation
+			RETURNING service_id, indicator_id, "timestamp", generation
+		)
+		INSERT INTO verdict (service_id, indicator_id, "timestamp", automated_good, pvalue, analysis_state, generation)
+		SELECT service_id, indicator_id, "timestamp", NULL, NULL, 'pending', generation
+		FROM written
+		ON CONFLICT (service_id, indicator_id, "timestamp")
+		DO UPDATE SET automated_good=NULL, pvalue=NULL, analysis_state='pending',
+		              review_override=NULL, reviewed_at=NULL, review_reason=NULL,
+		              generation=EXCLUDED.generation
+		WHERE verdict.generation < EXCLUDED.generation
+	`, chunk, serviceID, indicatorID, timestamp, generation)
 	if err != nil {
 		return fmt.Errorf("failed to write chunk: %w", err)
-	}
-	if _, err := tx.Exec(`
-		INSERT INTO verdict (service_id, indicator_id, "timestamp", automated_good, pvalue, analysis_state)
-		VALUES ($1, $2, $3::timestamptz(0), NULL, NULL, 'pending')
-		ON CONFLICT (service_id, indicator_id, "timestamp") DO NOTHING
-	`, serviceId, indicatorId, timestamp); err != nil {
-		return fmt.Errorf("failed to initialize pending verdict: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit chunk write: %w", err)
@@ -69,63 +68,44 @@ func (c *database) ReadChunk(serviceId int, indicatorId int, timestamp time.Time
 
 // WriteVerdict records the latest verdict for a time chunk. The upsert permits
 // a later review workflow to reverse a verdict without changing this API.
-func (c *database) WriteVerdict(ctx context.Context, serviceID, indicatorID int, timestamp time.Time, good bool, pValue float64) error {
+func (c *database) WriteVerdict(ctx context.Context, serviceID, indicatorID int, generation int64, timestamp time.Time, good bool, pValue float64) error {
 	_, err := c.db.ExecContext(ctx, `
-		INSERT INTO verdict (service_id, indicator_id, "timestamp", automated_good, pvalue, analysis_state)
-		VALUES ($1, $2, $3::timestamptz(0), $4, $5, CASE WHEN $4 THEN 'good' ELSE 'bad' END)
-		ON CONFLICT (service_id, indicator_id, "timestamp")
-		DO UPDATE SET automated_good = EXCLUDED.automated_good,
-		              pvalue = EXCLUDED.pvalue,
-		              analysis_state = EXCLUDED.analysis_state
-	`, serviceID, indicatorID, timestamp, good, pValue)
+		UPDATE verdict
+		SET automated_good=$5, pvalue=$6, analysis_state=CASE WHEN $5 THEN 'good' ELSE 'bad' END
+		WHERE service_id=$1 AND indicator_id=$2 AND generation=$3
+		  AND "timestamp"=$4::timestamptz(0)
+	`, serviceID, indicatorID, generation, timestamp, good, pValue)
 	if err != nil {
 		return fmt.Errorf("failed to write verdict: %w", err)
 	}
 	return nil
 }
 
-func (c *database) CountEligibleChunks(ctx context.Context, serviceID, indicatorID int) (int, error) {
+func (c *database) CountEligibleChunks(ctx context.Context, serviceID, indicatorID int, generation int64) (int, error) {
 	var count int
 	err := c.db.QueryRowContext(ctx, `
 		SELECT count(*)
 		FROM verdict
-		WHERE service_id=$1 AND indicator_id=$2
+		WHERE service_id=$1 AND indicator_id=$2 AND generation=$3
 		  AND (
 			analysis_state IN ('baseline', 'good')
 			OR (analysis_state='bad' AND review_override=true)
 		  )
-	`, serviceID, indicatorID).Scan(&count)
+	`, serviceID, indicatorID, generation).Scan(&count)
 	if err != nil {
 		return 0, fmt.Errorf("count eligible chunks: %w", err)
 	}
 	return count, nil
 }
 
-func (c *database) CountEligibleChunksSince(ctx context.Context, serviceID, indicatorID int, since time.Time) (int, error) {
-	var count int
-	err := c.db.QueryRowContext(ctx, `
-		SELECT count(*)
-		FROM verdict AS v
-		JOIN time_chunk AS tc USING (service_id, indicator_id, "timestamp")
-		WHERE v.service_id=$1 AND v.indicator_id=$2 AND tc.collected_at >= $3
-		  AND (
-			v.analysis_state IN ('baseline', 'good')
-			OR (v.analysis_state='bad' AND v.review_override=true)
-		  )
-	`, serviceID, indicatorID, since).Scan(&count)
-	if err != nil {
-		return 0, fmt.Errorf("count eligible generation chunks: %w", err)
-	}
-	return count, nil
-}
-
 // ScanGoodChunks finds all chunks from "good" samples in a given time range.
-func (c *database) ScanGoodChunks(ctx context.Context, serviceId int, indicatorId int, out chan<- []byte) error {
+func (c *database) ScanGoodChunks(ctx context.Context, serviceID, indicatorID int, generation int64, out chan<- []byte) error {
 	rows, err := c.db.QueryContext(ctx, `
 		SELECT tc.chunk
 		FROM time_chunk AS tc
 		WHERE tc.service_id = $1
 		  AND tc.indicator_id = $2
+		  AND tc.generation = $3
 		  AND EXISTS (
 			SELECT 1
 			FROM verdict AS v
@@ -137,7 +117,7 @@ func (c *database) ScanGoodChunks(ctx context.Context, serviceId int, indicatorI
 				OR (v.analysis_state='bad' AND v.review_override=true)
 			  )
 		)
-		ORDER BY tc."timestamp"`, serviceId, indicatorId)
+		ORDER BY tc."timestamp"`, serviceID, indicatorID, generation)
 	if err != nil {
 		return err
 	}
@@ -158,34 +138,4 @@ func (c *database) ScanGoodChunks(ctx context.Context, serviceId int, indicatorI
 		return err
 	}
 	return nil
-}
-
-func (c *database) ScanGoodChunksSince(ctx context.Context, serviceID int, indicatorID int, since time.Time, out chan<- []byte) error {
-	rows, err := c.db.QueryContext(ctx, `
-		SELECT tc.chunk
-		FROM time_chunk AS tc
-		JOIN verdict AS v USING (service_id, indicator_id, "timestamp")
-		WHERE tc.service_id=$1 AND tc.indicator_id=$2 AND tc.collected_at >= $3
-		  AND (
-			v.analysis_state IN ('baseline', 'good')
-			OR (v.analysis_state='bad' AND v.review_override=true)
-		  )
-		ORDER BY tc."timestamp"
-	`, serviceID, indicatorID, since)
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var chunk []byte
-		if err := rows.Scan(&chunk); err != nil {
-			return err
-		}
-		select {
-		case out <- chunk:
-		case <-ctx.Done():
-			return ctx.Err()
-		}
-	}
-	return rows.Err()
 }
