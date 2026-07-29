@@ -19,11 +19,23 @@ type activityEntry struct {
 }
 
 type trackingStatus struct {
-	State       string          `json:"state"`
-	LastSuccess *time.Time      `json:"lastSuccess,omitempty"`
-	LastError   *time.Time      `json:"lastError,omitempty"`
-	Error       string          `json:"error,omitempty"`
-	Activity    []activityEntry `json:"activity"`
+	State          string          `json:"state"`
+	ActiveRevision int64           `json:"activeRevision,omitempty"`
+	LastSuccess    *time.Time      `json:"lastSuccess,omitempty"`
+	LastError      *time.Time      `json:"lastError,omitempty"`
+	Error          string          `json:"error,omitempty"`
+	Activity       []activityEntry `json:"activity"`
+}
+
+func (m *trackingMonitor) activateRevision(serviceID int, revision int64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	status := m.services[serviceID]
+	if status == nil {
+		status = &trackingStatus{State: "collecting"}
+		m.services[serviceID] = status
+	}
+	status.ActiveRevision = revision
 }
 
 type trackingMonitor struct {

@@ -19,6 +19,14 @@ type ChunkStore interface {
 	ScanGoodChunks(ctx context.Context, serviceId int, indicatorId int, out chan<- []byte) error
 }
 
+// GenerationChunkStore can restrict baseline construction to chunks collected
+// after a material configuration change.
+type GenerationChunkStore interface {
+	ChunkStore
+	CountEligibleChunksSince(ctx context.Context, serviceID, indicatorID int, since time.Time) (int, error)
+	ScanGoodChunksSince(ctx context.Context, serviceID, indicatorID int, since time.Time, out chan<- []byte) error
+}
+
 // JointStore atomically publishes and reads generated joint ECDFs. Publish
 // returns published=false when another process is already publishing the same
 // service and indicator.

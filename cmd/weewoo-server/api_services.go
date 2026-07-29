@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -70,29 +71,48 @@ func (a *serviceAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "service not found", http.StatusNotFound)
 			return
 		}
-		if parts[2] == "pause" {
-			service.Paused = true
-			if err := a.cfg.WriteService(service); err != nil {
-				http.Error(w, "failed to save paused state", http.StatusInternalServerError)
+		updated := *service
+		updated.Paused = parts[2] == "pause"
+		if err := a.cfg.UpdateService(r.Context(), &updated, service.Revision, requestActor(r)); err != nil {
+			if errors.Is(err, config.ErrServiceConflict) {
+				http.Error(w, "service was changed by another user; retry the operation", http.StatusConflict)
 				return
 			}
+			if parts[2] == "pause" {
+				http.Error(w, "failed to save paused state", http.StatusInternalServerError)
+			} else {
+				http.Error(w, "failed to save resumed state", http.StatusInternalServerError)
+			}
+			return
+		}
+		service = &updated
+		if parts[2] == "pause" {
 			a.tracker.Unschedule(id)
 			if a.alerts != nil {
 				_ = a.alerts.CloseService(r.Context(), id, "monitoring_paused", time.Now().UTC())
 			}
 			a.monitor.record(id, "paused", "tracking_paused", "Prometheus collection was paused", time.Now().UTC())
 		} else {
-			service.Paused = false
-			if err := a.cfg.WriteService(service); err != nil {
-				http.Error(w, "failed to save resumed state", http.StatusInternalServerError)
-				return
-			}
 			if err := a.tracker.Schedule(service); err != nil {
 				http.Error(w, "tracking could not be resumed", http.StatusInternalServerError)
 				return
 			}
 		}
 		writeJSON(w, http.StatusOK, a.response(service))
+		return
+	}
+	if strings.HasPrefix(path, "services/") && strings.HasSuffix(path, "/history") {
+		if r.Method != http.MethodGet {
+			methodNotAllowed(w, http.MethodGet)
+			return
+		}
+		idText := strings.TrimSuffix(strings.TrimPrefix(path, "services/"), "/history")
+		id, err := strconv.Atoi(idText)
+		if err != nil || id <= 0 {
+			http.Error(w, "invalid service ID", http.StatusBadRequest)
+			return
+		}
+		a.history(w, id)
 		return
 	}
 	if strings.HasPrefix(path, "services/") {
@@ -132,6 +152,15 @@ func (a *serviceAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.NotFound(w, r)
+}
+
+func (a *serviceAPI) history(w http.ResponseWriter, id int) {
+	history, err := a.cfg.ReadServiceHistory(id)
+	if err != nil {
+		http.Error(w, "failed to read service history", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, history)
 }
 
 func methodNotAllowed(w http.ResponseWriter, allow string) {
@@ -206,6 +235,7 @@ func (a *serviceAPI) create(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "service created, but tracking could not be started", http.StatusInternalServerError)
 		return
 	}
+	a.monitor.activateRevision(service.Id, service.Revision)
 	if request.ImportStart != nil {
 		a.imports.start(service, *request.ImportStart, *request.ImportEnd)
 	}
@@ -226,17 +256,44 @@ func (a *serviceAPI) update(w http.ResponseWriter, r *http.Request, id int) {
 	}
 	service := serviceFromRequest(request, id)
 	service.Paused = existing.Paused
-	if err := a.cfg.WriteService(service); err != nil {
+	expectedRevision := request.Revision
+	if expectedRevision == 0 {
+		expectedRevision = existing.Revision
+	}
+	if err := a.cfg.UpdateService(r.Context(), service, expectedRevision, requestActor(r)); err != nil {
+		if errors.Is(err, config.ErrServiceConflict) {
+			http.Error(w, "service was changed by another user; reload and try again", http.StatusConflict)
+			return
+		}
+		if errors.Is(err, config.ErrServiceNotFound) {
+			http.Error(w, "service not found", http.StatusNotFound)
+			return
+		}
 		http.Error(w, "failed to update service", http.StatusInternalServerError)
 		return
 	}
+	if service.Generation != existing.Generation && a.alerts != nil {
+		_ = a.alerts.CloseService(r.Context(), id, "configuration_changed", time.Now().UTC())
+	}
 	if !service.Paused {
 		if err := a.tracker.Schedule(service); err != nil {
-			http.Error(w, "service updated, but tracking could not be restarted", http.StatusInternalServerError)
+			a.monitor.record(id, "degraded", "configuration_apply_failed", "Configuration saved, but tracking could not be restarted", time.Now().UTC())
+			writeJSON(w, http.StatusAccepted, a.response(service))
 			return
 		}
+		a.monitor.activateRevision(id, service.Revision)
+		a.monitor.record(id, "collecting", "configuration_activated", fmt.Sprintf("Configuration revision %d activated; learning generation %d", service.Revision, service.Generation), time.Now().UTC())
 	}
 	writeJSON(w, http.StatusOK, a.response(service))
+}
+
+func requestActor(r *http.Request) string {
+	if r.TLS != nil && len(r.TLS.VerifiedChains) > 0 && len(r.TLS.PeerCertificates) > 0 {
+		if commonName := r.TLS.PeerCertificates[0].Subject.CommonName; commonName != "" {
+			return commonName
+		}
+	}
+	return "anonymous"
 }
 
 func (a *serviceAPI) delete(w http.ResponseWriter, id int) {
@@ -271,13 +328,33 @@ func (a *serviceAPI) testConnection(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	end := time.Now().UTC()
 	start := end.Add(-5 * time.Minute)
-	if _, err := collection.QueryPrometheusRange(ctx, a.httpClient, request.PrometheusURL, request.LoadQuery, start, end); err != nil {
-		http.Error(w, "load query failed: "+err.Error(), http.StatusBadGateway)
+	loadValues, loadErr := collection.QueryPrometheusRange(ctx, a.httpClient, request.PrometheusURL, request.LoadQuery, start, end)
+	latencyValues, latencyErr := collection.QueryPrometheusRange(ctx, a.httpClient, request.PrometheusURL, request.LatencyQuery, start, end)
+	type queryResult struct {
+		Valid   bool    `json:"valid"`
+		Samples int     `json:"samples"`
+		Latest  float64 `json:"latest,omitempty"`
+		Error   string  `json:"error,omitempty"`
+	}
+	resultFor := func(values []float64, err error) queryResult {
+		if err != nil {
+			return queryResult{Error: err.Error()}
+		}
+		return queryResult{Valid: true, Samples: len(values), Latest: values[len(values)-1]}
+	}
+	response := struct {
+		Message      string      `json:"message"`
+		LoadQuery    queryResult `json:"loadQuery"`
+		LatencyQuery queryResult `json:"latencyQuery"`
+	}{
+		Message:      "Connection and queries succeeded",
+		LoadQuery:    resultFor(loadValues, loadErr),
+		LatencyQuery: resultFor(latencyValues, latencyErr),
+	}
+	if loadErr != nil || latencyErr != nil {
+		response.Message = "One or more queries failed validation"
+		writeJSON(w, http.StatusUnprocessableEntity, response)
 		return
 	}
-	if _, err := collection.QueryPrometheusRange(ctx, a.httpClient, request.PrometheusURL, request.LatencyQuery, start, end); err != nil {
-		http.Error(w, "latency query failed: "+err.Error(), http.StatusBadGateway)
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]string{"message": "Connection and queries succeeded"})
+	writeJSON(w, http.StatusOK, response)
 }

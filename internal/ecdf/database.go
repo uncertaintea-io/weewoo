@@ -101,6 +101,24 @@ func (c *database) CountEligibleChunks(ctx context.Context, serviceID, indicator
 	return count, nil
 }
 
+func (c *database) CountEligibleChunksSince(ctx context.Context, serviceID, indicatorID int, since time.Time) (int, error) {
+	var count int
+	err := c.db.QueryRowContext(ctx, `
+		SELECT count(*)
+		FROM verdict AS v
+		JOIN time_chunk AS tc USING (service_id, indicator_id, "timestamp")
+		WHERE v.service_id=$1 AND v.indicator_id=$2 AND tc.collected_at >= $3
+		  AND (
+			v.analysis_state IN ('baseline', 'good')
+			OR (v.analysis_state='bad' AND v.review_override=true)
+		  )
+	`, serviceID, indicatorID, since).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("count eligible generation chunks: %w", err)
+	}
+	return count, nil
+}
+
 // ScanGoodChunks finds all chunks from "good" samples in a given time range.
 func (c *database) ScanGoodChunks(ctx context.Context, serviceId int, indicatorId int, out chan<- []byte) error {
 	rows, err := c.db.QueryContext(ctx, `
@@ -140,4 +158,34 @@ func (c *database) ScanGoodChunks(ctx context.Context, serviceId int, indicatorI
 		return err
 	}
 	return nil
+}
+
+func (c *database) ScanGoodChunksSince(ctx context.Context, serviceID int, indicatorID int, since time.Time, out chan<- []byte) error {
+	rows, err := c.db.QueryContext(ctx, `
+		SELECT tc.chunk
+		FROM time_chunk AS tc
+		JOIN verdict AS v USING (service_id, indicator_id, "timestamp")
+		WHERE tc.service_id=$1 AND tc.indicator_id=$2 AND tc.collected_at >= $3
+		  AND (
+			v.analysis_state IN ('baseline', 'good')
+			OR (v.analysis_state='bad' AND v.review_override=true)
+		  )
+		ORDER BY tc."timestamp"
+	`, serviceID, indicatorID, since)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var chunk []byte
+		if err := rows.Scan(&chunk); err != nil {
+			return err
+		}
+		select {
+		case out <- chunk:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return rows.Err()
 }

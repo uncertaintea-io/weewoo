@@ -98,6 +98,18 @@ func (c *fakeChunkStore) CountEligibleChunks(_ context.Context, serviceID, indic
 	return count, nil
 }
 
+func (c *fakeChunkStore) CountEligibleChunksSince(_ context.Context, serviceID, indicatorID int, since time.Time) (int, error) {
+	count := 0
+	for _, entry := range c.chunks[serviceID][indicatorID] {
+		eligible := entry.baseline || (entry.good != nil && *entry.good) ||
+			(entry.good != nil && !*entry.good && entry.review != nil && *entry.review)
+		if eligible && !entry.timestamp.Before(since) {
+			count++
+		}
+	}
+	return count, nil
+}
+
 func (c *fakeChunkStore) ScanGoodChunks(ctx context.Context, serviceId int, indicatorId int, out chan<- []byte) error {
 	indicators, ok := c.chunks[serviceId]
 	if !ok {
@@ -111,6 +123,22 @@ func (c *fakeChunkStore) ScanGoodChunks(ctx context.Context, serviceId int, indi
 		eligible := entry.baseline || (entry.good != nil && *entry.good) ||
 			(entry.good != nil && !*entry.good && entry.review != nil && *entry.review)
 		if !eligible {
+			continue
+		}
+		select {
+		case out <- entry.chunk:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return nil
+}
+
+func (c *fakeChunkStore) ScanGoodChunksSince(ctx context.Context, serviceID int, indicatorID int, since time.Time, out chan<- []byte) error {
+	for _, entry := range c.chunks[serviceID][indicatorID] {
+		eligible := entry.baseline || (entry.good != nil && *entry.good) ||
+			(entry.good != nil && !*entry.good && entry.review != nil && *entry.review)
+		if !eligible || entry.timestamp.Before(since) {
 			continue
 		}
 		select {
