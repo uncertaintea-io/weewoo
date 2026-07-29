@@ -2,12 +2,29 @@ import { expect } from 'chai';
 import 'mocha';
 import { CreateService, ListAlerts, ListAllServices, ReviewAlertOccurrence, ServicesApiError } from './api';
 import { datetimeLocalToUtcISOString } from './datetime';
+import { LIVE_REFRESH_MILLISECONDS, liveRefreshDelay } from './live-refresh';
 import { alertCardClasses, groupAlertsByStatus, renderServiceUrl } from './rendering';
 
 describe('datetimeLocalToUtcISOString', () => {
 
   it('interprets a timezone-less form value as UTC', () => {
     expect(datetimeLocalToUtcISOString('2026-07-01T00:00')).to.equal('2026-07-01T00:00:00.000Z');
+  });
+
+});
+
+describe('liveRefreshDelay', () => {
+
+  it('refreshes every data-backed page', () => {
+    expect(liveRefreshDelay('services')).to.equal(LIVE_REFRESH_MILLISECONDS);
+    expect(liveRefreshDelay('service/42')).to.equal(LIVE_REFRESH_MILLISECONDS);
+    expect(liveRefreshDelay('alerts')).to.equal(1000);
+  });
+
+  it('does not refresh static pages or forms', () => {
+    expect(liveRefreshDelay('settings')).to.equal(undefined);
+    expect(liveRefreshDelay('service/42/edit')).to.equal(undefined);
+    expect(liveRefreshDelay('add/new')).to.equal(undefined);
   });
 
 });

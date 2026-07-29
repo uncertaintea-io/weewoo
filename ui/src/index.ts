@@ -1,10 +1,11 @@
 import './index.scss'
 import { CancelImport, CreateService, DeleteService, GetService, ListAlerts, ListAllServices, ReviewAlertOccurrence, ServicesApiError, SetServicePaused, TestService, UpdateService, type AlertOccurrence, type AlertRecord, type CreateServiceInput, type Service } from './api';
 import { datetimeLocalToUtcISOString } from './datetime';
+import { liveRefreshDelay } from './live-refresh';
 import { alertCardClasses, escapeHtml, groupAlertsByStatus, renderServiceUrl } from './rendering';
 
 const app = document.querySelector<HTMLDivElement>('#app');
-let detailRefreshTimer: number | undefined;
+let liveRefreshTimer: number | undefined;
 type Theme = 'light' | 'dark' | 'system';
 
 function savedTheme(): Theme {
@@ -58,6 +59,7 @@ function renderShell(content: string, apiResponse = 'Ready', page: PageMeta = {}
   if (app === null) {
     return;
   }
+  const searchValue = document.querySelector<HTMLInputElement>('.search-box input')?.value ?? '';
 
   app.innerHTML = `
     <div class="app-frame">
@@ -124,6 +126,11 @@ function renderShell(content: string, apiResponse = 'Ready', page: PageMeta = {}
     </div>
   `;
   bindShellInteractions();
+  const search = document.querySelector<HTMLInputElement>('.search-box input');
+  if (search !== null && searchValue !== '') {
+    search.value = searchValue;
+    search.dispatchEvent(new Event('input'));
+  }
 }
 
 function bindShellInteractions(): void {
@@ -187,7 +194,7 @@ function renderOccurrence(occurrence: AlertOccurrence): string {
 
 function renderAlertCard(alert: AlertRecord): string {
   return `
-    <article class="${escapeHtml(alertCardClasses(alert.severity, alert.status))}" data-service-name="${escapeHtml(`${alert.serviceName} ${alert.title}`.toLowerCase())}">
+    <article class="${escapeHtml(alertCardClasses(alert.severity, alert.status))}" data-alert-id="${String(alert.id)}" data-service-name="${escapeHtml(`${alert.serviceName} ${alert.title}`.toLowerCase())}">
       <header class="alert-card-header">
         <div>
           <div class="alert-labels">
@@ -218,6 +225,10 @@ function renderAlertCard(alert: AlertRecord): string {
 }
 
 function renderAlerts(alerts: AlertRecord[]): void {
+  const resolvedHistoryOpen = document.querySelector<HTMLDetailsElement>('.resolved-alerts-group')?.open ?? false;
+  const expandedAlertIds = new Set(Array.from(
+    document.querySelectorAll<HTMLDetailsElement>('.alert-card > .occurrence-disclosure[open]'),
+  ).map((details) => details.closest<HTMLElement>('.alert-card')?.dataset.alertId).filter((id) => id !== undefined));
   const { active, resolved } = groupAlertsByStatus(alerts);
   const critical = active.filter((alert) => alert.severity === 'critical').length;
   const warning = active.filter((alert) => alert.severity === 'warning').length;
@@ -245,6 +256,12 @@ function renderAlerts(alerts: AlertRecord[]): void {
     endpoint: '/api/alerts',
   });
   document.querySelector('#service-count')?.replaceChildren(`${String(active.length)} active alert${active.length === 1 ? '' : 's'}`);
+  const resolvedHistory = document.querySelector<HTMLDetailsElement>('.resolved-alerts-group');
+  if (resolvedHistory !== null) resolvedHistory.open = resolvedHistoryOpen;
+  document.querySelectorAll<HTMLDetailsElement>('.alert-card > .occurrence-disclosure').forEach((details) => {
+    const alertId = details.closest<HTMLElement>('.alert-card')?.dataset.alertId;
+    details.open = alertId !== undefined && expandedAlertIds.has(alertId);
+  });
   document.querySelectorAll<HTMLButtonElement>('.review-occurrence').forEach((button) => {
     button.addEventListener('click', () => { void reviewOccurrence(button); });
   });
@@ -270,13 +287,17 @@ async function reviewOccurrence(button: HTMLButtonElement): Promise<void> {
   }
 }
 
-async function loadAlerts(): Promise<void> {
-  renderShell('<section class="alert-panel" aria-busy="true"><div class="skeleton-list"><div class="skeleton-row"></div><div class="skeleton-row"></div></div></section>', 'Loading', {
-    eyebrow: 'WeeWoo Alerts', title: 'Alerts and anomaly history', description: 'Loading durable alert history.', endpoint: '/api/alerts',
-  });
+async function loadAlerts(showLoading = true): Promise<void> {
+  if (showLoading) {
+    renderShell('<section class="alert-panel" aria-busy="true"><div class="skeleton-list"><div class="skeleton-row"></div><div class="skeleton-row"></div></div></section>', 'Loading', {
+      eyebrow: 'WeeWoo Alerts', title: 'Alerts and anomaly history', description: 'Loading durable alert history.', endpoint: '/api/alerts',
+    });
+  }
   try {
-    renderAlerts(await ListAlerts(true));
+    const alerts = await ListAlerts(true);
+    if (currentRoute() === 'alerts') renderAlerts(alerts);
   } catch (error) {
+    if (!showLoading || currentRoute() !== 'alerts') return;
     const response = apiResponseForError(error);
     renderShell(`<section class="error-panel"><strong class="error-code">${escapeHtml(response)}</strong><h2>Unable to load alerts</h2><p>Check the alert history database and retry.</p><button id="retry-alerts" class="retry-button" type="button">Retry</button></section>`, response, {
       eyebrow: 'WeeWoo Alerts', title: 'Alerts and anomaly history', description: 'Durable alert history is unavailable.', endpoint: '/api/alerts',
@@ -644,11 +665,6 @@ function renderServiceDetail(service: Service): void {
       })();
     });
   });
-  if (service.imports.some((job) => job.state === 'queued' || job.state === 'running')) {
-    detailRefreshTimer = window.setTimeout(() => {
-      if (window.location.hash === `#service/${String(service.id)}`) void loadServiceDetail(service.id);
-    }, 2000);
-  }
 }
 
 async function deleteServiceFromDetail(service: Service): Promise<void> {
@@ -657,9 +673,14 @@ async function deleteServiceFromDetail(service: Service): Promise<void> {
   window.location.hash = 'services';
 }
 
-async function loadServiceDetail(id: number): Promise<void> {
-  renderLoading();
-  try { renderServiceDetail(await GetService(id)); } catch (error) { renderError(error); }
+async function loadServiceDetail(id: number, showLoading = true): Promise<void> {
+  if (showLoading) renderLoading();
+  try {
+    const service = await GetService(id);
+    if (currentRoute() === `service/${String(id)}`) renderServiceDetail(service);
+  } catch (error) {
+    if (showLoading && currentRoute() === `service/${String(id)}`) renderError(error);
+  }
 }
 
 function renderEditServiceForm(service: Service): void {
@@ -693,31 +714,90 @@ async function loadEditService(id: number): Promise<void> {
   try { renderEditServiceForm(await GetService(id)); } catch (error) { renderError(error); }
 }
 
-async function boot(): Promise<void> {
-  if (detailRefreshTimer !== undefined) {
-    window.clearTimeout(detailRefreshTimer);
-    detailRefreshTimer = undefined;
+function currentRoute(): string {
+  return window.location.hash.slice(1) || 'services';
+}
+
+async function loadServices(showLoading = true): Promise<void> {
+  if (showLoading) renderLoading();
+  try {
+    const services = await ListAllServices();
+    if (currentRoute() === 'services') renderServices(services);
+  } catch (error) {
+    if (showLoading && currentRoute() === 'services') renderError(error);
   }
-  const route = window.location.hash.slice(1) || 'services';
+}
+
+function clearLiveRefresh(): void {
+  if (liveRefreshTimer !== undefined) {
+    window.clearTimeout(liveRefreshTimer);
+    liveRefreshTimer = undefined;
+  }
+}
+
+async function refreshRoute(route: string): Promise<void> {
+  if (route === 'alerts') {
+    await loadAlerts(false);
+    return;
+  }
+  if (route === 'services') {
+    await loadServices(false);
+    return;
+  }
+  const detailMatch = /^service\/(\d+)$/.exec(route);
+  if (detailMatch !== null) await loadServiceDetail(Number(detailMatch[1]), false);
+}
+
+function scheduleLiveRefresh(route: string): void {
+  clearLiveRefresh();
+  const delay = liveRefreshDelay(route);
+  if (delay === undefined) return;
+  liveRefreshTimer = window.setTimeout(() => {
+    liveRefreshTimer = undefined;
+    if (currentRoute() !== route) return;
+    if (document.hidden) {
+      scheduleLiveRefresh(route);
+      return;
+    }
+    void refreshRoute(route).finally(() => {
+      if (currentRoute() === route) scheduleLiveRefresh(route);
+    });
+  }, delay);
+}
+
+async function boot(): Promise<void> {
+  clearLiveRefresh();
+  const route = currentRoute();
   if (route === 'add') { renderAddChoice(); return; }
   if (route === 'add/new') { renderServiceForm(false); return; }
   if (route === 'add/import') { renderServiceForm(true); return; }
   if (route === 'settings') { renderSettings(); return; }
-  if (route === 'alerts') { await loadAlerts(); return; }
+  if (route === 'alerts') {
+    await loadAlerts();
+    if (currentRoute() === route) scheduleLiveRefresh(route);
+    return;
+  }
   const detailMatch = /^service\/(\d+)$/.exec(route);
-  if (detailMatch !== null) { await loadServiceDetail(Number(detailMatch[1])); return; }
+  if (detailMatch !== null) {
+    await loadServiceDetail(Number(detailMatch[1]));
+    if (currentRoute() === route) scheduleLiveRefresh(route);
+    return;
+  }
   const editMatch = /^service\/(\d+)\/edit$/.exec(route);
   if (editMatch !== null) { await loadEditService(Number(editMatch[1])); return; }
   if (route !== 'services') { renderPlaceholder(route); return; }
-  renderLoading();
-
-  try {
-    const services = await ListAllServices();
-    renderServices(services);
-  } catch (error) {
-    renderError(error);
-  }
+  await loadServices();
+  if (currentRoute() === route) scheduleLiveRefresh(route);
 }
 
 window.addEventListener('hashchange', () => { void boot(); });
+document.addEventListener('visibilitychange', () => {
+  const route = currentRoute();
+  if (!document.hidden && liveRefreshDelay(route) !== undefined) {
+    clearLiveRefresh();
+    void refreshRoute(route).finally(() => {
+      if (currentRoute() === route) scheduleLiveRefresh(route);
+    });
+  }
+});
 void boot();
