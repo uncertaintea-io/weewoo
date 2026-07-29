@@ -16,7 +16,12 @@ const (
 	jointECDFRenderHeight = 128
 )
 
-type jointECDFRenderer func(ctx context.Context, jointECDF []byte, width, height int) (*ecdf.RenderResponse, error)
+type jointECDFRenderer func(
+	ctx context.Context,
+	jointECDF []byte,
+	width, height int,
+	options ecdf.RenderOptions,
+) (*ecdf.RenderResponse, error)
 
 type jointECDFAPI struct {
 	store  ecdf.JointStore
@@ -51,6 +56,11 @@ func (a *jointECDFAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	options, err := renderOptionsQuery(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 
 	jointECDF, err := a.store.ReadCurrent(r.Context(), serviceID, indicatorID)
 	if err != nil {
@@ -63,13 +73,25 @@ func (a *jointECDFAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	response, err := a.render(r.Context(), jointECDF, jointECDFRenderWidth, jointECDFRenderHeight)
+	response, err := a.render(r.Context(), jointECDF, jointECDFRenderWidth, jointECDFRenderHeight, options)
 	if err != nil {
 		slog.Error("failed to render joint ECDF", "service_id", serviceID, "indicator_id", indicatorID, "error", err)
 		http.Error(w, "failed to render joint ECDF", http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, http.StatusOK, response)
+}
+
+func renderOptionsQuery(r *http.Request) (ecdf.RenderOptions, error) {
+	value := r.URL.Query().Get("options")
+	if value == "" {
+		return 0, nil
+	}
+	options, err := strconv.Atoi(value)
+	if err != nil || options < 0 || ecdf.RenderOptions(options)&^ecdf.AllRenderOptions != 0 {
+		return 0, errors.New("options must be an integer between 0 and 3")
+	}
+	return ecdf.RenderOptions(options), nil
 }
 
 func positiveQueryID(r *http.Request, name string) (int, error) {

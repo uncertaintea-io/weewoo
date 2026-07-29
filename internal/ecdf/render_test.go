@@ -31,7 +31,7 @@ func TestRenderJointECDFWithRealTool(t *testing.T) {
 	var jointECDF bytes.Buffer
 	require.NoError(t, BuildJointECDFContext(context.Background(), store, serviceID, indicatorID, &jointECDF))
 
-	response, err := Render(context.Background(), jointECDF.Bytes(), 2, 2)
+	response, err := Render(context.Background(), jointECDF.Bytes(), 2, 2, RenderOptionLogY)
 
 	require.NoError(t, err)
 	assert.Equal(t, 2, response.Width)
@@ -40,7 +40,10 @@ func TestRenderJointECDFWithRealTool(t *testing.T) {
 	assert.Equal(t, 20.0, response.XMax)
 	assert.Equal(t, 100.0, response.YMin)
 	assert.Equal(t, 200.0, response.YMax)
-	assert.InDeltaSlice(t, []float64{0, 0.125, 0.125, 0}, response.Masses, 1e-12)
+	assert.InDeltaSlice(t, []float64{
+		0.02144660940672627, 0.125,
+		0.10355339059327373, 0,
+	}, response.Masses, 1e-12)
 }
 
 func TestReadRenderResponseRejectsUnexpectedSize(t *testing.T) {
@@ -73,11 +76,21 @@ func TestReadRenderResponseRejectsInvalidValues(t *testing.T) {
 func TestRenderRejectsInvalidDimensionsBeforeRunningTool(t *testing.T) {
 	setJECDFTool(t, "/does/not/exist")
 
-	response, err := Render(context.Background(), nil, 1, 2)
+	response, err := Render(context.Background(), nil, 1, 2, 0)
 
 	require.Error(t, err)
 	assert.Nil(t, response)
 	assert.Contains(t, err.Error(), "dimensions must be at least 2")
+}
+
+func TestRenderRejectsUnsupportedOptionsBeforeRunningTool(t *testing.T) {
+	setJECDFTool(t, "/does/not/exist")
+
+	response, err := Render(context.Background(), nil, 2, 2, 4)
+
+	require.Error(t, err)
+	assert.Nil(t, response)
+	assert.Contains(t, err.Error(), "unsupported render options")
 }
 
 func invalidRenderPayload(t *testing.T, values []float64) []byte {

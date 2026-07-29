@@ -6,7 +6,7 @@ describe('Joint ECDF API', () => {
 
   it('requests and parses a rendered joint ECDF', async () => {
     const fetcher = (url: string | URL | Request, init?: RequestInit): Promise<Response> => {
-      expect(url).to.equal('/api/jecdf?serviceId=7&indicatorId=9');
+      expect(url).to.equal('/api/jecdf?serviceId=7&indicatorId=9&options=2');
       expect(new Headers(init?.headers).get('Accept')).to.equal('application/json');
       return Promise.resolve(new Response(JSON.stringify({
         width: 2,
@@ -19,7 +19,7 @@ describe('Joint ECDF API', () => {
       })));
     };
 
-    const render = await GetJointECDF(7, 9, fetcher);
+    const render = await GetJointECDF(7, 9, 2, fetcher);
 
     expect(render).to.deep.equal({
       width: 2,
@@ -44,7 +44,7 @@ describe('Joint ECDF API', () => {
     })));
 
     try {
-      await GetJointECDF(1, 1, fetcher);
+      await GetJointECDF(1, 1, 0, fetcher);
       expect.fail('Expected GetJointECDF to reject.');
     } catch (error) {
       expect((error as Error).message).to.equal('Joint ECDF response must contain 4 cell masses.');

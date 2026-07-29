@@ -22,9 +22,21 @@ type RenderResponse struct {
 	Masses []float64 `json:"masses"`
 }
 
-func Render(ctx context.Context, jointECDF []byte, w, h int) (*RenderResponse, error) {
+type RenderOptions int
+
+const (
+	RenderOptionLogX RenderOptions = 1 << iota
+	RenderOptionLogY
+)
+
+const AllRenderOptions = RenderOptionLogX | RenderOptionLogY
+
+func Render(ctx context.Context, jointECDF []byte, w, h int, options RenderOptions) (*RenderResponse, error) {
 	if w < 2 || h < 2 {
 		return nil, fmt.Errorf("render dimensions must be at least 2, were %d x %d", w, h)
+	}
+	if options < 0 || options&^AllRenderOptions != 0 {
+		return nil, fmt.Errorf("unsupported render options: %d", options)
 	}
 	const valuesBeforeMasses = 4
 	maxCells := math.MaxInt/8 - valuesBeforeMasses
@@ -35,7 +47,12 @@ func Render(ctx context.Context, jointECDF []byte, w, h int) (*RenderResponse, e
 	var buf bytes.Buffer
 	err := runJECDF(
 		ctx,
-		[]string{"render", strconv.FormatInt(int64(w), 10), strconv.FormatInt(int64(h), 10)},
+		[]string{
+			"render",
+			strconv.FormatInt(int64(w), 10),
+			strconv.FormatInt(int64(h), 10),
+			strconv.FormatInt(int64(options), 10),
+		},
 		func(ctx context.Context, stdin io.Writer) error {
 			if _, err := io.Copy(stdin, bytes.NewReader(jointECDF)); err != nil {
 				return err

@@ -1,7 +1,7 @@
 import { expect } from 'chai';
 import 'mocha';
 import { viridis } from './colormap';
-import { densityPixels, formatLatencySeconds, normalizeMasses } from './jecdf';
+import { densityPixels, formatLatencySeconds, normalizeMasses, renderAxisValue } from './jecdf';
 
 describe('Joint ECDF density rendering', () => {
 
@@ -32,6 +32,17 @@ describe('Joint ECDF density rendering', () => {
     expect(formatLatencySeconds(0.001)).to.equal('1ms');
     expect(formatLatencySeconds(0.0001)).to.equal('100µs');
     expect(formatLatencySeconds(0.00000025)).to.equal('250ns');
+  });
+
+  it('maps render positions onto linear and logarithmic dataset axes', () => {
+    expect(renderAxisValue(10, 110, 0.5, false)).to.equal(60);
+    expect(renderAxisValue(1, 100, 0.5, true)).to.be.closeTo(10, 1e-12);
+    expect(renderAxisValue(0.001, 1000, 0.25, true)).to.be.closeTo(0.0316227766, 1e-10);
+  });
+
+  it('preserves axis endpoints and clamps positions outside the rendered image', () => {
+    expect(renderAxisValue(1, 100, -1, true)).to.equal(1);
+    expect(renderAxisValue(1, 100, 2, true)).to.equal(100);
   });
 
 });

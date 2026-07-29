@@ -140,6 +140,9 @@ export interface JointECDFRender {
   masses: number[];
 }
 
+export const JECDF_RENDER_OPTION_LOG_X = 1;
+export const JECDF_RENDER_OPTION_LOG_Y = 2;
+
 type Fetcher = typeof fetch;
 
 export class ServicesApiError extends Error {
@@ -446,10 +449,14 @@ export async function ListAlerts(includeHistory = true, fetcher: Fetcher = fetch
 export async function GetJointECDF(
   serviceID: number,
   indicatorID: number,
+  options = 0,
   fetcher: Fetcher = fetch,
 ): Promise<JointECDFRender> {
+  const optionsQuery = options === 0
+    ? ''
+    : `&options=${encodeURIComponent(String(options))}`;
   const response = await fetcher(
-    `/api/jecdf?serviceId=${encodeURIComponent(String(serviceID))}&indicatorId=${encodeURIComponent(String(indicatorID))}`,
+    `/api/jecdf?serviceId=${encodeURIComponent(String(serviceID))}&indicatorId=${encodeURIComponent(String(indicatorID))}${optionsQuery}`,
     { headers: { Accept: 'application/json' } },
   );
   if (!response.ok) throw await readServiceError(response);

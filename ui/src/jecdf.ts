@@ -1,8 +1,14 @@
-import { GetJointECDF, ServicesApiError, type JointECDFRender } from './api';
+import {
+  GetJointECDF,
+  JECDF_RENDER_OPTION_LOG_X,
+  JECDF_RENDER_OPTION_LOG_Y,
+  ServicesApiError,
+  type JointECDFRender,
+} from './api';
 import { viridis } from './colormap';
-import { linearFunction, type Func } from './func';
 
 const LOAD_LATENCY_INDICATOR_ID = 1;
+const LOAD_LATENCY_RENDER_OPTIONS = JECDF_RENDER_OPTION_LOG_Y;
 const DEFAULT_GAMMA = 0.55;
 const PLOT_MARGIN = { top: 18, right: 18, bottom: 64, left: 76 };
 
@@ -16,9 +22,51 @@ interface PlotArea {
 interface CellSelection {
   column: number;
   row: number;
-  load: number;
-  latency: number;
+  xValue: number;
+  yValue: number;
   mass: number;
+}
+
+interface AxisOptions {
+  label: string;
+  logarithmic: boolean;
+  format: (value: number) => string;
+}
+
+interface PlotOptions {
+  xAxis: AxisOptions;
+  yAxis: AxisOptions;
+}
+
+export function renderAxisValue(
+  minimum: number,
+  maximum: number,
+  ratio: number,
+  logarithmic: boolean,
+): number {
+  if (!Number.isFinite(minimum) || !Number.isFinite(maximum) || minimum > maximum) {
+    throw new RangeError(`axis bounds must be finite and ordered, got [${String(minimum)}, ${String(maximum)}]`);
+  }
+  if (!Number.isFinite(ratio)) {
+    throw new RangeError(`axis ratio must be finite, got ${String(ratio)}`);
+  }
+  if (logarithmic && minimum <= 0) {
+    throw new RangeError(`logarithmic axis bounds must be positive, got [${String(minimum)}, ${String(maximum)}]`);
+  }
+
+  const clampedRatio = Math.min(Math.max(ratio, 0), 1);
+  if (clampedRatio === 0 || minimum === maximum) return minimum;
+  if (clampedRatio === 1) return maximum;
+  if (!logarithmic) {
+    return minimum <= 0 && maximum >= 0
+      ? minimum * (1 - clampedRatio) + maximum * clampedRatio
+      : minimum + (maximum - minimum) * clampedRatio;
+  }
+
+  const relativeSpan = (maximum - minimum) / minimum;
+  return Number.isFinite(relativeSpan)
+    ? minimum * Math.exp(clampedRatio * Math.log1p(relativeSpan))
+    : Math.exp(Math.log(minimum) + clampedRatio * (Math.log(maximum) - Math.log(minimum)));
 }
 
 export function normalizeMasses(masses: number[], gamma = DEFAULT_GAMMA): number[] {
@@ -72,12 +120,11 @@ class JointECDFPlot {
   private readonly resizeObserver: ResizeObserver | null;
   private selection: CellSelection | null = null;
   private plotArea: PlotArea | null = null;
-  private cx2fx: Func | null = null;
-  private cy2fy: Func | null = null;
 
   public constructor(
     private readonly canvas: HTMLCanvasElement,
     private readonly data: JointECDFRender,
+    private readonly options: PlotOptions,
     private readonly onSelection: (selection: CellSelection | null) => void,
     gamma = DEFAULT_GAMMA,
   ) {
@@ -137,8 +184,6 @@ class JointECDFPlot {
       height: side,
     };
     this.plotArea = area;
-    this.cx2fx = linearFunction(area.x, this.data.xMin, area.x + area.width, this.data.xMax);
-    this.cy2fy = linearFunction(area.y, this.data.yMax, area.y + area.height, this.data.yMin);
 
     context.save();
     context.imageSmoothingEnabled = false;
@@ -168,33 +213,33 @@ class JointECDFPlot {
     context.textBaseline = 'top';
     ticks.forEach((tick) => {
       const x = area.x + tick * area.width;
-      const value = this.data.xMin + tick * (this.data.xMax - this.data.xMin);
+      const value = renderAxisValue(this.data.xMin, this.data.xMax, tick, this.options.xAxis.logarithmic);
       context.beginPath();
       context.moveTo(x, area.y + area.height);
       context.lineTo(x, area.y + area.height + 6);
       context.stroke();
-      context.fillText(formatAxisValue(value), x, area.y + area.height + 10);
+      context.fillText(this.options.xAxis.format(value), x, area.y + area.height + 10);
     });
     context.font = '600 13px Inter, ui-sans-serif, system-ui, sans-serif';
-    context.fillText('Load', area.x + area.width / 2, area.y + area.height + 36);
+    context.fillText(this.options.xAxis.label, area.x + area.width / 2, area.y + area.height + 36);
 
     context.font = '12px Inter, ui-sans-serif, system-ui, sans-serif';
     context.textAlign = 'right';
     context.textBaseline = 'middle';
     ticks.forEach((tick) => {
       const y = area.y + tick * area.height;
-      const value = this.data.yMax - tick * (this.data.yMax - this.data.yMin);
+      const value = renderAxisValue(this.data.yMin, this.data.yMax, 1 - tick, this.options.yAxis.logarithmic);
       context.beginPath();
       context.moveTo(area.x - 6, y);
       context.lineTo(area.x, y);
       context.stroke();
-      context.fillText(formatLatencySeconds(value), area.x - 10, y);
+      context.fillText(this.options.yAxis.format(value), area.x - 10, y);
     });
     context.translate(18, area.y + area.height / 2);
     context.rotate(-Math.PI / 2);
     context.font = '600 13px Inter, ui-sans-serif, system-ui, sans-serif';
     context.textAlign = 'center';
-    context.fillText('Latency', 0, 0);
+    context.fillText(this.options.yAxis.label, 0, 0);
     context.restore();
   }
 
@@ -216,7 +261,7 @@ class JointECDFPlot {
 
   private readonly handlePointerMove = (event: PointerEvent): void => {
     const area = this.plotArea;
-    if (area === null || this.cx2fx === null || this.cy2fy === null) return;
+    if (area === null) return;
     const bounds = this.canvas.getBoundingClientRect();
     const x = event.clientX - bounds.left;
     const y = event.clientY - bounds.top;
@@ -230,8 +275,18 @@ class JointECDFPlot {
     const selection: CellSelection = {
       column,
       row,
-      load: this.cx2fx.eval(area.x + (column + 0.5) / this.data.width * area.width),
-      latency: this.cy2fy.eval(area.y + (row + 0.5) / this.data.height * area.height),
+      xValue: renderAxisValue(
+        this.data.xMin,
+        this.data.xMax,
+        (column + 0.5) / this.data.width,
+        this.options.xAxis.logarithmic,
+      ),
+      yValue: renderAxisValue(
+        this.data.yMin,
+        this.data.yMax,
+        1 - (row + 0.5) / this.data.height,
+        this.options.yAxis.logarithmic,
+      ),
       mass: this.data.masses[row * this.data.width + column] ?? 0,
     };
     this.selection = selection;
@@ -251,8 +306,8 @@ class JointECDFPlot {
   }
 }
 
-function selectionText(selection: CellSelection): string {
-  return `Load: ${formatAxisValue(selection.load)} · Latency: ${formatLatencySeconds(selection.latency)}`;
+function selectionText(selection: CellSelection, options: PlotOptions): string {
+  return `${options.xAxis.label}: ${options.xAxis.format(selection.xValue)} · ${options.yAxis.label}: ${options.yAxis.format(selection.yValue)}`;
   // · Cell mass: ${new Intl.NumberFormat(undefined, { maximumSignificantDigits: 3 }).format(selection.mass)}
 }
 
@@ -266,16 +321,31 @@ export function renderJECDF(id: string, serviceID: number): () => void {
 
   const controller = new AbortController();
   let plot: JointECDFPlot | null = null;
-  void GetJointECDF(serviceID, LOAD_LATENCY_INDICATOR_ID, (input, init) => (
-    fetch(input, { ...init, signal: controller.signal })
-  )).then((data) => {
+  void GetJointECDF(
+    serviceID,
+    LOAD_LATENCY_INDICATOR_ID,
+    LOAD_LATENCY_RENDER_OPTIONS,
+    (input, init) => fetch(input, { ...init, signal: controller.signal }),
+  ).then((data) => {
     if (controller.signal.aborted) return;
     canvas.classList.remove('is-loading');
-    plot = new JointECDFPlot(canvas, data, (selection) => {
+    const plotOptions: PlotOptions = {
+      xAxis: {
+        label: 'Load',
+        logarithmic: (LOAD_LATENCY_RENDER_OPTIONS & JECDF_RENDER_OPTION_LOG_X) !== 0,
+        format: formatAxisValue,
+      },
+      yAxis: {
+        label: 'Latency',
+        logarithmic: (LOAD_LATENCY_RENDER_OPTIONS & JECDF_RENDER_OPTION_LOG_Y) !== 0,
+        format: formatLatencySeconds,
+      },
+    };
+    plot = new JointECDFPlot(canvas, data, plotOptions, (selection) => {
       if (status !== null) {
         status.textContent = selection === null
           ? 'Hover over the plot to inspect a cell.'
-          : selectionText(selection);
+          : selectionText(selection, plotOptions);
       }
     });
     if (status !== null) status.textContent = 'Hover over the plot to inspect a cell.';

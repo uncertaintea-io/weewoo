@@ -16,7 +16,7 @@ import (
 const (
 	jointServiceID   = 7
 	jointIndicatorID = 9
-	okPath           = "/api/jecdf?serviceId=7&indicatorId=9"
+	okPath           = "/api/jecdf?serviceId=7&indicatorId=9&options=2"
 	fakeJointECDF    = "test"
 )
 
@@ -30,10 +30,11 @@ func TestJointECDFAPIReadsAndRendersCurrentECDF(t *testing.T) {
 	var renderBody []byte
 	handler := &jointECDFAPI{
 		store: testJointStore(),
-		render: func(_ context.Context, body []byte, width, height int) (*ecdf.RenderResponse, error) {
+		render: func(_ context.Context, body []byte, width, height int, options ecdf.RenderOptions) (*ecdf.RenderResponse, error) {
 			renderBody = body
 			assert.Equal(t, jointECDFRenderWidth, width)
 			assert.Equal(t, jointECDFRenderHeight, height)
+			assert.Equal(t, ecdf.RenderOptionLogY, options)
 			return &ecdf.RenderResponse{
 				Width: width, Height: height,
 				XMin: 1, XMax: 2, YMin: 3, YMax: 4,
@@ -68,6 +69,8 @@ func TestJointECDFAPIValidatesRequest(t *testing.T) {
 		{name: "invalid service", method: http.MethodGet, target: "/api/jecdf?serviceId=nope&indicatorId=2", status: http.StatusBadRequest},
 		{name: "missing indicator", method: http.MethodGet, target: "/api/jecdf?serviceId=1", status: http.StatusBadRequest},
 		{name: "invalid indicator", method: http.MethodGet, target: "/api/jecdf?serviceId=1&indicatorId=0", status: http.StatusBadRequest},
+		{name: "invalid options", method: http.MethodGet, target: "/api/jecdf?serviceId=1&indicatorId=2&options=nope", status: http.StatusBadRequest},
+		{name: "unsupported options", method: http.MethodGet, target: "/api/jecdf?serviceId=1&indicatorId=2&options=4", status: http.StatusBadRequest},
 		{name: "unknown child path", method: http.MethodGet, target: "/api/jecdf/other?serviceId=1&indicatorId=2", status: http.StatusNotFound},
 		{name: "not found", method: http.MethodGet, target: "/api/jecdf?serviceId=1&indicatorId=2", status: http.StatusNotFound},
 	}
@@ -87,7 +90,7 @@ func TestJointECDFAPIReportsRenderFailure(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	handler := &jointECDFAPI{
 		store: testJointStore(),
-		render: func(context.Context, []byte, int, int) (*ecdf.RenderResponse, error) {
+		render: func(context.Context, []byte, int, int, ecdf.RenderOptions) (*ecdf.RenderResponse, error) {
 			return nil, errors.New("render failed")
 		},
 	}
