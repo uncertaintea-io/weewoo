@@ -1,29 +1,29 @@
 :root {
   color-scheme: dark;
-  --bg: #0c1322;
-  --glass: rgba(17, 28, 49, 0.82);
-  --glass-elevated: rgba(25, 39, 66, 0.88);
-  --border: rgba(172, 188, 224, 0.17);
-  --text: #edf2ff;
-  --secondary: #bcc7dc;
-  --muted: #8998b3;
-  --accent: #8b9cff;
-  --deep-blue: #6574e8;
+  --bg: #171717;
+  --glass: rgba(31, 31, 31, 0.94);
+  --glass-elevated: rgba(39, 39, 39, 0.96);
+  --border: rgba(255, 255, 255, 0.12);
+  --text: #f2f2f2;
+  --secondary: #c6c6c6;
+  --muted: #929292;
+  --accent: #8eafff;
+  --deep-blue: #587fd8;
   --success: #4bd6a0;
   --warning: #f1b95b;
   --error: #ff6f91;
-  --radius: 18px;
-  --shadow: 0 22px 60px rgba(0, 0, 0, 0.3);
-  --field: rgba(7, 14, 28, 0.56);
-  --chrome: rgba(25, 39, 66, 0.62);
-  --panel-heading: rgba(30, 45, 74, 0.68);
-  --soft-accent: rgba(139, 156, 255, 0.12);
-  --divider: rgba(172, 188, 224, 0.11);
-  --body-wash: linear-gradient(180deg, rgba(8, 14, 27, 0.05), rgba(8, 14, 27, 0.55));
-  --ambient-one: rgba(139, 156, 255, 0.14);
-  --ambient-two: rgba(55, 203, 213, 0.1);
-  --ambient-three: rgba(197, 139, 255, 0.08);
-  --page-gradient: linear-gradient(145deg, #17243c, var(--bg) 52%, #101827);
+  --radius: 8px;
+  --shadow: 0 12px 32px rgba(0, 0, 0, 0.28);
+  --field: rgba(18, 18, 18, 0.82);
+  --chrome: rgba(47, 47, 47, 0.92);
+  --panel-heading: rgba(43, 43, 43, 0.92);
+  --soft-accent: rgba(142, 175, 255, 0.1);
+  --divider: rgba(255, 255, 255, 0.08);
+  --body-wash: linear-gradient(180deg, rgba(255, 255, 255, 0.015), rgba(0, 0, 0, 0.16));
+  --ambient-one: rgba(255, 255, 255, 0.025);
+  --ambient-two: rgba(255, 255, 255, 0.015);
+  --ambient-three: rgba(255, 255, 255, 0.02);
+  --page-gradient: linear-gradient(145deg, #202020, var(--bg) 52%, #121212);
 }
 
 :root[data-theme="light"] {
@@ -96,7 +96,12 @@ body {
     radial-gradient(circle at 50% 105%, var(--ambient-three), transparent 35%),
     var(--page-gradient);
   color: var(--text);
-  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, "Noto Sans", Arial, sans-serif;
+  font-size: 16px;
+  font-weight: 400;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 body::before {
@@ -105,8 +110,8 @@ body::before {
   inset: 0;
   pointer-events: none;
   background:
-    linear-gradient(90deg, transparent 0 6%, rgba(180, 215, 255, 0.04) 6.2% 6.6%, transparent 6.8%),
-    linear-gradient(100deg, transparent 0 18%, rgba(180, 215, 255, 0.03) 18.2% 18.8%, transparent 19%),
+    linear-gradient(90deg, transparent 0 6%, rgba(255, 255, 255, 0.018) 6.2% 6.6%, transparent 6.8%),
+    linear-gradient(100deg, transparent 0 18%, rgba(255, 255, 255, 0.014) 18.2% 18.8%, transparent 19%),
     radial-gradient(circle at 30% 42%, rgba(255, 255, 255, 0.045), transparent 18%),
     radial-gradient(circle at 72% 58%, rgba(255, 255, 255, 0.035), transparent 20%);
   opacity: 0.65;
@@ -141,7 +146,7 @@ textarea {
   border: 1px solid var(--border);
   background: var(--glass);
   box-shadow: var(--shadow);
-  backdrop-filter: blur(18px);
+  backdrop-filter: blur(10px);
 }
 
 .alert-panel {
@@ -188,7 +193,7 @@ textarea {
 }
 
 .resolved-alerts-group > summary span {
-  font-weight: 750;
+  font-weight: 600;
 }
 
 .resolved-alerts-group > summary strong {
@@ -210,7 +215,7 @@ textarea {
 .alert-card {
   overflow: hidden;
   border-left: 4px solid var(--warning);
-  border-radius: 16px;
+  border-radius: 8px;
   padding: 20px;
 }
 
@@ -260,8 +265,8 @@ textarea {
   border: 1px solid var(--border);
   border-radius: 999px;
   font-size: 0.72rem;
-  font-weight: 780;
-  letter-spacing: 0.04em;
+  font-weight: 600;
+  letter-spacing: 0.025em;
   text-transform: uppercase;
 }
 
@@ -285,7 +290,7 @@ textarea {
 .occurrence-total small {
   color: var(--muted);
   font-size: 0.68rem;
-  font-weight: 650;
+  font-weight: 600;
   text-transform: uppercase;
 }
 
@@ -304,7 +309,7 @@ textarea {
 .alert-guidance > div,
 .occurrence-row {
   border: 1px solid var(--divider);
-  border-radius: 12px;
+  border-radius: 6px;
   background: var(--field);
   padding: 14px;
 }
@@ -312,7 +317,7 @@ textarea {
 .alert-guidance span {
   color: var(--muted);
   font-size: 0.72rem;
-  font-weight: 760;
+  font-weight: 600;
   text-transform: uppercase;
 }
 
@@ -347,7 +352,7 @@ textarea {
 .occurrence-row details > summary {
   cursor: pointer;
   color: var(--accent);
-  font-weight: 720;
+  font-weight: 600;
 }
 
 .occurrence-list {
@@ -386,7 +391,7 @@ textarea {
 
 .evidence-grid div {
   padding: 8px;
-  border-radius: 8px;
+  border-radius: 4px;
   background: var(--soft-accent);
 }
 
@@ -439,7 +444,7 @@ textarea {
 
 .sidebar-brand strong {
   font-size: 1rem;
-  font-weight: 760;
+  font-weight: 600;
   line-height: 1.2;
 }
 
@@ -454,7 +459,7 @@ textarea {
   width: 40px;
   height: 40px;
   border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
-  border-radius: 13px;
+  border-radius: 6px;
   box-shadow: 0 8px 22px color-mix(in srgb, var(--accent) 20%, transparent);
   object-fit: contain;
 }
@@ -467,10 +472,10 @@ textarea {
 .sidebar-nav a {
   padding: 10px 12px;
   border: 1px solid transparent;
-  border-radius: 12px;
+  border-radius: 6px;
   color: var(--secondary);
   font-size: 0.9rem;
-  font-weight: 650;
+  font-weight: 500;
   transition: border-color 160ms ease, background 160ms ease, transform 160ms ease;
 }
 
@@ -489,7 +494,7 @@ textarea {
 .system-card {
   margin-top: auto;
   padding: 14px;
-  border-radius: 16px;
+  border-radius: 8px;
   background: var(--glass-elevated);
   box-shadow: 0 16px 48px rgba(0, 0, 0, 0.24);
 }
@@ -497,7 +502,7 @@ textarea {
 .system-card span {
   color: var(--accent);
   font-size: 0.74rem;
-  font-weight: 760;
+  font-weight: 600;
   text-transform: uppercase;
 }
 
@@ -541,7 +546,7 @@ textarea {
   width: min(440px, 100%);
   padding: 10px 12px;
   border: 1px solid var(--border);
-  border-radius: 14px;
+  border-radius: 6px;
   background: var(--field);
 }
 
@@ -577,14 +582,14 @@ textarea {
   gap: 8px;
   color: var(--secondary);
   font-size: 0.84rem;
-  font-weight: 650;
+  font-weight: 500;
   white-space: nowrap;
 }
 
 .last-updated small {
   color: var(--muted);
   font-size: 0.78rem;
-  font-weight: 550;
+  font-weight: 400;
 }
 
 .status-dot {
@@ -605,7 +610,7 @@ textarea {
   height: 38px;
   place-items: center;
   border: 1px solid var(--border);
-  border-radius: 14px;
+  border-radius: 6px;
   background: var(--chrome);
 }
 
@@ -653,15 +658,15 @@ p {
   margin: 0 0 8px;
   color: var(--accent);
   font-size: 0.74rem;
-  font-weight: 760;
-  letter-spacing: 0.08em;
+  font-weight: 600;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
 }
 
 h1 {
   margin-bottom: 8px;
   font-size: 1.55rem;
-  font-weight: 760;
+  font-weight: 600;
   line-height: 1.2;
   letter-spacing: 0;
 }
@@ -687,7 +692,7 @@ h1 {
   margin-bottom: 5px;
   color: var(--muted);
   font-size: 0.73rem;
-  font-weight: 760;
+  font-weight: 600;
   text-transform: uppercase;
 }
 
@@ -723,13 +728,13 @@ h1 {
   margin-bottom: 12px;
   color: var(--muted);
   font-size: 0.82rem;
-  font-weight: 700;
+  font-weight: 500;
 }
 
 .summary-card strong {
   color: var(--text);
   font-size: 1.85rem;
-  font-weight: 780;
+  font-weight: 600;
   line-height: 1;
 }
 
@@ -772,13 +777,13 @@ h1 {
 .panel-header h2 {
   margin-bottom: 0;
   font-size: 0.98rem;
-  font-weight: 740;
+  font-weight: 600;
 }
 
 .panel-header span {
   color: var(--muted);
   font-size: 0.84rem;
-  font-weight: 650;
+  font-weight: 500;
 }
 
 .panel-actions,
@@ -795,7 +800,7 @@ h1 {
   align-items: center;
   justify-content: center;
   border: 1px solid rgba(96, 165, 250, 0.5);
-  border-radius: 11px;
+  border-radius: 5px;
   background: rgba(96, 165, 250, 0.16);
   color: var(--text);
   font-size: 1.35rem;
@@ -848,11 +853,11 @@ h1 {
   height: 40px;
   place-items: center;
   border: 1px solid rgba(96, 165, 250, 0.34);
-  border-radius: 14px;
+  border-radius: 6px;
   background: rgba(96, 165, 250, 0.11);
   color: var(--text);
   font-size: 0.9rem;
-  font-weight: 780;
+  font-weight: 600;
 }
 
 .service-title {
@@ -866,7 +871,7 @@ h1 {
   overflow: hidden;
   margin-bottom: 4px;
   font-size: 1.04rem;
-  font-weight: 740;
+  font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -878,7 +883,7 @@ h1 {
 
 .service-id {
   font-size: 0.78rem;
-  font-weight: 650;
+  font-weight: 500;
 }
 
 .service-url {
@@ -886,7 +891,7 @@ h1 {
   max-width: 100%;
   overflow: hidden;
   font-size: 0.84rem;
-  font-weight: 550;
+  font-weight: 400;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -896,7 +901,7 @@ h1 {
   padding: 5px 9px;
   border-radius: 999px;
   font-size: 0.76rem;
-  font-weight: 760;
+  font-weight: 600;
 }
 
 .status-pill--healthy {
@@ -937,7 +942,7 @@ h1 {
 .query-card {
   min-width: 0;
   padding: 14px;
-  border-radius: 16px;
+  border-radius: 8px;
   box-shadow: none;
 }
 
@@ -959,7 +964,7 @@ h1 {
   margin-bottom: 8px;
   color: var(--muted);
   font-size: 0.72rem;
-  font-weight: 760;
+  font-weight: 600;
   text-transform: uppercase;
 }
 
@@ -968,7 +973,7 @@ h1 {
   margin: 0;
   color: var(--text);
   font-size: 1.18rem;
-  font-weight: 780;
+  font-weight: 600;
   line-height: 1.2;
 }
 
@@ -1018,7 +1023,7 @@ h1 {
 .error-panel h2 {
   margin-bottom: 8px;
   font-size: 1.08rem;
-  font-weight: 760;
+  font-weight: 600;
 }
 
 .empty-state p,
@@ -1040,7 +1045,7 @@ h1 {
   border-radius: var(--radius);
   background: var(--glass);
   box-shadow: var(--shadow);
-  backdrop-filter: blur(18px);
+  backdrop-filter: blur(10px);
 }
 
 .settings-panel {
@@ -1049,7 +1054,7 @@ h1 {
   border-radius: var(--radius);
   background: var(--glass);
   box-shadow: var(--shadow);
-  backdrop-filter: blur(18px);
+  backdrop-filter: blur(10px);
 }
 
 .settings-heading,
@@ -1098,12 +1103,12 @@ h1 {
   justify-items: center;
   padding: 10px;
   border: 1px solid var(--border);
-  border-radius: 13px;
+  border-radius: 6px;
   background: var(--glass-elevated);
   color: var(--secondary);
   cursor: pointer;
   font-size: 0.8rem;
-  font-weight: 700;
+  font-weight: 500;
 }
 
 .theme-option:hover,
@@ -1117,7 +1122,7 @@ h1 {
   width: 68px;
   height: 35px;
   border: 1px solid rgba(100, 116, 139, 0.32);
-  border-radius: 8px;
+  border-radius: 4px;
 }
 
 .theme-preview--light {
@@ -1125,11 +1130,11 @@ h1 {
 }
 
 .theme-preview--dark {
-  background: linear-gradient(110deg, #111c31 0 34%, #202f4e 34% 100%);
+  background: linear-gradient(110deg, #171717 0 34%, #292929 34% 100%);
 }
 
 .theme-preview--system {
-  background: linear-gradient(110deg, #e4eaf1 0 48%, #17243c 52% 100%);
+  background: linear-gradient(110deg, #e4eaf1 0 48%, #202020 52% 100%);
 }
 
 .form-panel h2 {
@@ -1146,7 +1151,7 @@ h1 {
   display: inline-block;
   margin-bottom: 28px;
   color: var(--accent);
-  font-weight: 700;
+  font-weight: 600;
 }
 
 .choice-grid {
@@ -1160,7 +1165,7 @@ h1 {
   min-height: 150px;
   padding: 24px;
   border: 1px solid var(--border);
-  border-radius: 18px;
+  border-radius: 8px;
   background: var(--glass-elevated);
 }
 
@@ -1200,14 +1205,14 @@ h1 {
   margin-bottom: 8px;
   color: var(--secondary);
   font-size: 0.82rem;
-  font-weight: 700;
+  font-weight: 500;
 }
 
 .service-form input,
 .service-form textarea {
   width: 100%;
-  border: 1px solid rgba(180, 215, 255, 0.24);
-  border-radius: 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
   outline: none;
   background: var(--field);
   color: var(--text);
@@ -1265,11 +1270,11 @@ h1 {
   min-height: 42px;
   padding: 10px 18px;
   border: 1px solid color-mix(in srgb, var(--error) 50%, transparent);
-  border-radius: 12px;
+  border-radius: 6px;
   background: color-mix(in srgb, var(--error) 10%, transparent);
   color: var(--error);
   cursor: pointer;
-  font-weight: 760;
+  font-weight: 600;
 }
 
 .detail-grid {
@@ -1294,7 +1299,7 @@ h1 {
 .detail-card > span {
   color: var(--muted);
   font-size: 0.75rem;
-  font-weight: 760;
+  font-weight: 600;
   text-transform: uppercase;
 }
 
@@ -1390,7 +1395,7 @@ h1 {
   align-items: center;
   padding: 12px;
   border: 1px solid var(--divider);
-  border-radius: 12px;
+  border-radius: 6px;
   background: var(--glass-elevated);
 }
 
@@ -1431,10 +1436,10 @@ h1 {
   justify-content: center;
   padding: 10px 18px;
   border: 1px solid rgba(96, 165, 250, 0.55);
-  border-radius: 12px;
+  border-radius: 6px;
   cursor: pointer;
   color: var(--text);
-  font-weight: 760;
+  font-weight: 600;
 }
 
 .primary-button {
@@ -1465,7 +1470,7 @@ h1 {
   margin-bottom: 10px;
   color: var(--error);
   font-size: clamp(4rem, 11vw, 7rem);
-  font-weight: 820;
+  font-weight: 700;
   line-height: 0.92;
 }
 
@@ -1477,18 +1482,18 @@ h1 {
   background: rgba(244, 63, 94, 0.10);
   color: var(--error);
   font-size: 0.76rem;
-  font-weight: 760;
+  font-weight: 600;
 }
 
 .retry-button {
   margin-top: 22px;
   padding: 9px 16px;
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: 6px;
   background: var(--chrome);
   color: var(--text);
   cursor: pointer;
-  font-weight: 760;
+  font-weight: 600;
 }
 
 .retry-button:hover {
@@ -1499,13 +1504,13 @@ h1 {
 .skeleton-list {
   display: grid;
   gap: 1px;
-  background: rgba(180, 215, 255, 0.12);
+  background: var(--divider);
 }
 
 .skeleton-row {
   height: 104px;
   background:
-    linear-gradient(90deg, transparent, rgba(180, 215, 255, 0.08), transparent),
+    linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.06), transparent),
     var(--glass);
   background-size: 220px 100%, 100% 100%;
   animation: loading-shimmer 1.15s infinite linear;
