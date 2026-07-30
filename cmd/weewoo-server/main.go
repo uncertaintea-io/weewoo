@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
@@ -142,32 +141,6 @@ func newServiceResponse(service *config.Service) serviceResponse {
 	return response
 }
 
-func NewListAllServicesHandler(cfg config.Config) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			w.Header().Set("Allow", http.MethodGet)
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-
-		services, err := cfg.ReadAllServices()
-		if err != nil {
-			http.Error(w, "failed to read services", http.StatusInternalServerError)
-			return
-		}
-
-		response := make([]serviceResponse, 0, len(services))
-		for _, service := range services {
-			response = append(response, newServiceResponse(service))
-		}
-
-		w.Header().Set("Content-Type", "application/json")
-		if err := json.NewEncoder(w).Encode(response); err != nil {
-			log.Printf("failed to encode services response: %v", err)
-		}
-	})
-}
-
 func registerAPIHandlers(mux *http.ServeMux, alerts, services http.Handler) {
 	mux.Handle("/api/alerts", alerts)
 	mux.Handle("/api/alerts/", alerts)
@@ -192,57 +165,6 @@ func validateCreateService(request createServiceRequest) error {
 		return fmt.Errorf("importStart must be before importEnd")
 	}
 	return nil
-}
-
-func NewCreateServiceHandler(cfg config.Config, collector serviceCollector) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			w.Header().Set("Allow", http.MethodPost)
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-
-		var request createServiceRequest
-		decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
-		decoder.DisallowUnknownFields()
-		if err := decoder.Decode(&request); err != nil {
-			http.Error(w, "invalid JSON request", http.StatusBadRequest)
-			return
-		}
-		if err := validateCreateService(request); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-
-		service := &config.Service{
-			Name: request.Name, PrometheusURL: request.PrometheusURL,
-			LoadQuery: request.LoadQuery, LatencyQuery: request.LatencyQuery,
-			Interval: time.Duration(request.IntervalSeconds) * time.Second,
-		}
-		if err := cfg.WriteService(service); err != nil {
-			http.Error(w, "failed to create service", http.StatusInternalServerError)
-			return
-		}
-		if err := collector.Schedule(service); err != nil {
-			log.Printf("service %d was created but could not be tracked: %v", service.Id, err)
-			http.Error(w, "service created, but tracking could not be started", http.StatusInternalServerError)
-			return
-		}
-		if request.ImportStart != nil {
-			if _, err := collector.Import(r.Context(), service, *request.ImportStart, *request.ImportEnd, nil); err != nil {
-				log.Printf("historical import failed for service %d: %v", service.Id, err)
-				http.Error(w, "service created, but historical import failed", http.StatusBadGateway)
-				return
-			}
-		}
-
-		w.Header().Set("Content-Type", "application/json")
-		w.Header().Set("Location", fmt.Sprintf("/api/services/%d", service.Id))
-		w.WriteHeader(http.StatusCreated)
-		if err := json.NewEncoder(w).Encode(newServiceResponse(service)); err != nil {
-			log.Printf("failed to encode created service: %v", err)
-		}
-	})
 }
 
 type statusRecorder struct {

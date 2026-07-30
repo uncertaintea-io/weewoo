@@ -20,6 +20,8 @@ const (
 	activeRefreshAfter = 2 * time.Minute
 )
 
+type sendAlert func(context.Context, config.Config, AlertingOptions) error
+
 type OutboxDispatcher struct {
 	db                    *sql.DB
 	cfg                   config.Config
