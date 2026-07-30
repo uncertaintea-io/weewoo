@@ -1,5 +1,5 @@
 import './index.scss'
-import { CancelImport, CreateService, DeleteService, GetService, ListAlerts, ListAllServices, ReviewAlertOccurrence, ServicesApiError, SetServicePaused, TestService, UpdateService, type AlertOccurrence, type AlertRecord, type CreateServiceInput, type Service } from './api';
+import { CancelImport, CreateService, DeleteService, GetService, GetServiceDetail, ListAlerts, ListAllServices, ReviewAlertOccurrence, ServicesApiError, SetServicePaused, TestService, UpdateService, type AlertOccurrence, type AlertRecord, type CreateServiceInput, type Service, type ServiceChange } from './api';
 import { datetimeLocalToUtcISOString } from './datetime';
 import { liveRefreshDelay } from './live-refresh';
 import { searchValueForRender } from './navigation';
@@ -548,8 +548,13 @@ async function testServiceForm(form: HTMLFormElement): Promise<void> {
   if (!form.reportValidity()) return;
   if (button !== null) { button.disabled = true; button.textContent = 'Testing…'; }
   try {
-    const message = await TestService(serviceInputFromForm(form));
-    if (errorBox !== null) { errorBox.classList.add('is-success'); errorBox.textContent = message; }
+    const result = await TestService(serviceInputFromForm(form));
+    if (errorBox !== null) {
+      const load = result.loadQuery.valid ? `load: ${String(result.loadQuery.samples)} samples` : `load: ${result.loadQuery.error ?? 'failed'}`;
+      const latency = result.latencyQuery.valid ? `latency: ${String(result.latencyQuery.samples)} samples` : `latency: ${result.latencyQuery.error ?? 'failed'}`;
+      errorBox.classList.toggle('is-success', result.loadQuery.valid && result.latencyQuery.valid);
+      errorBox.textContent = `${result.message} — ${load}; ${latency}`;
+    }
   } catch (error) {
     if (errorBox !== null) { errorBox.classList.remove('is-success'); errorBox.textContent = error instanceof Error ? error.message : 'Test failed'; }
   } finally {
@@ -644,14 +649,21 @@ function renderImports(service: Service): string {
   `).join('')}</div>`;
 }
 
-function renderServiceDetail(service: Service): void {
+function renderServiceHistory(history: ServiceChange[]): string {
+  if (history.length === 0) return '<p class="muted-copy">No configuration changes recorded yet.</p>';
+  return `<ol class="activity-list">${history.map((change) => `
+    <li><span class="activity-dot"></span><div><strong>Revision ${String(change.newRevision)} by ${escapeHtml(change.changedBy)}</strong><time>${escapeHtml(formatTimestamp(change.changedAt))}</time><p>${change.material ? 'A new baseline generation was started.' : 'The existing baseline was retained.'}</p></div></li>
+  `).join('')}</ol>`;
+}
+
+function renderServiceDetail(service: Service, history: ServiceChange[] = [], historyUnavailable = false): void {
   renderShell(`
     <section class="detail-header">
       <div><a class="back-link" href="#services">← All services</a><p class="eyebrow">Service #${String(service.id)}</p><h2>${escapeHtml(service.name)}</h2>${renderServiceUrl(service.prometheusUrl)}</div>
       <div class="detail-actions"><span class="status-pill status-pill--${escapeHtml(service.tracking.state)}">${escapeHtml(statusLabel(service.tracking.state))}</span><button id="toggle-tracking" class="secondary-button" type="button">${service.tracking.state === 'paused' ? 'Resume' : 'Pause'}</button><a class="secondary-button" href="#service/${String(service.id)}/edit">Edit</a><button id="delete-service" class="danger-button" type="button">Delete</button></div>
     </section>
     <section class="detail-grid">
-      <article class="detail-card"><span>Tracking state</span><strong>${escapeHtml(statusLabel(service.tracking.state))}</strong><p>${escapeHtml(service.tracking.error ?? 'The scheduler is running normally.')}</p></article>
+      <article class="detail-card"><span>Tracking state</span><strong>${escapeHtml(statusLabel(service.tracking.state))}</strong><p>${escapeHtml(service.tracking.error ?? `Database revision ${String(service.revision ?? 1)}; active revision ${String(service.tracking.activeRevision ?? 'pending')}.`)}</p></article>
       <article class="detail-card"><span>Last successful collection</span><strong>${escapeHtml(formatTimestamp(service.tracking.lastSuccess))}</strong><p>Every ${escapeHtml(formatInterval(service.intervalSeconds))}</p></article>
       <article class="detail-card"><span>Last collection error</span><strong>${escapeHtml(formatTimestamp(service.tracking.lastError))}</strong><p>${escapeHtml(service.tracking.error ?? 'No errors recorded')}</p></article>
     </section>
@@ -660,6 +672,7 @@ function renderServiceDetail(service: Service): void {
       <article class="detail-panel"><div class="panel-header"><h2>Historical imports</h2><span>${String(service.imports.length)} jobs</span></div>${renderImports(service)}</article>
     </section>
     <section class="detail-panel query-detail"><div class="panel-header"><h2>Prometheus configuration</h2></div><dl class="query-grid">${renderQueryBox('Load signal', service.loadQuery)}${renderQueryBox('Latency signal', service.latencyQuery)}</dl></section>
+    <section class="detail-panel"><div class="panel-header"><h2>Configuration history</h2><span>Revision ${String(service.revision ?? 1)} · generation ${String(service.generation ?? 1)}</span></div>${historyUnavailable ? '<p class="muted-copy">Configuration history is temporarily unavailable.</p>' : renderServiceHistory(history)}</section>
   `, '200 OK');
   document.querySelector('#delete-service')?.addEventListener('click', () => { void deleteServiceFromDetail(service); });
   document.querySelector('#toggle-tracking')?.addEventListener('click', () => {
@@ -684,8 +697,8 @@ async function deleteServiceFromDetail(service: Service): Promise<void> {
 async function loadServiceDetail(id: number, showLoading = true): Promise<void> {
   if (showLoading) renderLoading();
   try {
-    const service = await GetService(id);
-    if (currentRoute() === `service/${String(id)}`) renderServiceDetail(service);
+    const detail = await GetServiceDetail(id);
+    if (currentRoute() === `service/${String(id)}`) renderServiceDetail(detail.service, detail.history, detail.historyUnavailable);
   } catch (error) {
     if (showLoading && currentRoute() === `service/${String(id)}`) renderError(error);
   }
@@ -710,7 +723,12 @@ function renderEditServiceForm(service: Service): void {
     event.preventDefault();
     void (async () => {
       const errorBox = form.querySelector<HTMLElement>('#form-error');
-      try { await UpdateService(service.id, serviceInputFromForm(form)); window.location.hash = `service/${String(service.id)}`; }
+      try {
+        const input = serviceInputFromForm(form);
+        input.revision = service.revision;
+        await UpdateService(service.id, input);
+        window.location.hash = `service/${String(service.id)}`;
+      }
       catch (error) { if (errorBox !== null) errorBox.textContent = error instanceof Error ? error.message : 'Update failed'; }
     })();
   });

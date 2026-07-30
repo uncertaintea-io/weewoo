@@ -49,7 +49,7 @@ func TestOneSampleAgainstJointECDF(t *testing.T) {
 			ecdf.CountSamples(latencies),
 		)
 		require.NoError(t, err)
-		require.NoError(t, chunkStore.WriteChunk(serviceID, indicatorID, timestamp, chunk))
+		require.NoError(t, chunkStore.WriteChunk(serviceID, indicatorID, 1, timestamp, chunk))
 	}
 
 	var jointECDF bytes.Buffer

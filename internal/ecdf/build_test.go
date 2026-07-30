@@ -30,12 +30,12 @@ func TestBuildWithRealTool(t *testing.T) {
 
 	chunk, err := newTestChunk(t1, 1, 2)
 	require.NoError(t, err)
-	err = store.WriteChunk(serviceId, indicatorId, t1, chunk)
+	err = store.WriteChunk(serviceId, indicatorId, 1, t1, chunk)
 	require.NoError(t, err)
 
 	chunk2, err := newTestChunk(t2, 2, 1)
 	require.NoError(t, err)
-	err = store.WriteChunk(serviceId, indicatorId, t2, chunk2)
+	err = store.WriteChunk(serviceId, indicatorId, 1, t2, chunk2)
 	require.NoError(t, err)
 
 	var out bytes.Buffer
@@ -64,12 +64,12 @@ echo -n 'fake-ecdf-output'
 
 	chunk, err := newTestChunk(t1, 1, 2)
 	require.NoError(t, err)
-	err = store.WriteChunk(serviceId, indicatorId, t1, chunk)
+	err = store.WriteChunk(serviceId, indicatorId, 1, t1, chunk)
 	require.NoError(t, err)
 
 	chunk2, err := newTestChunk(t2, 2, 1)
 	require.NoError(t, err)
-	err = store.WriteChunk(serviceId, indicatorId, t2, chunk2)
+	err = store.WriteChunk(serviceId, indicatorId, 1, t2, chunk2)
 	require.NoError(t, err)
 
 	var out bytes.Buffer
@@ -91,7 +91,7 @@ func TestBuildReturnsWhenToolStopsConsuming(t *testing.T) {
 	for i := range 8 {
 		chunk, err := newTestChunk(start.Add(time.Duration(i)*time.Second), float64(i), float64(i+1))
 		require.NoError(t, err)
-		require.NoError(t, store.WriteChunk(serviceId, indicatorId, start.Add(time.Duration(i)*time.Second), chunk))
+		require.NoError(t, store.WriteChunk(serviceId, indicatorId, 1, start.Add(time.Duration(i)*time.Second), chunk))
 	}
 
 	done := make(chan error, 1)
