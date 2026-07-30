@@ -1,7 +1,9 @@
 package config
 
 import (
+	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
@@ -13,6 +15,10 @@ import (
 type database struct {
 	db *sql.DB
 }
+
+// This key must match collection.LoadLatencyIndicator. The shared PostgreSQL
+// advisory lock prevents a material edit from racing an in-flight ECDF publish.
+const loadLatencyBaselineIndicatorID = 1
 
 // gets the value for a given key from the config table and returns the value. If the key is not found it returns an error, if the key is empty it returns an error.
 func (c *database) GetConfig(key string) (string, error) {
@@ -116,19 +122,125 @@ func (c *database) WriteService(service *Service) error {
 		err := c.db.QueryRow(`
 			INSERT INTO service (name, prometheus_url, load_query, latency_query, interval_seconds, paused)
 			VALUES ($1, $2, $3, $4, $5, $6)
-			RETURNING id
-		`, service.Name, service.PrometheusURL, service.LoadQuery, service.LatencyQuery, intervalSeconds, service.Paused).Scan(&service.Id)
+			RETURNING id, revision, generation
+		`, service.Name, service.PrometheusURL, service.LoadQuery, service.LatencyQuery, intervalSeconds, service.Paused).Scan(&service.Id, &service.Revision, &service.Generation)
 		if err != nil {
 			return fmt.Errorf("failed to insert service: %w", err)
 		}
 	} else {
-		_, err := c.db.Exec("UPDATE service SET name = $1, prometheus_url = $2, load_query = $3, latency_query = $4, interval_seconds = $5, paused = $6 WHERE id = $7",
-			service.Name, service.PrometheusURL, service.LoadQuery, service.LatencyQuery, intervalSeconds, service.Paused, service.Id)
-		if err != nil {
-			return fmt.Errorf("failed to update service: %w", err)
-		}
+		return c.UpdateService(context.Background(), service, service.Revision, "system")
 	}
 	return nil
+}
+
+func (c *database) UpdateService(ctx context.Context, service *Service, expectedRevision int64, changedBy string) error {
+	tx, err := c.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin service update: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var previous Service
+	var intervalSeconds int64
+	var baselineResetAt sql.NullTime
+	err = tx.QueryRowContext(ctx, `
+		SELECT id, name, prometheus_url, load_query, latency_query, interval_seconds,
+		       paused, revision, generation, baseline_reset_at
+		FROM service WHERE id=$1 FOR UPDATE
+	`, service.Id).Scan(&previous.Id, &previous.Name, &previous.PrometheusURL, &previous.LoadQuery,
+		&previous.LatencyQuery, &intervalSeconds, &previous.Paused, &previous.Revision,
+		&previous.Generation, &baselineResetAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrServiceNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("read service for update: %w", err)
+	}
+	previous.Interval = time.Duration(intervalSeconds) * time.Second
+	if baselineResetAt.Valid {
+		previous.BaselineResetAt = baselineResetAt.Time
+	}
+	if previous.Revision != expectedRevision {
+		return ErrServiceConflict
+	}
+	material := previous.PrometheusURL != service.PrometheusURL ||
+		previous.LoadQuery != service.LoadQuery || previous.LatencyQuery != service.LatencyQuery ||
+		previous.Interval != service.Interval
+	service.Revision = previous.Revision + 1
+	service.Generation = previous.Generation
+	service.BaselineResetAt = previous.BaselineResetAt
+	if material {
+		service.Generation++
+		service.BaselineResetAt = time.Now().UTC()
+	}
+	previousJSON, _ := json.Marshal(previous)
+	currentJSON, _ := json.Marshal(service)
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE service SET name=$1, prometheus_url=$2, load_query=$3, latency_query=$4,
+		    interval_seconds=$5, paused=$6, revision=$7, generation=$8, baseline_reset_at=$9
+		WHERE id=$10
+	`, service.Name, service.PrometheusURL, service.LoadQuery, service.LatencyQuery,
+		int64(service.Interval/time.Second), service.Paused, service.Revision, service.Generation,
+		nullTime(service.BaselineResetAt), service.Id); err != nil {
+		return fmt.Errorf("update service: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO service_revision
+		    (service_id, previous_revision, new_revision, changed_by, material,
+		     previous_configuration, new_configuration)
+		VALUES ($1,$2,$3,$4,$5,$6,$7)
+	`, service.Id, previous.Revision, service.Revision, changedBy, material, previousJSON, currentJSON); err != nil {
+		return fmt.Errorf("insert service revision: %w", err)
+	}
+	if material {
+		if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1, $2)`, service.Id, loadLatencyBaselineIndicatorID); err != nil {
+			return fmt.Errorf("lock service baseline: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM ecdf WHERE service_id=$1`, service.Id); err != nil {
+			return fmt.Errorf("invalidate service baseline: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit service update: %w", err)
+	}
+	return nil
+}
+
+func nullTime(value time.Time) any {
+	if value.IsZero() {
+		return nil
+	}
+	return value
+}
+
+func (c *database) ReadServiceHistory(id int) ([]ServiceChange, error) {
+	rows, err := c.db.Query(`
+		SELECT previous_revision, new_revision, changed_at, changed_by, material,
+		       previous_configuration, new_configuration
+		FROM service_revision WHERE service_id=$1 ORDER BY new_revision DESC
+	`, id)
+	if err != nil {
+		return nil, fmt.Errorf("read service history: %w", err)
+	}
+	defer rows.Close()
+	history := make([]ServiceChange, 0)
+	for rows.Next() {
+		var change ServiceChange
+		var previousJSON, currentJSON []byte
+		change.ServiceID = id
+		if err := rows.Scan(&change.PreviousRevision, &change.NewRevision, &change.ChangedAt,
+			&change.ChangedBy, &change.Material, &previousJSON, &currentJSON); err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal(previousJSON, &change.Previous); err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal(currentJSON, &change.Current); err != nil {
+			return nil, err
+		}
+		history = append(history, change)
+	}
+	return history, rows.Err()
 }
 
 // reads a service from the database.
@@ -138,11 +250,15 @@ func (c *database) ReadService(id int) (*Service, error) {
 	if id <= 0 {
 		return nil, fmt.Errorf("id must be greater than 0")
 	}
-	err := c.db.QueryRow("SELECT id, name, prometheus_url, load_query, latency_query, interval_seconds, paused FROM service WHERE id = $1", id).Scan(&service.Id, &service.Name, &service.PrometheusURL, &service.LoadQuery, &service.LatencyQuery, &intervalSeconds, &service.Paused)
+	var baselineResetAt sql.NullTime
+	err := c.db.QueryRow("SELECT id, name, prometheus_url, load_query, latency_query, interval_seconds, paused, revision, generation, baseline_reset_at FROM service WHERE id = $1", id).Scan(&service.Id, &service.Name, &service.PrometheusURL, &service.LoadQuery, &service.LatencyQuery, &intervalSeconds, &service.Paused, &service.Revision, &service.Generation, &baselineResetAt)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read service: %w", err)
 	}
 	service.Interval = time.Duration(intervalSeconds) * time.Second
+	if baselineResetAt.Valid {
+		service.BaselineResetAt = baselineResetAt.Time
+	}
 	parsedURL, err := url.Parse(service.PrometheusURL)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse URL string to url.URL: %w", err)
@@ -153,7 +269,7 @@ func (c *database) ReadService(id int) (*Service, error) {
 
 // this function reads all the services from the database and returns them as a slice of service objects
 func (c *database) ReadAllServices() ([]*Service, error) {
-	rows, err := c.db.Query("SELECT id, name, prometheus_url, load_query, latency_query, interval_seconds, paused FROM service")
+	rows, err := c.db.Query("SELECT id, name, prometheus_url, load_query, latency_query, interval_seconds, paused, revision, generation, baseline_reset_at FROM service")
 	if err != nil {
 		return nil, err
 	}
@@ -195,11 +311,15 @@ func (c *database) DeleteService(id int) error {
 func (c *database) RowsToObject(rows *sql.Rows) (*Service, error) {
 	var service Service
 	var intervalSeconds int64
-	err := rows.Scan(&service.Id, &service.Name, &service.PrometheusURL, &service.LoadQuery, &service.LatencyQuery, &intervalSeconds, &service.Paused)
+	var baselineResetAt sql.NullTime
+	err := rows.Scan(&service.Id, &service.Name, &service.PrometheusURL, &service.LoadQuery, &service.LatencyQuery, &intervalSeconds, &service.Paused, &service.Revision, &service.Generation, &baselineResetAt)
 	if err != nil {
 		return nil, err
 	}
 	service.Interval = time.Duration(intervalSeconds) * time.Second
+	if baselineResetAt.Valid {
+		service.BaselineResetAt = baselineResetAt.Time
+	}
 	return &service, nil
 }
 

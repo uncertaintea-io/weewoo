@@ -3,10 +3,12 @@ package collection
 import (
 	"bytes"
 	"context"
+	"errors"
 	"flag"
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -26,6 +28,14 @@ type recordingJointStore struct {
 	intervals   map[time.Time]struct{}
 	buildCount  int
 	published   chan struct{}
+}
+
+type unreadableServiceConfig struct {
+	config.Config
+}
+
+func (unreadableServiceConfig) ReadService(int) (*config.Service, error) {
+	return nil, errors.New("configuration temporarily unavailable")
 }
 
 func newRecordingJointStore() *recordingJointStore {
@@ -67,7 +77,7 @@ func TestStartECDFBuilderBuildsIntervalOnceAcrossReplicas(t *testing.T) {
 	chunkTime := time.Now().Add(-30 * time.Minute)
 	chunk, err := ecdf.Encode(chunkTime, []ecdf.Sample{{Value: 1, Count: 1}}, []ecdf.Sample{{Value: 2, Count: 1}})
 	require.NoError(t, err)
-	require.NoError(t, chunks.WriteChunk(7, LoadLatencyIndicator, chunkTime, chunk))
+	require.NoError(t, chunks.WriteChunk(7, LoadLatencyIndicator, 1, chunkTime, chunk))
 	joint := newRecordingJointStore()
 	schedulerA := NewIntervalScheduler(WithSchedulerEventHandler(nil))
 	schedulerB := NewIntervalScheduler(WithSchedulerEventHandler(nil))
@@ -110,7 +120,7 @@ func TestBuildJointECDF(t *testing.T) {
 	chunk, err := ecdf.Encode(timestamp, []ecdf.Sample{{Value: 1, Count: 1}}, []ecdf.Sample{{Value: 2, Count: 1}})
 	require.NoError(t, err)
 	chunks := ecdf.NewFakeChunkStore()
-	require.NoError(t, chunks.WriteChunk(1, LoadLatencyIndicator, timestamp, chunk))
+	require.NoError(t, chunks.WriteChunk(1, LoadLatencyIndicator, 1, timestamp, chunk))
 
 	var out bytes.Buffer
 	require.NoError(t, ecdf.BuildJointECDFContext(context.Background(), chunks, 1, LoadLatencyIndicator, &out))
@@ -134,7 +144,7 @@ func TestStartECDFBuilderPublishesConfiguredServices(t *testing.T) {
 	chunkTime := time.Now().Add(-30 * time.Minute)
 	chunk, err := ecdf.Encode(chunkTime, []ecdf.Sample{{Value: 1, Count: 1}}, []ecdf.Sample{{Value: 2, Count: 1}})
 	require.NoError(t, err)
-	require.NoError(t, chunks.WriteChunk(7, LoadLatencyIndicator, chunkTime, chunk))
+	require.NoError(t, chunks.WriteChunk(7, LoadLatencyIndicator, 1, chunkTime, chunk))
 	joint := newRecordingJointStore()
 	scheduler := NewIntervalScheduler(WithSchedulerEventHandler(nil))
 	defer scheduler.Stop()
@@ -151,6 +161,65 @@ func TestStartECDFBuilderPublishesConfiguredServices(t *testing.T) {
 	assert.Equal(t, LoadLatencyIndicator, joint.indicatorID)
 	assert.Equal(t, "fake-ecdf-output", string(joint.body))
 	assert.Equal(t, joint.intervalEnd.Truncate(serviceInterval), joint.intervalEnd)
+}
+
+func TestECDFBuilderDoesNotReuseChunksFromBeforeConfigurationChange(t *testing.T) {
+	cfg := config.NewFakeConfig()
+	resetAt := time.Now().UTC()
+	require.NoError(t, cfg.WriteService(&config.Service{Id: 7, Name: "api", Generation: 2, BaselineResetAt: resetAt}))
+	require.NoError(t, cfg.SetConfig(ECDFBaselineChunksConfigKey, "1"))
+	chunks := ecdf.NewFakeChunkStore()
+	oldTime := resetAt.Add(-time.Hour)
+	chunk, err := ecdf.Encode(oldTime, []ecdf.Sample{{Value: 1, Count: 1}}, []ecdf.Sample{{Value: 2, Count: 1}})
+	require.NoError(t, err)
+	require.NoError(t, chunks.WriteChunk(7, LoadLatencyIndicator, 1, oldTime, chunk))
+	joint := newRecordingJointStore()
+	scheduler := NewIntervalScheduler(WithSchedulerEventHandler(nil))
+	defer scheduler.Stop()
+
+	require.NoError(t, ScheduleECDFBuilder(7, chunks, joint, cfg, scheduler))
+
+	select {
+	case <-joint.published:
+		t.Fatal("old-generation chunks produced a new baseline")
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
+func TestECDFBuilderRetriesWhenServiceGenerationCannotBeRead(t *testing.T) {
+	cfg := config.NewFakeConfig()
+	require.NoError(t, cfg.SetConfig(ECDFBaselineChunksConfigKey, "1"))
+	chunks := ecdf.NewFakeChunkStore()
+	chunkTime := time.Now().Add(-30 * time.Minute)
+	chunk, err := ecdf.Encode(chunkTime, []ecdf.Sample{{Value: 1, Count: 1}}, []ecdf.Sample{{Value: 2, Count: 1}})
+	require.NoError(t, err)
+	require.NoError(t, chunks.WriteChunk(7, LoadLatencyIndicator, 1, chunkTime, chunk))
+	joint := newRecordingJointStore()
+	events := make(chan SchedulerEvent, 8)
+	scheduler := NewIntervalScheduler(WithSchedulerEventHandler(func(event SchedulerEvent) {
+		events <- event
+	}))
+	defer scheduler.Stop()
+
+	require.NoError(t, ScheduleECDFBuilder(7, chunks, joint, unreadableServiceConfig{Config: cfg}, scheduler))
+
+	require.Eventually(t, func() bool {
+		for {
+			select {
+			case event := <-events:
+				if event.Kind == SchedulerEventRetryScheduled {
+					return event.Err != nil && strings.Contains(event.Err.Error(), "configuration temporarily unavailable")
+				}
+			default:
+				return false
+			}
+		}
+	}, time.Second, time.Millisecond)
+	select {
+	case <-joint.published:
+		t.Fatal("builder published without knowing the service generation")
+	default:
+	}
 }
 
 func TestECDFPublisherDisabledSkipsScheduling(t *testing.T) {
