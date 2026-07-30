@@ -1,6 +1,6 @@
 import { expect } from 'chai';
 import 'mocha';
-import { CreateService, ListAlerts, ListAllServices, ReviewAlertOccurrence, ServicesApiError } from './api';
+import { CreateService, GetServiceDetail, ListAlerts, ListAllServices, ReviewAlertOccurrence, ServicesApiError } from './api';
 import { datetimeLocalToUtcISOString } from './datetime';
 import {
   LIVE_REFRESH_MILLISECONDS,
@@ -152,6 +152,33 @@ describe('ListAllServices', () => {
       expect((error as ServicesApiError).status).to.equal(503);
       expect((error as ServicesApiError).statusText).to.equal('Service Unavailable');
     }
+  });
+
+});
+
+describe('GetServiceDetail', () => {
+
+  it('loads the service when configuration history is unavailable', async () => {
+    const fetcher = (url: string | URL | Request): Promise<Response> => {
+      if (url === '/api/services/1') {
+        return Promise.resolve(new Response(JSON.stringify({
+          id: 1,
+          name: 'checkout',
+          prometheusUrl: 'http://prometheus.example.com',
+          loadQuery: 'load',
+          latencyQuery: 'latency',
+          intervalSeconds: 30,
+        }), { status: 200 }));
+      }
+      expect(url).to.equal('/api/services/1/history');
+      return Promise.resolve(new Response('history unavailable', { status: 500 }));
+    };
+
+    const detail = await GetServiceDetail(1, fetcher);
+
+    expect(detail.service.name).to.equal('checkout');
+    expect(detail.history).to.deep.equal([]);
+    expect(detail.historyUnavailable).to.equal(true);
   });
 
 });

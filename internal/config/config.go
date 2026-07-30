@@ -1,13 +1,20 @@
 package config
 
 import (
+	"context"
 	"database/sql"
+	"errors"
 	"net/url"
 	"os"
 	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"gopkg.in/yaml.v3"
+)
+
+var (
+	ErrServiceNotFound = errors.New("service not found")
+	ErrServiceConflict = errors.New("service revision conflict")
 )
 
 // this struct tells config how to connect to the database using yaml files
@@ -42,8 +49,10 @@ type Config interface {
 	ReadDataSource(id int) (*DataSource, error)
 	WriteDataSource(dataSource *DataSource) error
 	WriteService(service *Service) error
+	UpdateService(ctx context.Context, service *Service, expectedRevision int64, changedBy string) error
 	ReadService(id int) (*Service, error)
 	ReadAllServices() ([]*Service, error)
+	ReadServiceHistory(id int) ([]ServiceChange, error)
 	DeleteService(id int) error
 	Close()
 }
@@ -56,11 +65,25 @@ type DataSource struct {
 }
 
 type Service struct {
-	Id            int
-	Name          string
-	PrometheusURL string
-	LoadQuery     string
-	LatencyQuery  string
-	Interval      time.Duration
-	Paused        bool
+	Id              int           `json:"id"`
+	Name            string        `json:"name"`
+	PrometheusURL   string        `json:"prometheusUrl"`
+	LoadQuery       string        `json:"loadQuery"`
+	LatencyQuery    string        `json:"latencyQuery"`
+	Interval        time.Duration `json:"interval"`
+	Paused          bool          `json:"paused"`
+	Revision        int64         `json:"revision"`
+	Generation      int64         `json:"generation"`
+	BaselineResetAt time.Time     `json:"baselineResetAt,omitempty"`
+}
+
+type ServiceChange struct {
+	ServiceID        int       `json:"serviceId"`
+	PreviousRevision int64     `json:"previousRevision"`
+	NewRevision      int64     `json:"newRevision"`
+	ChangedAt        time.Time `json:"changedAt"`
+	ChangedBy        string    `json:"changedBy"`
+	Material         bool      `json:"material"`
+	Previous         Service   `json:"previous"`
+	Current          Service   `json:"current"`
 }
