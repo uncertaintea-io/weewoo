@@ -20,10 +20,10 @@ type cancellableImportCollector struct {
 
 func (c *cancellableImportCollector) Schedule(*config.Service) error { return nil }
 func (c *cancellableImportCollector) Unschedule(int)                 {}
-func (c *cancellableImportCollector) Import(ctx context.Context, _ *config.Service, _, _ time.Time) error {
+func (c *cancellableImportCollector) Import(ctx context.Context, _ *config.Service, _, _ time.Time, _ collection.ImportProgressHandler) (collection.ImportSummary, error) {
 	close(c.started)
 	<-ctx.Done()
-	return ctx.Err()
+	return collection.ImportSummary{}, ctx.Err()
 }
 
 func TestCancelImportDoesNotDegradeHealthyService(t *testing.T) {
@@ -53,8 +53,8 @@ type failingImportCollector struct{}
 
 func (*failingImportCollector) Schedule(*config.Service) error { return nil }
 func (*failingImportCollector) Unschedule(int)                 {}
-func (*failingImportCollector) Import(context.Context, *config.Service, time.Time, time.Time) error {
-	return fmt.Errorf("historical data unavailable")
+func (*failingImportCollector) Import(context.Context, *config.Service, time.Time, time.Time, collection.ImportProgressHandler) (collection.ImportSummary, error) {
+	return collection.ImportSummary{}, fmt.Errorf("historical data unavailable")
 }
 
 func TestFailedImportDoesNotDegradeHealthyLiveMonitoring(t *testing.T) {
@@ -72,6 +72,32 @@ func TestFailedImportDoesNotDegradeHealthyLiveMonitoring(t *testing.T) {
 	assert.Equal(t, "healthy", status.State)
 	require.NotEmpty(t, status.Activity)
 	assert.Equal(t, "import_failed", status.Activity[0].Type)
+}
+
+type gapImportCollector struct{}
+
+func (*gapImportCollector) Schedule(*config.Service) error { return nil }
+func (*gapImportCollector) Unschedule(int)                 {}
+func (*gapImportCollector) Import(_ context.Context, _ *config.Service, _, _ time.Time, progress collection.ImportProgressHandler) (collection.ImportSummary, error) {
+	summary := collection.ImportSummary{TotalWindows: 100, ImportedWindows: 75, GapWindows: 25}
+	progress(collection.ImportProgress{Percent: 100, ImportSummary: summary})
+	return summary, nil
+}
+
+func TestImportJobCompletesWithMonitoringGapSummary(t *testing.T) {
+	service := &config.Service{Id: 42}
+	imports := newImportManager(&gapImportCollector{}, newTrackingMonitor())
+
+	job := imports.start(service, time.Now().Add(-time.Hour), time.Now())
+
+	require.Eventually(t, func() bool {
+		return imports.get(job.ID).State == "complete_with_gaps"
+	}, time.Second, time.Millisecond)
+	completed := imports.get(job.ID)
+	assert.Equal(t, 100, completed.Progress)
+	assert.Equal(t, 100, completed.TotalWindows)
+	assert.Equal(t, 75, completed.ImportedWindows)
+	assert.Equal(t, 25, completed.GapWindows)
 }
 
 func TestRecoveredHistoryDoesNotOverwriteHealthyLiveMonitoring(t *testing.T) {

@@ -3,7 +3,9 @@ package collection
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"math"
 	"net/http"
@@ -13,14 +15,22 @@ import (
 	"time"
 )
 
+var ErrNoPrometheusData = errors.New("no data returned")
+
 const (
 	promInstantEndpoint = "/api/v1/query"
 	promRangeEndpoint   = "/api/v1/query_range"
 	promSuccessStatus   = "success"
 	promRangeStep       = "15s"
+	promErrorBodyLimit  = 8 << 10
 )
 
 type promSample []any // [timestamp, "value"]
+
+type prometheusPoint struct {
+	Timestamp time.Time
+	Value     float64
+}
 
 type promInstantResponse struct {
 	Status string `json:"status"`
@@ -40,6 +50,11 @@ type promRangeResponse struct {
 	} `json:"data"`
 }
 
+type promErrorResponse struct {
+	ErrorType string `json:"errorType"`
+	Error     string `json:"error"`
+}
+
 // QueryPrometheusInstant returns the largest value from an instant PromQL query.
 func QueryPrometheusInstant(ctx context.Context, client *http.Client, baseURL, promQL string) (float64, error) {
 	var pr promInstantResponse
@@ -50,7 +65,7 @@ func QueryPrometheusInstant(ctx context.Context, client *http.Client, baseURL, p
 	}
 
 	if pr.Status != promSuccessStatus || len(pr.Data.Result) == 0 {
-		return 0, fmt.Errorf("no data returned")
+		return 0, ErrNoPrometheusData
 	}
 
 	maxVal := math.Inf(-1)
@@ -72,6 +87,18 @@ func QueryPrometheusInstant(ctx context.Context, client *http.Client, baseURL, p
 
 // QueryPrometheusRange returns every sample value from a single-series range query.
 func QueryPrometheusRange(ctx context.Context, client *http.Client, baseURL, promQL string, start, end time.Time) ([]float64, error) {
+	points, err := queryPrometheusRangePoints(ctx, client, baseURL, promQL, start, end)
+	if err != nil {
+		return nil, err
+	}
+	values := make([]float64, len(points))
+	for i, point := range points {
+		values[i] = point.Value
+	}
+	return values, nil
+}
+
+func queryPrometheusRangePoints(ctx context.Context, client *http.Client, baseURL, promQL string, start, end time.Time) ([]prometheusPoint, error) {
 	var pr promRangeResponse
 	if err := queryPrometheus(ctx, client, baseURL, promRangeEndpoint, url.Values{
 		"query": {promQL},
@@ -83,7 +110,7 @@ func QueryPrometheusRange(ctx context.Context, client *http.Client, baseURL, pro
 	}
 
 	if pr.Status != promSuccessStatus || len(pr.Data.Result) == 0 {
-		return nil, fmt.Errorf("no data returned")
+		return nil, ErrNoPrometheusData
 	}
 	if len(pr.Data.Result) != 1 {
 		return nil, fmt.Errorf("unexpected number of results, got %d", len(pr.Data.Result))
@@ -91,18 +118,22 @@ func QueryPrometheusRange(ctx context.Context, client *http.Client, baseURL, pro
 
 	samples := pr.Data.Result[0].Values
 	if len(samples) == 0 {
-		return nil, fmt.Errorf("no samples returned")
+		return nil, fmt.Errorf("%w: no samples returned", ErrNoPrometheusData)
 	}
-	values := make([]float64, len(samples))
+	points := make([]prometheusPoint, len(samples))
 	for i, sample := range samples {
 		value, err := parsePromSample(sample)
 		if err != nil {
 			return nil, err
 		}
-		values[i] = value
+		timestamp, err := parsePromTimestamp(sample)
+		if err != nil {
+			return nil, err
+		}
+		points[i] = prometheusPoint{Timestamp: timestamp, Value: value}
 	}
 
-	return values, nil
+	return points, nil
 }
 
 func queryPrometheus(
@@ -143,8 +174,9 @@ func queryPrometheus(
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		slog.Error("Prometheus query failed", "status", resp.StatusCode)
-		return fmt.Errorf("prometheus returned HTTP %d", resp.StatusCode)
+		queryErr := prometheusResponseError(resp)
+		slog.Error("Prometheus query failed", "status", resp.StatusCode, "error", queryErr)
+		return queryErr
 	}
 
 	err = json.NewDecoder(resp.Body).Decode(target)
@@ -152,8 +184,20 @@ func queryPrometheus(
 		slog.Error("Failed to decode Prometheus response", "error", err)
 		return err
 	}
-	slog.Info("Prometheus response decoded", "target", target)
+	slog.Debug("Prometheus response decoded")
 	return nil
+}
+
+func prometheusResponseError(resp *http.Response) error {
+	base := fmt.Sprintf("prometheus returned HTTP %d", resp.StatusCode)
+	var detail promErrorResponse
+	if err := json.NewDecoder(io.LimitReader(resp.Body, promErrorBodyLimit)).Decode(&detail); err != nil || detail.Error == "" {
+		return fmt.Errorf("%s", base)
+	}
+	if detail.ErrorType == "" {
+		return fmt.Errorf("%s: %s", base, detail.Error)
+	}
+	return fmt.Errorf("%s (%s): %s", base, detail.ErrorType, detail.Error)
 }
 
 func parsePromSample(sample promSample) (float64, error) {
@@ -171,4 +215,16 @@ func parsePromSample(sample promSample) (float64, error) {
 		return 0, fmt.Errorf("invalid value: %w", err)
 	}
 	return parsed, nil
+}
+
+func parsePromTimestamp(sample promSample) (time.Time, error) {
+	if len(sample) != 2 {
+		return time.Time{}, fmt.Errorf("unexpected number of values, got %d", len(sample))
+	}
+	seconds, ok := sample[0].(float64)
+	if !ok {
+		return time.Time{}, fmt.Errorf("invalid timestamp")
+	}
+	wholeSeconds, fractionalSeconds := math.Modf(seconds)
+	return time.Unix(int64(wholeSeconds), int64(fractionalSeconds*float64(time.Second))).UTC(), nil
 }

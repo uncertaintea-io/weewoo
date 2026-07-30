@@ -30,8 +30,11 @@ export interface TrackingStatus {
 export interface ImportJob {
   id: number;
   serviceId: number;
-  state: 'queued' | 'running' | 'complete' | 'failed' | 'cancelled';
+  state: 'queued' | 'running' | 'complete' | 'complete_with_gaps' | 'failed' | 'cancelled';
   progress: number;
+  totalWindows: number;
+  importedWindows: number;
+  gapWindows: number;
   error?: string;
   startedAt: string;
   endedAt?: string;
@@ -176,6 +179,9 @@ function parseService(value: unknown): Service {
     serviceId: readNumber(job.serviceId, 'import.serviceId'),
     state: readString(job.state, 'import.state') as ImportJob['state'],
     progress: readNumber(job.progress, 'import.progress'),
+    totalWindows: typeof job.totalWindows === 'number' ? job.totalWindows : 0,
+    importedWindows: typeof job.importedWindows === 'number' ? job.importedWindows : 0,
+    gapWindows: typeof job.gapWindows === 'number' ? job.gapWindows : 0,
     ...(typeof job.error === 'string' ? { error: job.error } : {}),
     startedAt: readString(job.startedAt, 'import.startedAt'),
     ...(typeof job.endedAt === 'string' ? { endedAt: job.endedAt } : {}),

@@ -793,6 +793,13 @@ h1 {
   gap: 12px;
 }
 
+.bulk-review-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
 .add-button {
   display: flex;
   width: 34px;

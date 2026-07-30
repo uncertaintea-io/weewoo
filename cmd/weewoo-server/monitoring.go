@@ -106,14 +106,17 @@ func (m *trackingMonitor) handleCollectorEvent(event collection.CollectorEvent) 
 }
 
 type importJob struct {
-	ID        int        `json:"id"`
-	ServiceID int        `json:"serviceId"`
-	State     string     `json:"state"`
-	Progress  int        `json:"progress"`
-	Error     string     `json:"error,omitempty"`
-	StartedAt time.Time  `json:"startedAt"`
-	EndedAt   *time.Time `json:"endedAt,omitempty"`
-	cancel    context.CancelFunc
+	ID              int        `json:"id"`
+	ServiceID       int        `json:"serviceId"`
+	State           string     `json:"state"`
+	Progress        int        `json:"progress"`
+	TotalWindows    int        `json:"totalWindows"`
+	ImportedWindows int        `json:"importedWindows"`
+	GapWindows      int        `json:"gapWindows"`
+	Error           string     `json:"error,omitempty"`
+	StartedAt       time.Time  `json:"startedAt"`
+	EndedAt         *time.Time `json:"endedAt,omitempty"`
+	cancel          context.CancelFunc
 }
 
 type importManager struct {
@@ -138,8 +141,11 @@ func (m *importManager) start(service *config.Service, start, end time.Time) imp
 	m.monitor.record(service.Id, "", "import_started", "Historical Prometheus import started", job.StartedAt)
 	slog.Info("historical import started", "import_id", job.ID, "service_id", service.Id, "start", start, "end", end)
 	go func() {
-		m.update(job.ID, "running", 10, "")
-		err := m.tracker.Import(ctx, service, start, end)
+		m.update(job.ID, "running", 0, "")
+		summary, err := m.tracker.Import(ctx, service, start, end, func(progress collection.ImportProgress) {
+			m.updateProgress(job.ID, progress)
+		})
+		m.updateSummary(job.ID, summary)
 		now := time.Now().UTC()
 		if err != nil {
 			if ctx.Err() != nil {
@@ -155,11 +161,42 @@ func (m *importManager) start(service *config.Service, start, end time.Time) imp
 			slog.Error("historical import failed", "import_id", job.ID, "service_id", service.Id, "error", err)
 			return
 		}
-		m.finish(job.ID, "complete", "", now)
-		m.monitor.record(service.Id, "", "import_completed", "Historical Prometheus import completed", now)
-		slog.Info("historical import completed", "import_id", job.ID, "service_id", service.Id)
+		state := "complete"
+		message := "Historical Prometheus import completed"
+		if summary.GapWindows > 0 {
+			state = "complete_with_gaps"
+			message = fmt.Sprintf(
+				"Historical Prometheus import completed: %d windows imported, %d monitoring gaps",
+				summary.ImportedWindows,
+				summary.GapWindows,
+			)
+		}
+		m.finish(job.ID, state, "", now)
+		m.monitor.record(service.Id, "", "import_completed", message, now)
+		slog.Info("historical import completed", "import_id", job.ID, "service_id", service.Id, "imported_windows", summary.ImportedWindows, "gap_windows", summary.GapWindows)
 	}()
 	return m.get(job.ID)
+}
+
+func (m *importManager) updateProgress(id int, progress collection.ImportProgress) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if job := m.jobs[id]; job != nil {
+		job.Progress = progress.Percent
+		job.TotalWindows = progress.TotalWindows
+		job.ImportedWindows = progress.ImportedWindows
+		job.GapWindows = progress.GapWindows
+	}
+}
+
+func (m *importManager) updateSummary(id int, summary collection.ImportSummary) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if job := m.jobs[id]; job != nil {
+		job.TotalWindows = summary.TotalWindows
+		job.ImportedWindows = summary.ImportedWindows
+		job.GapWindows = summary.GapWindows
+	}
 }
 
 func (m *importManager) update(id int, state string, progress int, errMessage string) {
@@ -175,7 +212,7 @@ func (m *importManager) finish(id int, state, errMessage string, ended time.Time
 	defer m.mu.Unlock()
 	if job := m.jobs[id]; job != nil {
 		job.State, job.Error, job.EndedAt = state, errMessage, &ended
-		if state == "complete" {
+		if state == "complete" || state == "complete_with_gaps" {
 			job.Progress = 100
 		}
 	}

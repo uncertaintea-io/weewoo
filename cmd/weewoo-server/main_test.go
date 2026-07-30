@@ -92,9 +92,13 @@ func TestAppServerWriteTimeoutExceedsPrometheusTestTimeout(t *testing.T) {
 		"the server must leave time for the Prometheus test handler to write its response")
 }
 
-func (c *fakeServiceCollector) Import(_ context.Context, service *config.Service, start, end time.Time) error {
+func (c *fakeServiceCollector) Import(_ context.Context, service *config.Service, start, end time.Time, progress collection.ImportProgressHandler) (collection.ImportSummary, error) {
 	c.imported, c.start, c.end = service, start, end
-	return nil
+	summary := collection.ImportSummary{TotalWindows: 1, ImportedWindows: 1}
+	if progress != nil {
+		progress(collection.ImportProgress{Percent: 100, ImportSummary: summary})
+	}
+	return summary, nil
 }
 
 func TestNewListAllServicesHandler(t *testing.T) {
@@ -377,6 +381,28 @@ func TestServiceAPICreatesBackgroundImport(t *testing.T) {
 		jobs := imports.listForService(1)
 		return len(jobs) == 1 && jobs[0].State == "complete" && jobs[0].Progress == 100
 	}, time.Second, time.Millisecond)
+}
+
+func TestServiceAPIRejectsHistoricalRangeUnlessStartIsBeforeEnd(t *testing.T) {
+	cfg := config.NewFakeConfig()
+	monitor := newTrackingMonitor()
+	tracker := &fakeServiceCollector{}
+	handler := NewServiceAPIHandler(cfg, tracker, monitor, newImportManager(tracker, monitor), http.DefaultClient)
+	body := bytes.NewBufferString(`{
+		"name":"checkout", "prometheusUrl":"http://prometheus.example.com",
+		"loadQuery":"load", "latencyQuery":"latency", "intervalSeconds":60,
+		"importStart":"2026-07-30T00:00:00Z", "importEnd":"2026-07-29T00:00:00Z"
+	}`)
+	recorder := httptest.NewRecorder()
+
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/api/services", body))
+
+	require.Equal(t, http.StatusBadRequest, recorder.Code)
+	assert.Equal(t, "importStart must be before importEnd\n", recorder.Body.String())
+	services, err := cfg.ReadAllServices()
+	require.NoError(t, err)
+	assert.Empty(t, services)
+	assert.Nil(t, tracker.scheduled)
 }
 
 func TestSleepHandlerReturnsSuccessfulPingAfterDelay(t *testing.T) {

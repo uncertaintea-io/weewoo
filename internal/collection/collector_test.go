@@ -3,9 +3,11 @@ package collection
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -55,6 +57,161 @@ func TestCollectionSucceedsWhenAnalysisFails(t *testing.T) {
 	err := collector.collectSamples(context.Background(), service, time.Unix(1_710_000_000, 0), time.Unix(1_710_000_060, 0))
 
 	require.NoError(t, err)
+}
+
+func TestHistoricalImportBatchesAYearBelowPrometheusPointLimit(t *testing.T) {
+	const maxPoints = 10_000
+	var (
+		requestsMu sync.Mutex
+		requests   int
+	)
+	client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		start, err := strconv.ParseInt(request.URL.Query().Get("start"), 10, 64)
+		require.NoError(t, err)
+		end, err := strconv.ParseInt(request.URL.Query().Get("end"), 10, 64)
+		require.NoError(t, err)
+		points := ((end - start) / 15) + 1
+		require.LessOrEqual(t, points, int64(maxPoints))
+		requestsMu.Lock()
+		requests++
+		requestsMu.Unlock()
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": {"application/json"}},
+			Body: io.NopCloser(strings.NewReader(fmt.Sprintf(
+				`{"status":"success","data":{"result":[{"values":[[%d,"1"]]}]}}`,
+				end,
+			))),
+		}, nil
+	})}
+	collector := &collector{
+		client:     client,
+		chunkStore: ecdf.NewFakeChunkStore(),
+	}
+	service := &config.Service{
+		Id:            1,
+		Name:          "checkout",
+		PrometheusURL: "http://prometheus.example",
+		LoadQuery:     "load",
+		LatencyQuery:  "latency",
+		Interval:      time.Hour,
+	}
+	start := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	_, err := collector.Import(context.Background(), service, start, start.Add(365*24*time.Hour), nil)
+
+	require.NoError(t, err)
+	requestsMu.Lock()
+	defer requestsMu.Unlock()
+	require.Greater(t, requests, 2)
+}
+
+func TestHistoricalImportContinuesAfterBatchWithNoData(t *testing.T) {
+	start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	var requests int
+	client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		requests++
+		body := `{"status":"success","data":{"result":[]}}`
+		if request.URL.Query().Get("start") != strconv.FormatInt(start.Unix(), 10) {
+			batchStart, err := strconv.ParseInt(request.URL.Query().Get("start"), 10, 64)
+			require.NoError(t, err)
+			body = fmt.Sprintf(`{"status":"success","data":{"result":[{"values":[[%d,"1"]]}]}}`, batchStart+15)
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": {"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(body)),
+		}, nil
+	})}
+	collector := &collector{client: client, chunkStore: ecdf.NewFakeChunkStore()}
+	service := &config.Service{
+		Id: 1, Name: "checkout", PrometheusURL: "http://prometheus.example",
+		LoadQuery: "load", LatencyQuery: "latency", Interval: time.Hour,
+	}
+
+	summary, err := collector.Import(context.Background(), service, start, start.Add(historicalBatchSpan+time.Hour), nil)
+
+	require.NoError(t, err)
+	require.Greater(t, requests, 1)
+	require.Equal(t, ImportSummary{TotalWindows: 43, ImportedWindows: 1, GapWindows: 42}, summary)
+}
+
+type importRecordingChunkStore struct {
+	ecdf.ChunkStore
+	timestamps []time.Time
+}
+
+type backpressureAnalysisQueue struct {
+	contextSubmissions int
+}
+
+func (*backpressureAnalysisQueue) Submit(AnalysisRequest) error {
+	return ErrAnalysisQueueFull
+}
+
+func (q *backpressureAnalysisQueue) SubmitContext(_ context.Context, _ AnalysisRequest) error {
+	q.contextSubmissions++
+	return nil
+}
+
+func (s *importRecordingChunkStore) WriteChunk(serviceID, indicatorID int, generation int64, timestamp time.Time, chunk []byte) error {
+	s.timestamps = append(s.timestamps, timestamp)
+	return s.ChunkStore.WriteChunk(serviceID, indicatorID, generation, timestamp, chunk)
+}
+
+func TestHistoricalImportWritesOneTimeChunkPerServiceInterval(t *testing.T) {
+	start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	values := make([]string, 0, 8)
+	for timestamp := start; timestamp.Before(start.Add(2 * time.Hour)); timestamp = timestamp.Add(15 * time.Minute) {
+		values = append(values, fmt.Sprintf(`[%d,"1"]`, timestamp.Unix()))
+	}
+	body := fmt.Sprintf(`{"status":"success","data":{"result":[{"values":[%s]}]}}`, strings.Join(values, ","))
+	client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": {"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(body)),
+		}, nil
+	})}
+	chunks := &importRecordingChunkStore{ChunkStore: ecdf.NewFakeChunkStore()}
+	collector := &collector{client: client, chunkStore: chunks}
+	service := &config.Service{
+		Id: 1, Name: "checkout", PrometheusURL: "http://prometheus.example",
+		LoadQuery: "load", LatencyQuery: "latency", Interval: time.Hour,
+	}
+
+	_, err := collector.Import(context.Background(), service, start, start.Add(2*time.Hour), nil)
+
+	require.NoError(t, err)
+	require.Equal(t, []time.Time{start.Add(time.Hour), start.Add(2 * time.Hour)}, chunks.timestamps)
+}
+
+func TestHistoricalImportUsesAnalysisBackpressureInsteadOfDroppingChunks(t *testing.T) {
+	start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	body := fmt.Sprintf(
+		`{"status":"success","data":{"result":[{"values":[[%d,"1"]]}]}}`,
+		start.Unix(),
+	)
+	client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": {"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(body)),
+		}, nil
+	})}
+	analysis := &backpressureAnalysisQueue{}
+	collector := &collector{
+		client: client, chunkStore: ecdf.NewFakeChunkStore(), analyzer: analysis,
+	}
+	service := &config.Service{
+		Id: 1, Name: "checkout", PrometheusURL: "http://prometheus.example",
+		LoadQuery: "load", LatencyQuery: "latency", Interval: time.Hour,
+	}
+
+	_, err := collector.Import(context.Background(), service, start, start.Add(time.Hour), nil)
+
+	require.NoError(t, err)
+	require.Equal(t, 1, analysis.contextSubmissions)
 }
 
 type pendingRecovery struct {

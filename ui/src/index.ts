@@ -1,9 +1,9 @@
 import './index.scss'
 import { CancelImport, CreateService, DeleteService, GetService, GetServiceDetail, ListAlerts, ListAllServices, ReviewAlertOccurrence, ServicesApiError, SetServicePaused, TestService, UpdateService, type AlertOccurrence, type AlertRecord, type CreateServiceInput, type Service, type ServiceChange } from './api';
-import { datetimeLocalToUtcISOString } from './datetime';
+import { historicalRangeToUtc } from './datetime';
 import { liveRefreshDelay } from './live-refresh';
 import { searchValueForRender } from './navigation';
-import { alertCardClasses, escapeHtml, groupAlertsByStatus, renderServiceUrl } from './rendering';
+import { alertCardClasses, escapeHtml, groupAlertsByStatus, renderServiceUrl, reviewableAnomalousOccurrencesByService, type AlertReviewTarget } from './rendering';
 
 const app = document.querySelector<HTMLDivElement>('#app');
 let liveRefreshTimer: number | undefined;
@@ -42,7 +42,8 @@ function serviceInitial(service: Service): string {
 }
 
 function statusLabel(state: Service['tracking']['state']): string {
-  return state.charAt(0).toUpperCase() + state.slice(1);
+  const label = state.replaceAll('_', ' ');
+  return label.charAt(0).toUpperCase() + label.slice(1);
 }
 
 function formatTimestamp(value?: string): string {
@@ -240,6 +241,7 @@ function renderAlerts(alerts: AlertRecord[]): void {
   const { active, resolved } = groupAlertsByStatus(alerts);
   const critical = active.filter((alert) => alert.severity === 'critical').length;
   const warning = active.filter((alert) => alert.severity === 'warning').length;
+  const reviewGroups = reviewableAnomalousOccurrencesByService(active);
   renderShell(`
     <section class="summary-grid" aria-label="Alert summary">
       ${renderSummaryCard('Active alerts', active.length, 'unavailable')}
@@ -248,7 +250,14 @@ function renderAlerts(alerts: AlertRecord[]): void {
       ${renderSummaryCard('History', alerts.length - active.length, 'total')}
     </section>
     <section class="alert-panel">
-      <div class="panel-header"><h2>Active alerts</h2><span>Conditions requiring attention</span></div>
+      <div class="panel-header">
+        <div><h2>Active alerts</h2><span>Conditions requiring attention</span></div>
+        ${reviewGroups.length === 0 ? '' : `<div class="bulk-review-actions">${reviewGroups.map((group, index) => `
+          <button class="secondary-button accept-service-anomalies" type="button" data-review-group-index="${String(index)}">
+            Accept ${String(group.targets.length)} for ${escapeHtml(group.serviceName)}
+          </button>
+        `).join('')}</div>`}
+      </div>
       ${active.length === 0 ? '<div class="empty-state alert-empty-state"><h2>No active alerts</h2><p>There are currently no conditions requiring attention.</p></div>' : `<div class="alert-list">${active.map(renderAlertCard).join('')}</div>`}
       ${resolved.length === 0 ? '' : `
         <details class="resolved-alerts-group">
@@ -273,6 +282,32 @@ function renderAlerts(alerts: AlertRecord[]): void {
   document.querySelectorAll<HTMLButtonElement>('.review-occurrence').forEach((button) => {
     button.addEventListener('click', () => { void reviewOccurrence(button); });
   });
+  document.querySelectorAll<HTMLButtonElement>('.accept-service-anomalies').forEach((button) => {
+    button.addEventListener('click', () => {
+      const group = reviewGroups[Number(button.dataset.reviewGroupIndex)];
+      void acceptServiceAnomalies(button, group.serviceName, group.targets);
+    });
+  });
+}
+
+async function acceptServiceAnomalies(button: HTMLButtonElement, serviceName: string, targets: AlertReviewTarget[]): Promise<void> {
+  const count = targets.length;
+  if (count === 0) return;
+  if (!window.confirm(`Accept ${String(count)} Bad chunks for ${serviceName} as normal and make them eligible for future ECDF builds?`)) return;
+  const reason = window.prompt(`Optional reason applied to every accepted ${serviceName} chunk:`, '');
+  if (reason === null) return;
+  button.disabled = true;
+  button.textContent = `Accepting 0 of ${String(count)}…`;
+  try {
+    for (const [index, target] of targets.entries()) {
+      await ReviewAlertOccurrence(target.id, target.revision, true, reason);
+      button.textContent = `Accepting ${String(index + 1)} of ${String(count)}…`;
+    }
+    await loadAlerts();
+  } catch (error) {
+    await loadAlerts(false);
+    window.alert(error instanceof Error ? error.message : 'Unable to accept every anomalous occurrence.');
+  }
 }
 
 async function reviewOccurrence(button: HTMLButtonElement): Promise<void> {
@@ -567,8 +602,14 @@ async function submitServiceForm(form: HTMLFormElement, importHistory: boolean):
   const errorBox = form.querySelector<HTMLElement>('#form-error');
   const input = serviceInputFromForm(form);
   if (importHistory) {
-    input.importStart = datetimeLocalToUtcISOString(inputValue(form, 'importStart'));
-    input.importEnd = datetimeLocalToUtcISOString(inputValue(form, 'importEnd'));
+    try {
+      const range = historicalRangeToUtc(inputValue(form, 'importStart'), inputValue(form, 'importEnd'));
+      input.importStart = range.start;
+      input.importEnd = range.end;
+    } catch (error) {
+      if (errorBox !== null) errorBox.textContent = error instanceof Error ? error.message : 'Invalid import range.';
+      return;
+    }
   }
   if (submit !== null) {
     submit.disabled = true;
@@ -643,6 +684,7 @@ function renderImports(service: Service): string {
     <article class="import-row">
       <div><strong>Import #${String(job.id)}</strong><span>${escapeHtml(statusLabel(job.state as Service['tracking']['state']))}</span></div>
       <progress max="100" value="${String(job.progress)}">${String(job.progress)}%</progress>
+      ${job.totalWindows === 0 ? '' : `<p>${String(job.importedWindows)} of ${String(job.totalWindows)} windows imported${job.gapWindows === 0 ? '' : `; ${String(job.gapWindows)} monitoring gaps`}.</p>`}
       ${(job.state === 'queued' || job.state === 'running') ? `<button class="secondary-button cancel-import" type="button" data-import-id="${String(job.id)}">Cancel</button>` : ''}
       ${job.error === undefined ? '' : `<p>${escapeHtml(job.error)}</p>`}
     </article>

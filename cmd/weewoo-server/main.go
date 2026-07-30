@@ -94,7 +94,7 @@ type createServiceRequest struct {
 type serviceCollector interface {
 	Schedule(service *config.Service) error
 	Unschedule(serviceID int)
-	Import(ctx context.Context, service *config.Service, start, end time.Time) error
+	Import(ctx context.Context, service *config.Service, start, end time.Time, progress collection.ImportProgressHandler) (collection.ImportSummary, error)
 }
 
 type liveServiceTracker struct {
@@ -113,8 +113,8 @@ func (t *liveServiceTracker) Schedule(service *config.Service) error {
 	return nil
 }
 
-func (t *liveServiceTracker) Import(ctx context.Context, service *config.Service, start, end time.Time) error {
-	return t.collector.Import(ctx, service, start, end)
+func (t *liveServiceTracker) Import(ctx context.Context, service *config.Service, start, end time.Time, progress collection.ImportProgressHandler) (collection.ImportSummary, error) {
+	return t.collector.Import(ctx, service, start, end, progress)
 }
 
 func (t *liveServiceTracker) Unschedule(serviceID int) {
@@ -229,7 +229,7 @@ func NewCreateServiceHandler(cfg config.Config, collector serviceCollector) http
 			return
 		}
 		if request.ImportStart != nil {
-			if err := collector.Import(r.Context(), service, *request.ImportStart, *request.ImportEnd); err != nil {
+			if _, err := collector.Import(r.Context(), service, *request.ImportStart, *request.ImportEnd, nil); err != nil {
 				log.Printf("historical import failed for service %d: %v", service.Id, err)
 				http.Error(w, "service created, but historical import failed", http.StatusBadGateway)
 				return
