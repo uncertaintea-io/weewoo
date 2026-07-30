@@ -25,13 +25,21 @@ func BuildJointECDF(store ChunkStore, serviceId, indicatorId int, writer io.Writ
 
 // BuildJointECDFContext builds a joint ECDF using the supplied context.
 func BuildJointECDFContext(ctx context.Context, store ChunkStore, serviceId, indicatorId int, writer io.Writer) error {
+	return buildJointECDFContext(ctx, store, serviceId, indicatorId, 1, writer)
+}
+
+func BuildJointECDFContextGeneration(ctx context.Context, store ChunkStore, serviceID, indicatorID int, generation int64, writer io.Writer) error {
+	return buildJointECDFContext(ctx, store, serviceID, indicatorID, generation, writer)
+}
+
+func buildJointECDFContext(ctx context.Context, store ChunkStore, serviceId, indicatorId int, generation int64, writer io.Writer) error {
 	chunks := make(chan []byte, 2)
 
 	group, ctx := errgroup.WithContext(ctx)
 
 	group.Go(func() error {
 		defer close(chunks)
-		err := store.ScanGoodChunks(ctx, serviceId, indicatorId, chunks)
+		err := store.ScanGoodChunks(ctx, serviceId, indicatorId, generation, chunks)
 		return buildError("failed to scan chunks", err)
 	})
 

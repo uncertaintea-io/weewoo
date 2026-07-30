@@ -55,7 +55,7 @@ type recordingChunkStore struct {
 	verdicts []recordedVerdict
 }
 
-func (s *recordingChunkStore) WriteVerdict(_ context.Context, serviceID, indicatorID int, timestamp time.Time, good bool, pValue float64) error {
+func (s *recordingChunkStore) WriteVerdict(_ context.Context, serviceID, indicatorID int, _ int64, timestamp time.Time, good bool, pValue float64) error {
 	s.verdicts = append(s.verdicts, recordedVerdict{
 		serviceID:   serviceID,
 		indicatorID: indicatorID,
@@ -180,6 +180,29 @@ printf '\000'
 		time.Unix(1_700_000_000, 0),
 		[]ecdf.Sample{{Value: 0, Count: 1}},
 		[]ecdf.Sample{{Value: 0, Count: 1}},
+	)
+
+	require.NoError(t, err)
+	require.False(t, anomalous)
+	require.Zero(t, alerts.Count())
+}
+
+func TestAnalyzeSampleSkipsSupersededServiceGeneration(t *testing.T) {
+	cfg := config.NewFakeConfig()
+	require.NoError(t, cfg.WriteService(&config.Service{Id: 7, Name: "checkout", Generation: 2}))
+	alerts := &recordingAlertQueue{}
+
+	anomalous, err := analyzeSample(
+		context.Background(),
+		cfg,
+		staticJointStore{},
+		nil,
+		alerts,
+		&config.Service{Id: 7, Name: "checkout", Generation: 1},
+		LoadLatencyIndicator,
+		time.Unix(1_700_000_000, 0),
+		[]ecdf.Sample{{Value: 1, Count: 1}},
+		[]ecdf.Sample{{Value: 1, Count: 1}},
 	)
 
 	require.NoError(t, err)

@@ -4,8 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -21,6 +24,12 @@ type fakeServiceCollector struct {
 	imported    *config.Service
 	start       time.Time
 	end         time.Time
+}
+
+type serviceRoundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f serviceRoundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return f(request)
 }
 
 func (c *fakeServiceCollector) Stop() {}
@@ -116,6 +125,8 @@ func TestNewListAllServicesHandler(t *testing.T) {
 		LoadQuery:       "sum(rate(http_requests_total[5m]))",
 		LatencyQuery:    "histogram_quantile(0.95, rate(http_request_duration_seconds_bucket[5m]))",
 		IntervalSeconds: 30,
+		Revision:        1,
+		Generation:      1,
 		Tracking:        trackingStatus{State: "pending", Activity: []activityEntry{}},
 		Imports:         []importJob{},
 	}, services[0])
@@ -220,6 +231,130 @@ func TestServiceAPIReportsTrackingStatusAndDeletesService(t *testing.T) {
 	assert.Equal(t, http.StatusNoContent, deleteRecorder.Code)
 	_, err := cfg.ReadService(1)
 	assert.Error(t, err)
+}
+
+func TestServiceAPIReturnsEmptyArrayForServiceWithoutConfigurationHistory(t *testing.T) {
+	cfg := config.NewFakeConfig()
+	service := &config.Service{
+		Name: "checkout", PrometheusURL: "http://prometheus.example.com",
+		LoadQuery: "load", LatencyQuery: "latency", Interval: time.Minute,
+	}
+	require.NoError(t, cfg.WriteService(service))
+	monitor := newTrackingMonitor()
+	tracker := &fakeServiceCollector{}
+	handler := NewServiceAPIHandler(cfg, tracker, monitor, newImportManager(tracker, monitor), http.DefaultClient)
+	recorder := httptest.NewRecorder()
+
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/services/1/history", nil))
+
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	assert.JSONEq(t, `[]`, recorder.Body.String())
+}
+
+func TestServiceAPIUpdatesConfigurationAsANewAuditedGeneration(t *testing.T) {
+	cfg := config.NewFakeConfig()
+	service := &config.Service{
+		Name: "checkout", PrometheusURL: "http://prometheus.example.com",
+		LoadQuery: "old_load", LatencyQuery: "old_latency", Interval: time.Minute,
+	}
+	require.NoError(t, cfg.WriteService(service))
+	monitor := newTrackingMonitor()
+	tracker := &fakeServiceCollector{}
+	handler := NewServiceAPIHandler(cfg, tracker, monitor, newImportManager(tracker, monitor), http.DefaultClient)
+	body := bytes.NewBufferString(`{
+		"name":"checkout", "prometheusUrl":"http://prometheus.example.com",
+		"loadQuery":"new_load", "latencyQuery":"new_latency",
+		"intervalSeconds":60, "revision":1
+	}`)
+	request := httptest.NewRequest(http.MethodPut, "/api/services/1", body)
+	recorder := httptest.NewRecorder()
+
+	handler.ServeHTTP(recorder, request)
+
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	updated, err := cfg.ReadService(service.Id)
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), updated.Revision)
+	assert.Equal(t, int64(2), updated.Generation)
+	assert.Equal(t, "new_load", updated.LoadQuery)
+	require.NotZero(t, updated.BaselineResetAt)
+	history, err := cfg.ReadServiceHistory(service.Id)
+	require.NoError(t, err)
+	require.Len(t, history, 1)
+	assert.Equal(t, "anonymous", history[0].ChangedBy)
+	assert.Equal(t, int64(1), history[0].PreviousRevision)
+	assert.Equal(t, int64(2), history[0].NewRevision)
+	assert.True(t, history[0].Material)
+}
+
+func TestServiceAPIPauseAndResumeAreRevisionedAndAudited(t *testing.T) {
+	cfg := config.NewFakeConfig()
+	service := &config.Service{
+		Name: "checkout", PrometheusURL: "http://prometheus.example.com",
+		LoadQuery: "load", LatencyQuery: "latency", Interval: time.Minute,
+	}
+	require.NoError(t, cfg.WriteService(service))
+	monitor := newTrackingMonitor()
+	tracker := &fakeServiceCollector{}
+	handler := NewServiceAPIHandler(cfg, tracker, monitor, newImportManager(tracker, monitor), http.DefaultClient)
+
+	pause := httptest.NewRecorder()
+	handler.ServeHTTP(pause, httptest.NewRequest(http.MethodPost, "/api/services/1/pause", nil))
+	require.Equal(t, http.StatusOK, pause.Code, pause.Body.String())
+
+	resume := httptest.NewRecorder()
+	handler.ServeHTTP(resume, httptest.NewRequest(http.MethodPost, "/api/services/1/resume", nil))
+	require.Equal(t, http.StatusOK, resume.Code, resume.Body.String())
+
+	updated, err := cfg.ReadService(service.Id)
+	require.NoError(t, err)
+	assert.False(t, updated.Paused)
+	assert.Equal(t, int64(3), updated.Revision)
+	assert.Equal(t, int64(1), updated.Generation)
+	history, err := cfg.ReadServiceHistory(service.Id)
+	require.NoError(t, err)
+	require.Len(t, history, 2)
+	assert.False(t, history[0].Material)
+	assert.False(t, history[1].Material)
+}
+
+func TestServiceAPITestsBothQueriesBeforeActivation(t *testing.T) {
+	client := &http.Client{Transport: serviceRoundTripFunc(func(_ *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": {"application/json"}},
+			Body: io.NopCloser(strings.NewReader(
+				`{"status":"success","data":{"resultType":"matrix","result":[{"metric":{},"values":[[1,"2.5"],[2,"3.5"]]}]}}`,
+			)),
+		}, nil
+	})}
+	cfg := config.NewFakeConfig()
+	tracker := &fakeServiceCollector{}
+	handler := NewServiceAPIHandler(cfg, tracker, newTrackingMonitor(), newImportManager(tracker, newTrackingMonitor()), client)
+	body := bytes.NewBufferString(fmt.Sprintf(`{
+		"name":"checkout", "prometheusUrl":%q, "loadQuery":"load",
+		"latencyQuery":"latency", "intervalSeconds":60
+	}`, "http://prometheus.example.com"))
+	recorder := httptest.NewRecorder()
+
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/api/services/test", body))
+
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	var result struct {
+		LoadQuery struct {
+			Valid   bool
+			Samples int
+		} `json:"loadQuery"`
+		LatencyQuery struct {
+			Valid   bool
+			Samples int
+		} `json:"latencyQuery"`
+	}
+	require.NoError(t, json.NewDecoder(recorder.Body).Decode(&result))
+	assert.True(t, result.LoadQuery.Valid)
+	assert.Equal(t, 2, result.LoadQuery.Samples)
+	assert.True(t, result.LatencyQuery.Valid)
+	assert.Equal(t, 2, result.LatencyQuery.Samples)
 }
 
 func TestServiceAPICreatesBackgroundImport(t *testing.T) {

@@ -109,7 +109,11 @@ func ScheduleECDFBuilder(serviceID int, chunkStore ecdf.ChunkStore, jointStore e
 		if err != nil {
 			return IntervalPermanent(err)
 		}
-		eligibleChunks, err := chunkStore.CountEligibleChunks(buildCtx, serviceID, LoadLatencyIndicator)
+		service, err := cfg.ReadService(serviceID)
+		if err != nil {
+			return IntervalRetry(fmt.Errorf("read service generation: %w", err))
+		}
+		eligibleChunks, err := chunkStore.CountEligibleChunks(buildCtx, serviceID, LoadLatencyIndicator, service.Generation)
 		if err != nil {
 			return IntervalRetry(err)
 		}
@@ -120,7 +124,7 @@ func ScheduleECDFBuilder(serviceID int, chunkStore ecdf.ChunkStore, jointStore e
 		}
 
 		bytesWritten, published, err := jointStore.Publish(buildCtx, serviceID, LoadLatencyIndicator, end, func(out io.Writer) error {
-			if err := ecdf.BuildJointECDFContext(buildCtx, chunkStore, serviceID, LoadLatencyIndicator, out); err != nil {
+			if err := ecdf.BuildJointECDFContextGeneration(buildCtx, chunkStore, serviceID, LoadLatencyIndicator, service.Generation, out); err != nil {
 				return fmt.Errorf("ECDF generation failed: %w", err)
 			}
 			return nil
