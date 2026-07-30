@@ -373,6 +373,10 @@ export async function SetServicePaused(id: number, paused: boolean, fetcher: Fet
   return serviceRequest(`/api/services/${String(id)}/${paused ? 'pause' : 'resume'}`, { method: 'POST', headers: { Accept: 'application/json' } }, fetcher);
 }
 
+export async function ResetServiceBaseline(id: number, fetcher: Fetcher = fetch): Promise<Service> {
+  return serviceRequest(`/api/services/${String(id)}/baseline-reset`, { method: 'POST', headers: { Accept: 'application/json' } }, fetcher);
+}
+
 export async function ListAlerts(includeHistory = true, fetcher: Fetcher = fetch): Promise<AlertRecord[]> {
   const response = await fetcher(`/api/alerts?history=${String(includeHistory)}`, { headers: { Accept: 'application/json' } });
   if (!response.ok) throw await readServiceError(response);

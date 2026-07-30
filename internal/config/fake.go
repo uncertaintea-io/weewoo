@@ -64,6 +64,10 @@ func (c *fakeConfig) WriteService(service *Service) error {
 }
 
 func (c *fakeConfig) UpdateService(_ context.Context, service *Service, expectedRevision int64, changedBy string) error {
+	return c.updateService(service, expectedRevision, changedBy, false)
+}
+
+func (c *fakeConfig) updateService(service *Service, expectedRevision int64, changedBy string, forceBaselineReset bool) error {
 	current, ok := c.services[service.Id]
 	if !ok {
 		return ErrServiceNotFound
@@ -72,7 +76,7 @@ func (c *fakeConfig) UpdateService(_ context.Context, service *Service, expected
 		return ErrServiceConflict
 	}
 	previous := *current
-	material := previous.PrometheusURL != service.PrometheusURL ||
+	material := forceBaselineReset || previous.PrometheusURL != service.PrometheusURL ||
 		previous.LoadQuery != service.LoadQuery || previous.LatencyQuery != service.LatencyQuery ||
 		previous.Interval != service.Interval
 	service.Revision = previous.Revision + 1
@@ -91,6 +95,18 @@ func (c *fakeConfig) UpdateService(_ context.Context, service *Service, expected
 		Previous: previous, Current: copy,
 	})
 	return nil
+}
+
+func (c *fakeConfig) ResetServiceBaseline(_ context.Context, id int, expectedRevision int64, changedBy string) (*Service, error) {
+	current, ok := c.services[id]
+	if !ok {
+		return nil, ErrServiceNotFound
+	}
+	reset := *current
+	if err := c.updateService(&reset, expectedRevision, changedBy, true); err != nil {
+		return nil, err
+	}
+	return &reset, nil
 }
 
 func (c *fakeConfig) ReadServiceHistory(id int) ([]ServiceChange, error) {

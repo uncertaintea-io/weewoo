@@ -134,6 +134,10 @@ func (c *database) WriteService(service *Service) error {
 }
 
 func (c *database) UpdateService(ctx context.Context, service *Service, expectedRevision int64, changedBy string) error {
+	return c.updateService(ctx, service, expectedRevision, changedBy, false)
+}
+
+func (c *database) updateService(ctx context.Context, service *Service, expectedRevision int64, changedBy string, forceBaselineReset bool) error {
 	tx, err := c.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin service update: %w", err)
@@ -163,7 +167,7 @@ func (c *database) UpdateService(ctx context.Context, service *Service, expected
 	if previous.Revision != expectedRevision {
 		return ErrServiceConflict
 	}
-	material := previous.PrometheusURL != service.PrometheusURL ||
+	material := forceBaselineReset || previous.PrometheusURL != service.PrometheusURL ||
 		previous.LoadQuery != service.LoadQuery || previous.LatencyQuery != service.LatencyQuery ||
 		previous.Interval != service.Interval
 	service.Revision = previous.Revision + 1
@@ -204,6 +208,22 @@ func (c *database) UpdateService(ctx context.Context, service *Service, expected
 		return fmt.Errorf("commit service update: %w", err)
 	}
 	return nil
+}
+
+// ResetServiceBaseline starts a new performance generation without changing
+// the service's Prometheus configuration.
+func (c *database) ResetServiceBaseline(ctx context.Context, id int, expectedRevision int64, changedBy string) (*Service, error) {
+	service, err := c.ReadService(id)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrServiceNotFound
+		}
+		return nil, err
+	}
+	if err := c.updateService(ctx, service, expectedRevision, changedBy, true); err != nil {
+		return nil, err
+	}
+	return service, nil
 }
 
 func nullTime(value time.Time) any {

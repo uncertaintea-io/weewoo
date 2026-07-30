@@ -101,6 +101,54 @@ func (a *serviceAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, a.response(service))
 		return
 	}
+	if strings.HasPrefix(path, "services/") && strings.HasSuffix(path, "/baseline-reset") {
+		if r.Method != http.MethodPost {
+			methodNotAllowed(w, http.MethodPost)
+			return
+		}
+		parts := strings.Split(path, "/")
+		if len(parts) != 3 {
+			http.Error(w, "invalid path", http.StatusBadRequest)
+			return
+		}
+		id, err := strconv.Atoi(parts[1])
+		if err != nil || id <= 0 {
+			http.Error(w, "invalid service ID", http.StatusBadRequest)
+			return
+		}
+		service, err := a.cfg.ReadService(id)
+		if err != nil {
+			http.Error(w, "service not found", http.StatusNotFound)
+			return
+		}
+		reset, err := a.cfg.ResetServiceBaseline(r.Context(), id, service.Revision, requestActor(r))
+		if errors.Is(err, config.ErrServiceConflict) {
+			http.Error(w, "service was changed by another user; reload and try again", http.StatusConflict)
+			return
+		}
+		if errors.Is(err, config.ErrServiceNotFound) {
+			http.Error(w, "service not found", http.StatusNotFound)
+			return
+		}
+		if err != nil {
+			http.Error(w, "failed to reset service baseline", http.StatusInternalServerError)
+			return
+		}
+		if a.alerts != nil {
+			_ = a.alerts.CloseService(r.Context(), id, "service_version_changed", time.Now().UTC())
+		}
+		if !reset.Paused {
+			if err := a.tracker.Schedule(reset); err != nil {
+				a.monitor.record(id, "degraded", "baseline_reset_apply_failed", "Baseline reset, but tracking could not be restarted", time.Now().UTC())
+				writeJSON(w, http.StatusAccepted, a.response(reset))
+				return
+			}
+			a.monitor.activateRevision(id, reset.Revision)
+			a.monitor.record(id, "collecting", "baseline_reset", fmt.Sprintf("New service version; learning generation %d", reset.Generation), time.Now().UTC())
+		}
+		writeJSON(w, http.StatusOK, a.response(reset))
+		return
+	}
 	if strings.HasPrefix(path, "services/") && strings.HasSuffix(path, "/history") {
 		if r.Method != http.MethodGet {
 			methodNotAllowed(w, http.MethodGet)

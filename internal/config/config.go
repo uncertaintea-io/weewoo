@@ -50,6 +50,7 @@ type Config interface {
 	WriteDataSource(dataSource *DataSource) error
 	WriteService(service *Service) error
 	UpdateService(ctx context.Context, service *Service, expectedRevision int64, changedBy string) error
+	ResetServiceBaseline(ctx context.Context, id int, expectedRevision int64, changedBy string) (*Service, error)
 	ReadService(id int) (*Service, error)
 	ReadAllServices() ([]*Service, error)
 	ReadServiceHistory(id int) ([]ServiceChange, error)

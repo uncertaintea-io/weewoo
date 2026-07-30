@@ -1,5 +1,5 @@
 import './index.scss'
-import { CancelImport, CreateService, DeleteService, GetService, GetServiceDetail, ListAlerts, ListAllServices, ReviewAlertOccurrence, ServicesApiError, SetServicePaused, TestService, UpdateService, type AlertOccurrence, type AlertRecord, type CreateServiceInput, type Service, type ServiceChange } from './api';
+import { CancelImport, CreateService, DeleteService, GetService, GetServiceDetail, ListAlerts, ListAllServices, ResetServiceBaseline, ReviewAlertOccurrence, ServicesApiError, SetServicePaused, TestService, UpdateService, type AlertOccurrence, type AlertRecord, type CreateServiceInput, type Service, type ServiceChange } from './api';
 import { historicalRangeToUtc } from './datetime';
 import { liveRefreshDelay } from './live-refresh';
 import { searchValueForRender } from './navigation';
@@ -702,7 +702,7 @@ function renderServiceDetail(service: Service, history: ServiceChange[] = [], hi
   renderShell(`
     <section class="detail-header">
       <div><a class="back-link" href="#services">← All services</a><p class="eyebrow">Service #${String(service.id)}</p><h2>${escapeHtml(service.name)}</h2>${renderServiceUrl(service.prometheusUrl)}</div>
-      <div class="detail-actions"><span class="status-pill status-pill--${escapeHtml(service.tracking.state)}">${escapeHtml(statusLabel(service.tracking.state))}</span><button id="toggle-tracking" class="secondary-button" type="button">${service.tracking.state === 'paused' ? 'Resume' : 'Pause'}</button><a class="secondary-button" href="#service/${String(service.id)}/edit">Edit</a><button id="delete-service" class="danger-button" type="button">Delete</button></div>
+      <div class="detail-actions"><span class="status-pill status-pill--${escapeHtml(service.tracking.state)}">${escapeHtml(statusLabel(service.tracking.state))}</span><button id="toggle-tracking" class="secondary-button" type="button">${service.tracking.state === 'paused' ? 'Resume' : 'Pause'}</button><button id="reset-baseline" class="secondary-button" type="button">New service version</button><a class="secondary-button" href="#service/${String(service.id)}/edit">Edit</a><button id="delete-service" class="danger-button" type="button">Delete</button></div>
     </section>
     <section class="detail-grid">
       <article class="detail-card"><span>Tracking state</span><strong>${escapeHtml(statusLabel(service.tracking.state))}</strong><p>${escapeHtml(service.tracking.error ?? `Database revision ${String(service.revision ?? 1)}; active revision ${String(service.tracking.activeRevision ?? 'pending')}.`)}</p></article>
@@ -717,6 +717,7 @@ function renderServiceDetail(service: Service, history: ServiceChange[] = [], hi
     <section class="detail-panel"><div class="panel-header"><h2>Configuration history</h2><span>Revision ${String(service.revision ?? 1)} · generation ${String(service.generation ?? 1)}</span></div>${historyUnavailable ? '<p class="muted-copy">Configuration history is temporarily unavailable.</p>' : renderServiceHistory(history)}</section>
   `, '200 OK');
   document.querySelector('#delete-service')?.addEventListener('click', () => { void deleteServiceFromDetail(service); });
+  document.querySelector('#reset-baseline')?.addEventListener('click', () => { void resetBaselineFromDetail(service); });
   document.querySelector('#toggle-tracking')?.addEventListener('click', () => {
     void (async () => { await SetServicePaused(service.id, service.tracking.state !== 'paused'); await loadServiceDetail(service.id); })();
   });
@@ -728,6 +729,12 @@ function renderServiceDetail(service: Service, history: ServiceChange[] = [], hi
       })();
     });
   });
+}
+
+async function resetBaselineFromDetail(service: Service): Promise<void> {
+  if (!window.confirm(`Reset the performance baseline for ${service.name}? The current Joint ECDF will be discarded and anomaly detection will learn from newly collected data.`)) return;
+  await ResetServiceBaseline(service.id);
+  await loadServiceDetail(service.id);
 }
 
 async function deleteServiceFromDetail(service: Service): Promise<void> {

@@ -1,6 +1,6 @@
 import { expect } from 'chai';
 import 'mocha';
-import { CreateService, GetServiceDetail, ListAlerts, ListAllServices, ReviewAlertOccurrence, ServicesApiError } from './api';
+import { CreateService, GetServiceDetail, ListAlerts, ListAllServices, ResetServiceBaseline, ReviewAlertOccurrence, ServicesApiError } from './api';
 import { datetimeLocalToUtcISOString, historicalRangeToUtc } from './datetime';
 import {
   LIVE_REFRESH_MILLISECONDS,
@@ -258,6 +258,32 @@ describe('CreateService', () => {
 
     expect(service.id).to.equal(7);
     expect(service.name).to.equal('checkout');
+  });
+
+});
+
+describe('ResetServiceBaseline', () => {
+
+  it('starts a new service performance generation', async () => {
+    const fetcher = (url: string | URL | Request, init?: RequestInit): Promise<Response> => {
+      expect(url).to.equal('/api/services/7/baseline-reset');
+      expect(init?.method).to.equal('POST');
+      return Promise.resolve(new Response(JSON.stringify({
+        id: 7,
+        name: 'checkout',
+        prometheusUrl: 'http://prometheus.example.com',
+        loadQuery: 'load',
+        latencyQuery: 'latency',
+        intervalSeconds: 30,
+        revision: 2,
+        generation: 2,
+      }), { status: 200 }));
+    };
+
+    const service = await ResetServiceBaseline(7, fetcher);
+
+    expect(service.generation).to.equal(2);
+    expect(service.revision).to.equal(2);
   });
 
 });
