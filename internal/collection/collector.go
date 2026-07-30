@@ -34,6 +34,19 @@ type ImportSummary struct {
 	GapWindows      int
 }
 
+type historicalImportWindowPolicy struct{}
+
+func (historicalImportWindowPolicy) Classify(_ windowAttempt, err error) windowResult {
+	switch {
+	case err == nil:
+		return windowResult{Outcome: windowCompleted}
+	case errors.Is(err, errWindowHasNoMetrics), errors.Is(err, ErrNoPrometheusData):
+		return windowResult{Outcome: windowMonitoringGap, Err: err}
+	default:
+		return windowResult{Outcome: windowFailed, Err: err}
+	}
+}
+
 type ImportProgress struct {
 	Percent int
 	ImportSummary
@@ -153,6 +166,7 @@ func (c *collector) Import(ctx context.Context, service *config.Service, start, 
 	if service.Interval <= 0 {
 		return summary, fmt.Errorf("invalid service interval")
 	}
+	processor := newWindowProcessor(time.Now)
 	windows := newHistoricalWindows(start, end, service.Interval)
 	for batchStart := start; batchStart.Before(end); {
 		if err := ctx.Err(); err != nil {
@@ -171,15 +185,21 @@ func (c *collector) Import(ctx context.Context, service *config.Service, start, 
 			return summary, err
 		}
 		windows.add(batchStart, start, loadPoints, latencyPoints)
-		if err := windows.flushThrough(batchEnd, func(windowEnd time.Time, loads, latencies []float64) error {
-			if len(loads) == 0 || len(latencies) == 0 {
+		if err := windows.flushThrough(batchEnd, func(window collectionWindow, loads, latencies []float64) error {
+			result := processor.Process(ctx, windowAttempt{Window: window}, func(context.Context) error {
+				if len(loads) == 0 || len(latencies) == 0 {
+					return errWindowHasNoMetrics
+				}
+				return c.writeTimeChunk(ctx, service, window.End, loads, latencies, true)
+			}, historicalImportWindowPolicy{})
+			switch result.Outcome {
+			case windowCompleted:
+				summary.ImportedWindows++
+			case windowMonitoringGap:
 				summary.GapWindows++
-				return nil
+			case windowCancelled, windowFailed:
+				return result.Err
 			}
-			if err := c.writeTimeChunk(ctx, service, windowEnd, loads, latencies, true); err != nil {
-				return err
-			}
-			summary.ImportedWindows++
 			return nil
 		}); err != nil {
 			return summary, err
@@ -214,6 +234,7 @@ type historicalWindows struct {
 	start     time.Time
 	end       time.Time
 	interval  time.Duration
+	nextStart time.Time
 	nextFlush time.Time
 	values    map[time.Time]*historicalWindowValues
 }
@@ -224,7 +245,7 @@ func newHistoricalWindows(start, end time.Time, interval time.Duration) *histori
 		nextFlush = end
 	}
 	return &historicalWindows{
-		start: start, end: end, interval: interval, nextFlush: nextFlush,
+		start: start, end: end, interval: interval, nextStart: start, nextFlush: nextFlush,
 		values: make(map[time.Time]*historicalWindowValues),
 	}
 }
@@ -271,19 +292,20 @@ func (w *historicalWindows) valueFor(windowEnd time.Time) *historicalWindowValue
 	return values
 }
 
-func (w *historicalWindows) flushThrough(through time.Time, write func(time.Time, []float64, []float64) error) error {
+func (w *historicalWindows) flushThrough(through time.Time, write func(collectionWindow, []float64, []float64) error) error {
 	for !w.nextFlush.After(through) {
 		values := w.values[w.nextFlush]
 		if values == nil {
 			values = &historicalWindowValues{}
 		}
-		if err := write(w.nextFlush, values.loads, values.latencies); err != nil {
+		if err := write(collectionWindow{Start: w.nextStart, End: w.nextFlush}, values.loads, values.latencies); err != nil {
 			return err
 		}
 		delete(w.values, w.nextFlush)
 		if w.nextFlush.Equal(w.end) {
 			break
 		}
+		w.nextStart = w.nextFlush
 		w.nextFlush = w.nextFlush.Add(w.interval)
 		if w.nextFlush.After(w.end) {
 			w.nextFlush = w.end
