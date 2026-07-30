@@ -1,13 +1,47 @@
 import { expect } from 'chai';
 import 'mocha';
-import { CreateService, ListAlerts, ListAllServices, ReviewAlertOccurrence, ServicesApiError } from './api';
+import { CreateService, GetServiceDetail, ListAlerts, ListAllServices, ReviewAlertOccurrence, ServicesApiError } from './api';
 import { datetimeLocalToUtcISOString } from './datetime';
-import { renderServiceUrl } from './rendering';
+import {
+  LIVE_REFRESH_MILLISECONDS,
+  LIVE_REFRESH_OFFSET_MILLISECONDS,
+  liveRefreshDelay,
+} from './live-refresh';
+import { searchValueForRender } from './navigation';
+import { alertCardClasses, groupAlertsByStatus, renderServiceUrl } from './rendering';
 
 describe('datetimeLocalToUtcISOString', () => {
 
   it('interprets a timezone-less form value as UTC', () => {
     expect(datetimeLocalToUtcISOString('2026-07-01T00:00')).to.equal('2026-07-01T00:00:00.000Z');
+  });
+
+});
+
+describe('liveRefreshDelay', () => {
+
+  it('refreshes data-backed pages two seconds after each thirty-second boundary', () => {
+    const atThirtyTwoSeconds = LIVE_REFRESH_MILLISECONDS + LIVE_REFRESH_OFFSET_MILLISECONDS;
+    const atFiftyNineSeconds = 59_000;
+
+    expect(liveRefreshDelay('services', atThirtyTwoSeconds)).to.equal(LIVE_REFRESH_MILLISECONDS);
+    expect(liveRefreshDelay('service/42', atFiftyNineSeconds)).to.equal(3_000);
+    expect(liveRefreshDelay('alerts', 61_000)).to.equal(1_000);
+  });
+
+  it('does not refresh static pages or forms', () => {
+    expect(liveRefreshDelay('settings', 59_000)).to.equal(undefined);
+    expect(liveRefreshDelay('service/42/edit', 59_000)).to.equal(undefined);
+    expect(liveRefreshDelay('add/new', 59_000)).to.equal(undefined);
+  });
+
+});
+
+describe('searchValueForRender', () => {
+
+  it('preserves a filter only when refreshing the same route', () => {
+    expect(searchValueForRender('services', 'services', 'checkout')).to.equal('checkout');
+    expect(searchValueForRender('services', 'alerts', 'checkout')).to.equal('');
   });
 
 });
@@ -32,6 +66,36 @@ describe('renderServiceUrl', () => {
     expect(renderServiceUrl('javascript:alert(1)')).to.equal(
       '<span class="service-url">javascript:alert(1)</span>',
     );
+  });
+
+});
+
+describe('alertCardClasses', () => {
+
+  it('marks resolved alerts independently of their previous severity', () => {
+    expect(alertCardClasses('critical', 'resolved')).to.equal(
+      'alert-card alert-card--critical alert-card--resolved',
+    );
+    expect(alertCardClasses('warning', 'resolved')).to.equal(
+      'alert-card alert-card--warning alert-card--resolved',
+    );
+  });
+
+});
+
+describe('groupAlertsByStatus', () => {
+
+  it('separates active alerts from resolved history', () => {
+    const alerts = [
+      { id: 1, status: 'resolved' },
+      { id: 2, status: 'firing' },
+      { id: 3, status: 'resolved' },
+    ];
+
+    const grouped = groupAlertsByStatus(alerts);
+
+    expect(grouped.active.map((alert) => alert.id)).to.deep.equal([2]);
+    expect(grouped.resolved.map((alert) => alert.id)).to.deep.equal([1, 3]);
   });
 
 });
@@ -88,6 +152,33 @@ describe('ListAllServices', () => {
       expect((error as ServicesApiError).status).to.equal(503);
       expect((error as ServicesApiError).statusText).to.equal('Service Unavailable');
     }
+  });
+
+});
+
+describe('GetServiceDetail', () => {
+
+  it('loads the service when configuration history is unavailable', async () => {
+    const fetcher = (url: string | URL | Request): Promise<Response> => {
+      if (url === '/api/services/1') {
+        return Promise.resolve(new Response(JSON.stringify({
+          id: 1,
+          name: 'checkout',
+          prometheusUrl: 'http://prometheus.example.com',
+          loadQuery: 'load',
+          latencyQuery: 'latency',
+          intervalSeconds: 30,
+        }), { status: 200 }));
+      }
+      expect(url).to.equal('/api/services/1/history');
+      return Promise.resolve(new Response('history unavailable', { status: 500 }));
+    };
+
+    const detail = await GetServiceDetail(1, fetcher);
+
+    expect(detail.service.name).to.equal('checkout');
+    expect(detail.history).to.deep.equal([]);
+    expect(detail.historyUnavailable).to.equal(true);
   });
 
 });

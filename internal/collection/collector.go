@@ -161,7 +161,7 @@ func (c *collector) collectSamples(ctx context.Context, service *config.Service,
 	if err != nil {
 		return err
 	}
-	if err := c.chunkStore.WriteChunk(service.Id, LoadLatencyIndicator, end, chunk); err != nil {
+	if err := c.chunkStore.WriteChunk(service.Id, LoadLatencyIndicator, service.Generation, end, chunk); err != nil {
 		return err
 	}
 	if c.analyzer != nil {

@@ -26,3 +26,15 @@ export function renderServiceUrl(prometheusUrl: string): string {
   const safeUrl = escapeHtml(prometheusUrl);
   return `<a class="service-url" href="${safeUrl}" target="_blank" rel="noreferrer">${safeUrl}</a>`;
 }
+
+export function alertCardClasses(severity: string, status: string): string {
+  const statusClass = status === 'resolved' ? ' alert-card--resolved' : '';
+  return `alert-card alert-card--${severity}${statusClass}`;
+}
+
+export function groupAlertsByStatus<T extends { status: string }>(alerts: T[]): { active: T[]; resolved: T[] } {
+  return {
+    active: alerts.filter((alert) => alert.status === 'firing'),
+    resolved: alerts.filter((alert) => alert.status === 'resolved'),
+  };
+}

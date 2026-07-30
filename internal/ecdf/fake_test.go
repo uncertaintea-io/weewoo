@@ -19,9 +19,9 @@ func TestFakeChunkStoreFunctions(t *testing.T) {
 	chunk2 := []byte{0x02, 0x04, 0x06}
 
 	// Write chunks
-	err := chunkStore.WriteChunk(1, 1, t1, chunk1)
+	err := chunkStore.WriteChunk(1, 1, 1, t1, chunk1)
 	require.NoError(t, err)
-	err = chunkStore.WriteChunk(1, 1, t2, chunk2)
+	err = chunkStore.WriteChunk(1, 1, 1, t2, chunk2)
 	require.NoError(t, err)
 
 	// Read chunks
@@ -44,7 +44,7 @@ func TestFakeChunkStoreFunctions(t *testing.T) {
 		done <- struct{}{}
 	}()
 
-	err = chunkStore.ScanGoodChunks(context.Background(), 1, 1, out)
+	err = chunkStore.ScanGoodChunks(context.Background(), 1, 1, 1, out)
 	assert.NoError(t, err)
 	close(out)
 	<-done
@@ -60,18 +60,32 @@ func TestFakeChunkStoreVerdictControlsBuildEligibility(t *testing.T) {
 	original := []byte{0x01}
 	replacement := []byte{0x02}
 
-	require.NoError(t, chunkStore.WriteChunk(1, 1, timestamp, original))
-	require.NoError(t, chunkStore.WriteVerdict(context.Background(), 1, 1, timestamp, false, 0.001))
-	require.NoError(t, chunkStore.WriteChunk(1, 1, timestamp, replacement))
+	require.NoError(t, chunkStore.WriteChunk(1, 1, 1, timestamp, original))
+	require.NoError(t, chunkStore.WriteVerdict(context.Background(), 1, 1, 1, timestamp, false, 0.001))
+	require.NoError(t, chunkStore.WriteChunk(1, 1, 1, timestamp, replacement))
 
 	out := make(chan []byte, 1)
-	require.NoError(t, chunkStore.ScanGoodChunks(context.Background(), 1, 1, out))
+	require.NoError(t, chunkStore.ScanGoodChunks(context.Background(), 1, 1, 1, out))
 	close(out)
 	require.Empty(t, out)
 
-	require.NoError(t, chunkStore.WriteVerdict(context.Background(), 1, 1, timestamp, true, 0.9))
+	require.NoError(t, chunkStore.WriteVerdict(context.Background(), 1, 1, 1, timestamp, true, 0.9))
 	out = make(chan []byte, 1)
-	require.NoError(t, chunkStore.ScanGoodChunks(context.Background(), 1, 1, out))
+	require.NoError(t, chunkStore.ScanGoodChunks(context.Background(), 1, 1, 1, out))
 	close(out)
 	require.Equal(t, replacement, <-out)
+}
+
+func TestChunkGenerationRejectsLateWritesFromPreviousConfiguration(t *testing.T) {
+	store := NewFakeChunkStore()
+	timestamp := time.Now().UTC()
+	require.NoError(t, store.WriteChunk(1, 1, 1, timestamp, []byte("old generation")))
+	require.NoError(t, store.WriteChunk(1, 1, 2, timestamp, []byte("new generation")))
+	require.NoError(t, store.WriteChunk(1, 1, 1, timestamp, []byte("late old callback")))
+
+	chunks := make(chan []byte, 1)
+	require.NoError(t, store.ScanGoodChunks(context.Background(), 1, 1, 2, chunks))
+	close(chunks)
+
+	require.Equal(t, []byte("new generation"), <-chunks)
 }

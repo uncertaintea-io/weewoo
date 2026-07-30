@@ -32,6 +32,22 @@ func analyzeSample(ctx context.Context, cfg config.Config, jointStore ecdf.Joint
 	if jointStore == nil {
 		return false, fmt.Errorf("nil joint ECDF store")
 	}
+	if service.Generation > 0 {
+		active, err := cfg.ReadService(service.Id)
+		if err != nil {
+			return false, fmt.Errorf("read active service generation: %w", err)
+		}
+		if active.Generation != service.Generation {
+			slog.Info(
+				"skipping analysis from a superseded service generation",
+				"service_id", service.Id,
+				"collected_generation", service.Generation,
+				"active_generation", active.Generation,
+				"timestamp", timestamp,
+			)
+			return false, nil
+		}
+	}
 
 	if len(loads) == 0 {
 		return false, fmt.Errorf("chunk has no load samples")
@@ -108,7 +124,7 @@ func analyzeSample(ctx context.Context, cfg config.Config, jointStore ecdf.Joint
 		if chunks == nil {
 			return false, fmt.Errorf("nil chunk store")
 		}
-		if err := chunks.WriteVerdict(ctx, service.Id, indicatorID, timestamp, !anomalous, ksResult.PValue); err != nil {
+		if err := chunks.WriteVerdict(ctx, service.Id, indicatorID, service.Generation, timestamp, !anomalous, ksResult.PValue); err != nil {
 			return false, fmt.Errorf("%w: %w", errVerdictPersistence, err)
 		}
 	} else if alerts != nil {
@@ -124,7 +140,7 @@ func analyzeSample(ctx context.Context, cfg config.Config, jointStore ecdf.Joint
 		if chunks == nil {
 			return false, fmt.Errorf("nil chunk store")
 		}
-		if err := chunks.WriteVerdict(ctx, service.Id, indicatorID, timestamp, !anomalous, ksResult.PValue); err != nil {
+		if err := chunks.WriteVerdict(ctx, service.Id, indicatorID, service.Generation, timestamp, !anomalous, ksResult.PValue); err != nil {
 			return false, fmt.Errorf("%w: %w", errVerdictPersistence, err)
 		}
 	}

@@ -73,6 +73,9 @@ type serviceResponse struct {
 	LoadQuery       string         `json:"loadQuery"`
 	LatencyQuery    string         `json:"latencyQuery"`
 	IntervalSeconds int64          `json:"intervalSeconds"`
+	Revision        int64          `json:"revision"`
+	Generation      int64          `json:"generation"`
+	BaselineResetAt *time.Time     `json:"baselineResetAt,omitempty"`
 	Tracking        trackingStatus `json:"tracking"`
 	Imports         []importJob    `json:"imports"`
 }
@@ -83,6 +86,7 @@ type createServiceRequest struct {
 	LoadQuery       string     `json:"loadQuery"`
 	LatencyQuery    string     `json:"latencyQuery"`
 	IntervalSeconds int64      `json:"intervalSeconds"`
+	Revision        int64      `json:"revision,omitempty"`
 	ImportStart     *time.Time `json:"importStart,omitempty"`
 	ImportEnd       *time.Time `json:"importEnd,omitempty"`
 }
@@ -119,16 +123,23 @@ func (t *liveServiceTracker) Unschedule(serviceID int) {
 }
 
 func newServiceResponse(service *config.Service) serviceResponse {
-	return serviceResponse{
+	response := serviceResponse{
 		ID:              service.Id,
 		Name:            service.Name,
 		PrometheusURL:   service.PrometheusURL,
 		LoadQuery:       service.LoadQuery,
 		LatencyQuery:    service.LatencyQuery,
 		IntervalSeconds: int64(service.Interval / time.Second),
+		Revision:        service.Revision,
+		Generation:      service.Generation,
 		Tracking:        trackingStatus{State: "pending", Activity: []activityEntry{}},
 		Imports:         []importJob{},
 	}
+	if !service.BaselineResetAt.IsZero() {
+		resetAt := service.BaselineResetAt
+		response.BaselineResetAt = &resetAt
+	}
+	return response
 }
 
 func NewListAllServicesHandler(cfg config.Config) http.Handler {
@@ -155,6 +166,12 @@ func NewListAllServicesHandler(cfg config.Config) http.Handler {
 			log.Printf("failed to encode services response: %v", err)
 		}
 	})
+}
+
+func registerAPIHandlers(mux *http.ServeMux, alerts, services http.Handler) {
+	mux.Handle("/api/alerts", alerts)
+	mux.Handle("/api/alerts/", alerts)
+	mux.Handle("/api/", services)
 }
 
 func validateCreateService(request createServiceRequest) error {
@@ -334,6 +351,7 @@ func main() {
 		if err := collector.Schedule(service); err != nil {
 			log.Fatalf("Failed to schedule service %d: %v", service.Id, err)
 		}
+		monitor.activateRevision(service.Id, service.Revision)
 	}
 
 	// Start ECDF builder
@@ -353,10 +371,11 @@ func main() {
 	imports := newImportManager(tracker, monitor)
 
 	appMux := http.NewServeMux()
-	appMux.Handle("/api/alerts", observeRequestDuration(NewAlertAPIHandler(alertManager)))
-	appMux.Handle("/api/alerts/", observeRequestDuration(NewAlertAPIHandler(alertManager)))
-	appMux.Handle("/api/", observeRequestDuration(NewServiceAPIHandler(cfg, tracker, monitor, imports, http.DefaultClient, alertManager)))
-	appMux.Handle("/api/services", observeRequestDuration(NewListAllServicesHandler(cfg)))
+	registerAPIHandlers(
+		appMux,
+		observeRequestDuration(NewAlertAPIHandler(alertManager)),
+		observeRequestDuration(NewServiceAPIHandler(cfg, tracker, monitor, imports, http.DefaultClient, alertManager)),
+	)
 	//edit this to change the sleep time
 	appMux.Handle("/sleep", observeRequestDuration(SleepHandler(sleep_duration)))
 	//Serve files from static folder

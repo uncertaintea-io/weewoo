@@ -5,6 +5,9 @@ export interface Service {
   loadQuery: string;
   latencyQuery: string;
   intervalSeconds: number;
+  revision?: number;
+  generation?: number;
+  baselineResetAt?: string;
   tracking: TrackingStatus;
   imports: ImportJob[];
 }
@@ -20,6 +23,7 @@ export interface TrackingStatus {
   lastSuccess?: string;
   lastError?: string;
   error?: string;
+  activeRevision?: number;
   activity: ActivityEntry[];
 }
 
@@ -39,8 +43,30 @@ export interface CreateServiceInput {
   loadQuery: string;
   latencyQuery: string;
   intervalSeconds: number;
+  revision?: number;
   importStart?: string;
   importEnd?: string;
+}
+
+export interface ServiceChange {
+  serviceId: number;
+  previousRevision: number;
+  newRevision: number;
+  changedAt: string;
+  changedBy: string;
+  material: boolean;
+}
+
+export interface ServiceTestResult {
+  message: string;
+  loadQuery: { valid: boolean; samples: number; latest?: number; error?: string };
+  latencyQuery: { valid: boolean; samples: number; latest?: number; error?: string };
+}
+
+export interface ServiceDetail {
+  service: Service;
+  history: ServiceChange[];
+  historyUnavailable: boolean;
 }
 
 export interface AlertOccurrence {
@@ -161,11 +187,15 @@ function parseService(value: unknown): Service {
     loadQuery: readString(value.loadQuery, 'loadQuery'),
     latencyQuery: readString(value.latencyQuery, 'latencyQuery'),
     intervalSeconds: readNumber(value.intervalSeconds, 'intervalSeconds'),
+    ...(typeof value.revision === 'number' ? { revision: value.revision } : {}),
+    ...(typeof value.generation === 'number' ? { generation: value.generation } : {}),
+    ...(typeof value.baselineResetAt === 'string' ? { baselineResetAt: value.baselineResetAt } : {}),
     tracking: {
       state: (typeof trackingValue.state === 'string' ? trackingValue.state : 'pending') as TrackingStatus['state'],
       ...(typeof trackingValue.lastSuccess === 'string' ? { lastSuccess: trackingValue.lastSuccess } : {}),
       ...(typeof trackingValue.lastError === 'string' ? { lastError: trackingValue.lastError } : {}),
       ...(typeof trackingValue.error === 'string' ? { error: trackingValue.error } : {}),
+      ...(typeof trackingValue.activeRevision === 'number' ? { activeRevision: trackingValue.activeRevision } : {}),
       activity,
     },
     imports,
@@ -271,6 +301,30 @@ export async function GetService(id: number, fetcher: Fetcher = fetch): Promise<
   return serviceRequest(`/api/services/${String(id)}`, { headers: { Accept: 'application/json' } }, fetcher);
 }
 
+export async function ListServiceHistory(id: number, fetcher: Fetcher = fetch): Promise<ServiceChange[]> {
+  const response = await fetcher(`/api/services/${String(id)}/history`, { headers: { Accept: 'application/json' } });
+  if (!response.ok) throw await readServiceError(response);
+  const body: unknown = await response.json();
+  if (!Array.isArray(body)) throw new Error('Service history response must be an array.');
+  return body.filter(isRecord).map((change) => ({
+    serviceId: readNumber(change.serviceId, 'history.serviceId'),
+    previousRevision: readNumber(change.previousRevision, 'history.previousRevision'),
+    newRevision: readNumber(change.newRevision, 'history.newRevision'),
+    changedAt: readString(change.changedAt, 'history.changedAt'),
+    changedBy: readString(change.changedBy, 'history.changedBy'),
+    material: change.material === true,
+  }));
+}
+
+export async function GetServiceDetail(id: number, fetcher: Fetcher = fetch): Promise<ServiceDetail> {
+  const service = await GetService(id, fetcher);
+  try {
+    return { service, history: await ListServiceHistory(id, fetcher), historyUnavailable: false };
+  } catch {
+    return { service, history: [], historyUnavailable: true };
+  }
+}
+
 export async function UpdateService(id: number, input: CreateServiceInput, fetcher: Fetcher = fetch): Promise<Service> {
   return serviceRequest(`/api/services/${String(id)}`, {
     method: 'PUT', headers: { Accept: 'application/json', 'Content-Type': 'application/json' }, body: JSON.stringify(input),
@@ -282,13 +336,26 @@ export async function DeleteService(id: number, fetcher: Fetcher = fetch): Promi
   if (!response.ok) throw await readServiceError(response);
 }
 
-export async function TestService(input: CreateServiceInput, fetcher: Fetcher = fetch): Promise<string> {
+export async function TestService(input: CreateServiceInput, fetcher: Fetcher = fetch): Promise<ServiceTestResult> {
   const response = await fetcher('/api/services/test', {
     method: 'POST', headers: { Accept: 'application/json', 'Content-Type': 'application/json' }, body: JSON.stringify(input),
   });
-  if (!response.ok) throw await readServiceError(response);
-  const body = await response.json() as { message?: unknown };
-  return typeof body.message === 'string' ? body.message : 'Connection succeeded';
+  const body: unknown = await response.json();
+  if (!isRecord(body) || !isRecord(body.loadQuery) || !isRecord(body.latencyQuery)) {
+    if (!response.ok) throw new ServicesApiError(response.status, response.statusText);
+    throw new Error('Query test response is invalid.');
+  }
+  const parseResult = (value: Record<string, unknown>) => ({
+    valid: value.valid === true,
+    samples: typeof value.samples === 'number' ? value.samples : 0,
+    ...(typeof value.latest === 'number' ? { latest: value.latest } : {}),
+    ...(typeof value.error === 'string' ? { error: value.error } : {}),
+  });
+  return {
+    message: typeof body.message === 'string' ? body.message : 'Query test complete',
+    loadQuery: parseResult(body.loadQuery),
+    latencyQuery: parseResult(body.latencyQuery),
+  };
 }
 
 export async function CancelImport(id: number, fetcher: Fetcher = fetch): Promise<void> {

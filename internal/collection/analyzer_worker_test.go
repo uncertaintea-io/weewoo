@@ -177,7 +177,7 @@ type failOnceChunkStore struct {
 	persisted chan struct{}
 }
 
-func (s *failOnceChunkStore) WriteVerdict(context.Context, int, int, time.Time, bool, float64) error {
+func (s *failOnceChunkStore) WriteVerdict(context.Context, int, int, int64, time.Time, bool, float64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.calls++
@@ -223,7 +223,7 @@ type failingChunkStore struct {
 	finished chan struct{}
 }
 
-func (s *failingChunkStore) WriteVerdict(context.Context, int, int, time.Time, bool, float64) error {
+func (s *failingChunkStore) WriteVerdict(context.Context, int, int, int64, time.Time, bool, float64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.calls++

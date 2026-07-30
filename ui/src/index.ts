@@ -1,10 +1,13 @@
 import './index.scss'
-import { CancelImport, CreateService, DeleteService, GetService, ListAlerts, ListAllServices, ReviewAlertOccurrence, ServicesApiError, SetServicePaused, TestService, UpdateService, type AlertOccurrence, type AlertRecord, type CreateServiceInput, type Service } from './api';
+import { CancelImport, CreateService, DeleteService, GetService, GetServiceDetail, ListAlerts, ListAllServices, ReviewAlertOccurrence, ServicesApiError, SetServicePaused, TestService, UpdateService, type AlertOccurrence, type AlertRecord, type CreateServiceInput, type Service, type ServiceChange } from './api';
 import { datetimeLocalToUtcISOString } from './datetime';
-import { escapeHtml, renderServiceUrl } from './rendering';
+import { liveRefreshDelay } from './live-refresh';
+import { searchValueForRender } from './navigation';
+import { alertCardClasses, escapeHtml, groupAlertsByStatus, renderServiceUrl } from './rendering';
 
 const app = document.querySelector<HTMLDivElement>('#app');
-let detailRefreshTimer: number | undefined;
+let liveRefreshTimer: number | undefined;
+let lastRenderedRoute: string | undefined;
 type Theme = 'light' | 'dark' | 'system';
 
 function savedTheme(): Theme {
@@ -58,6 +61,13 @@ function renderShell(content: string, apiResponse = 'Ready', page: PageMeta = {}
   if (app === null) {
     return;
   }
+  const route = currentRoute();
+  const searchValue = searchValueForRender(
+    lastRenderedRoute,
+    route,
+    document.querySelector<HTMLInputElement>('.search-box input')?.value ?? '',
+  );
+  lastRenderedRoute = route;
 
   app.innerHTML = `
     <div class="app-frame">
@@ -124,6 +134,11 @@ function renderShell(content: string, apiResponse = 'Ready', page: PageMeta = {}
     </div>
   `;
   bindShellInteractions();
+  const search = document.querySelector<HTMLInputElement>('.search-box input');
+  if (search !== null && searchValue !== '') {
+    search.value = searchValue;
+    search.dispatchEvent(new Event('input'));
+  }
 }
 
 function bindShellInteractions(): void {
@@ -187,7 +202,7 @@ function renderOccurrence(occurrence: AlertOccurrence): string {
 
 function renderAlertCard(alert: AlertRecord): string {
   return `
-    <article class="alert-card alert-card--${escapeHtml(alert.severity)}" data-service-name="${escapeHtml(`${alert.serviceName} ${alert.title}`.toLowerCase())}">
+    <article class="${escapeHtml(alertCardClasses(alert.severity, alert.status))}" data-alert-id="${String(alert.id)}" data-service-name="${escapeHtml(`${alert.serviceName} ${alert.title}`.toLowerCase())}">
       <header class="alert-card-header">
         <div>
           <div class="alert-labels">
@@ -218,7 +233,11 @@ function renderAlertCard(alert: AlertRecord): string {
 }
 
 function renderAlerts(alerts: AlertRecord[]): void {
-  const active = alerts.filter((alert) => alert.status === 'firing');
+  const resolvedHistoryOpen = document.querySelector<HTMLDetailsElement>('.resolved-alerts-group')?.open ?? false;
+  const expandedAlertIds = new Set(Array.from(
+    document.querySelectorAll<HTMLDetailsElement>('.alert-card > .occurrence-disclosure[open]'),
+  ).map((details) => details.closest<HTMLElement>('.alert-card')?.dataset.alertId).filter((id) => id !== undefined));
+  const { active, resolved } = groupAlertsByStatus(alerts);
   const critical = active.filter((alert) => alert.severity === 'critical').length;
   const warning = active.filter((alert) => alert.severity === 'warning').length;
   renderShell(`
@@ -229,8 +248,14 @@ function renderAlerts(alerts: AlertRecord[]): void {
       ${renderSummaryCard('History', alerts.length - active.length, 'total')}
     </section>
     <section class="alert-panel">
-      <div class="panel-header"><h2>Alerts</h2><span>Active conditions and 90-day history</span></div>
-      ${alerts.length === 0 ? '<div class="empty-state"><h2>No alerts recorded</h2><p>Detected anomalies and monitoring failures will appear here.</p></div>' : `<div class="alert-list">${alerts.map(renderAlertCard).join('')}</div>`}
+      <div class="panel-header"><h2>Active alerts</h2><span>Conditions requiring attention</span></div>
+      ${active.length === 0 ? '<div class="empty-state alert-empty-state"><h2>No active alerts</h2><p>There are currently no conditions requiring attention.</p></div>' : `<div class="alert-list">${active.map(renderAlertCard).join('')}</div>`}
+      ${resolved.length === 0 ? '' : `
+        <details class="resolved-alerts-group">
+          <summary><span>Resolved alerts</span><strong>${String(resolved.length)}</strong><small>Retained for 90 days</small></summary>
+          <div class="alert-list">${resolved.map(renderAlertCard).join('')}</div>
+        </details>
+      `}
     </section>
   `, '200 OK', {
     eyebrow: 'WeeWoo Alerts',
@@ -239,6 +264,12 @@ function renderAlerts(alerts: AlertRecord[]): void {
     endpoint: '/api/alerts',
   });
   document.querySelector('#service-count')?.replaceChildren(`${String(active.length)} active alert${active.length === 1 ? '' : 's'}`);
+  const resolvedHistory = document.querySelector<HTMLDetailsElement>('.resolved-alerts-group');
+  if (resolvedHistory !== null) resolvedHistory.open = resolvedHistoryOpen;
+  document.querySelectorAll<HTMLDetailsElement>('.alert-card > .occurrence-disclosure').forEach((details) => {
+    const alertId = details.closest<HTMLElement>('.alert-card')?.dataset.alertId;
+    details.open = alertId !== undefined && expandedAlertIds.has(alertId);
+  });
   document.querySelectorAll<HTMLButtonElement>('.review-occurrence').forEach((button) => {
     button.addEventListener('click', () => { void reviewOccurrence(button); });
   });
@@ -264,13 +295,17 @@ async function reviewOccurrence(button: HTMLButtonElement): Promise<void> {
   }
 }
 
-async function loadAlerts(): Promise<void> {
-  renderShell('<section class="alert-panel" aria-busy="true"><div class="skeleton-list"><div class="skeleton-row"></div><div class="skeleton-row"></div></div></section>', 'Loading', {
-    eyebrow: 'WeeWoo Alerts', title: 'Alerts and anomaly history', description: 'Loading durable alert history.', endpoint: '/api/alerts',
-  });
+async function loadAlerts(showLoading = true): Promise<void> {
+  if (showLoading) {
+    renderShell('<section class="alert-panel" aria-busy="true"><div class="skeleton-list"><div class="skeleton-row"></div><div class="skeleton-row"></div></div></section>', 'Loading', {
+      eyebrow: 'WeeWoo Alerts', title: 'Alerts and anomaly history', description: 'Loading durable alert history.', endpoint: '/api/alerts',
+    });
+  }
   try {
-    renderAlerts(await ListAlerts(true));
+    const alerts = await ListAlerts(true);
+    if (currentRoute() === 'alerts') renderAlerts(alerts);
   } catch (error) {
+    if (!showLoading || currentRoute() !== 'alerts') return;
     const response = apiResponseForError(error);
     renderShell(`<section class="error-panel"><strong class="error-code">${escapeHtml(response)}</strong><h2>Unable to load alerts</h2><p>Check the alert history database and retry.</p><button id="retry-alerts" class="retry-button" type="button">Retry</button></section>`, response, {
       eyebrow: 'WeeWoo Alerts', title: 'Alerts and anomaly history', description: 'Durable alert history is unavailable.', endpoint: '/api/alerts',
@@ -513,8 +548,13 @@ async function testServiceForm(form: HTMLFormElement): Promise<void> {
   if (!form.reportValidity()) return;
   if (button !== null) { button.disabled = true; button.textContent = 'Testing…'; }
   try {
-    const message = await TestService(serviceInputFromForm(form));
-    if (errorBox !== null) { errorBox.classList.add('is-success'); errorBox.textContent = message; }
+    const result = await TestService(serviceInputFromForm(form));
+    if (errorBox !== null) {
+      const load = result.loadQuery.valid ? `load: ${String(result.loadQuery.samples)} samples` : `load: ${result.loadQuery.error ?? 'failed'}`;
+      const latency = result.latencyQuery.valid ? `latency: ${String(result.latencyQuery.samples)} samples` : `latency: ${result.latencyQuery.error ?? 'failed'}`;
+      errorBox.classList.toggle('is-success', result.loadQuery.valid && result.latencyQuery.valid);
+      errorBox.textContent = `${result.message} — ${load}; ${latency}`;
+    }
   } catch (error) {
     if (errorBox !== null) { errorBox.classList.remove('is-success'); errorBox.textContent = error instanceof Error ? error.message : 'Test failed'; }
   } finally {
@@ -609,14 +649,21 @@ function renderImports(service: Service): string {
   `).join('')}</div>`;
 }
 
-function renderServiceDetail(service: Service): void {
+function renderServiceHistory(history: ServiceChange[]): string {
+  if (history.length === 0) return '<p class="muted-copy">No configuration changes recorded yet.</p>';
+  return `<ol class="activity-list">${history.map((change) => `
+    <li><span class="activity-dot"></span><div><strong>Revision ${String(change.newRevision)} by ${escapeHtml(change.changedBy)}</strong><time>${escapeHtml(formatTimestamp(change.changedAt))}</time><p>${change.material ? 'A new baseline generation was started.' : 'The existing baseline was retained.'}</p></div></li>
+  `).join('')}</ol>`;
+}
+
+function renderServiceDetail(service: Service, history: ServiceChange[] = [], historyUnavailable = false): void {
   renderShell(`
     <section class="detail-header">
       <div><a class="back-link" href="#services">← All services</a><p class="eyebrow">Service #${String(service.id)}</p><h2>${escapeHtml(service.name)}</h2>${renderServiceUrl(service.prometheusUrl)}</div>
       <div class="detail-actions"><span class="status-pill status-pill--${escapeHtml(service.tracking.state)}">${escapeHtml(statusLabel(service.tracking.state))}</span><button id="toggle-tracking" class="secondary-button" type="button">${service.tracking.state === 'paused' ? 'Resume' : 'Pause'}</button><a class="secondary-button" href="#service/${String(service.id)}/edit">Edit</a><button id="delete-service" class="danger-button" type="button">Delete</button></div>
     </section>
     <section class="detail-grid">
-      <article class="detail-card"><span>Tracking state</span><strong>${escapeHtml(statusLabel(service.tracking.state))}</strong><p>${escapeHtml(service.tracking.error ?? 'The scheduler is running normally.')}</p></article>
+      <article class="detail-card"><span>Tracking state</span><strong>${escapeHtml(statusLabel(service.tracking.state))}</strong><p>${escapeHtml(service.tracking.error ?? `Database revision ${String(service.revision ?? 1)}; active revision ${String(service.tracking.activeRevision ?? 'pending')}.`)}</p></article>
       <article class="detail-card"><span>Last successful collection</span><strong>${escapeHtml(formatTimestamp(service.tracking.lastSuccess))}</strong><p>Every ${escapeHtml(formatInterval(service.intervalSeconds))}</p></article>
       <article class="detail-card"><span>Last collection error</span><strong>${escapeHtml(formatTimestamp(service.tracking.lastError))}</strong><p>${escapeHtml(service.tracking.error ?? 'No errors recorded')}</p></article>
     </section>
@@ -625,6 +672,7 @@ function renderServiceDetail(service: Service): void {
       <article class="detail-panel"><div class="panel-header"><h2>Historical imports</h2><span>${String(service.imports.length)} jobs</span></div>${renderImports(service)}</article>
     </section>
     <section class="detail-panel query-detail"><div class="panel-header"><h2>Prometheus configuration</h2></div><dl class="query-grid">${renderQueryBox('Load signal', service.loadQuery)}${renderQueryBox('Latency signal', service.latencyQuery)}</dl></section>
+    <section class="detail-panel"><div class="panel-header"><h2>Configuration history</h2><span>Revision ${String(service.revision ?? 1)} · generation ${String(service.generation ?? 1)}</span></div>${historyUnavailable ? '<p class="muted-copy">Configuration history is temporarily unavailable.</p>' : renderServiceHistory(history)}</section>
   `, '200 OK');
   document.querySelector('#delete-service')?.addEventListener('click', () => { void deleteServiceFromDetail(service); });
   document.querySelector('#toggle-tracking')?.addEventListener('click', () => {
@@ -638,11 +686,6 @@ function renderServiceDetail(service: Service): void {
       })();
     });
   });
-  if (service.imports.some((job) => job.state === 'queued' || job.state === 'running')) {
-    detailRefreshTimer = window.setTimeout(() => {
-      if (window.location.hash === `#service/${String(service.id)}`) void loadServiceDetail(service.id);
-    }, 2000);
-  }
 }
 
 async function deleteServiceFromDetail(service: Service): Promise<void> {
@@ -651,9 +694,14 @@ async function deleteServiceFromDetail(service: Service): Promise<void> {
   window.location.hash = 'services';
 }
 
-async function loadServiceDetail(id: number): Promise<void> {
-  renderLoading();
-  try { renderServiceDetail(await GetService(id)); } catch (error) { renderError(error); }
+async function loadServiceDetail(id: number, showLoading = true): Promise<void> {
+  if (showLoading) renderLoading();
+  try {
+    const detail = await GetServiceDetail(id);
+    if (currentRoute() === `service/${String(id)}`) renderServiceDetail(detail.service, detail.history, detail.historyUnavailable);
+  } catch (error) {
+    if (showLoading && currentRoute() === `service/${String(id)}`) renderError(error);
+  }
 }
 
 function renderEditServiceForm(service: Service): void {
@@ -675,7 +723,12 @@ function renderEditServiceForm(service: Service): void {
     event.preventDefault();
     void (async () => {
       const errorBox = form.querySelector<HTMLElement>('#form-error');
-      try { await UpdateService(service.id, serviceInputFromForm(form)); window.location.hash = `service/${String(service.id)}`; }
+      try {
+        const input = serviceInputFromForm(form);
+        input.revision = service.revision;
+        await UpdateService(service.id, input);
+        window.location.hash = `service/${String(service.id)}`;
+      }
       catch (error) { if (errorBox !== null) errorBox.textContent = error instanceof Error ? error.message : 'Update failed'; }
     })();
   });
@@ -687,31 +740,90 @@ async function loadEditService(id: number): Promise<void> {
   try { renderEditServiceForm(await GetService(id)); } catch (error) { renderError(error); }
 }
 
-async function boot(): Promise<void> {
-  if (detailRefreshTimer !== undefined) {
-    window.clearTimeout(detailRefreshTimer);
-    detailRefreshTimer = undefined;
+function currentRoute(): string {
+  return window.location.hash.slice(1) || 'services';
+}
+
+async function loadServices(showLoading = true): Promise<void> {
+  if (showLoading) renderLoading();
+  try {
+    const services = await ListAllServices();
+    if (currentRoute() === 'services') renderServices(services);
+  } catch (error) {
+    if (showLoading && currentRoute() === 'services') renderError(error);
   }
-  const route = window.location.hash.slice(1) || 'services';
+}
+
+function clearLiveRefresh(): void {
+  if (liveRefreshTimer !== undefined) {
+    window.clearTimeout(liveRefreshTimer);
+    liveRefreshTimer = undefined;
+  }
+}
+
+async function refreshRoute(route: string): Promise<void> {
+  if (route === 'alerts') {
+    await loadAlerts(false);
+    return;
+  }
+  if (route === 'services') {
+    await loadServices(false);
+    return;
+  }
+  const detailMatch = /^service\/(\d+)$/.exec(route);
+  if (detailMatch !== null) await loadServiceDetail(Number(detailMatch[1]), false);
+}
+
+function scheduleLiveRefresh(route: string): void {
+  clearLiveRefresh();
+  const delay = liveRefreshDelay(route);
+  if (delay === undefined) return;
+  liveRefreshTimer = window.setTimeout(() => {
+    liveRefreshTimer = undefined;
+    if (currentRoute() !== route) return;
+    if (document.hidden) {
+      scheduleLiveRefresh(route);
+      return;
+    }
+    void refreshRoute(route).finally(() => {
+      if (currentRoute() === route) scheduleLiveRefresh(route);
+    });
+  }, delay);
+}
+
+async function boot(): Promise<void> {
+  clearLiveRefresh();
+  const route = currentRoute();
   if (route === 'add') { renderAddChoice(); return; }
   if (route === 'add/new') { renderServiceForm(false); return; }
   if (route === 'add/import') { renderServiceForm(true); return; }
   if (route === 'settings') { renderSettings(); return; }
-  if (route === 'alerts') { await loadAlerts(); return; }
+  if (route === 'alerts') {
+    await loadAlerts();
+    if (currentRoute() === route) scheduleLiveRefresh(route);
+    return;
+  }
   const detailMatch = /^service\/(\d+)$/.exec(route);
-  if (detailMatch !== null) { await loadServiceDetail(Number(detailMatch[1])); return; }
+  if (detailMatch !== null) {
+    await loadServiceDetail(Number(detailMatch[1]));
+    if (currentRoute() === route) scheduleLiveRefresh(route);
+    return;
+  }
   const editMatch = /^service\/(\d+)\/edit$/.exec(route);
   if (editMatch !== null) { await loadEditService(Number(editMatch[1])); return; }
   if (route !== 'services') { renderPlaceholder(route); return; }
-  renderLoading();
-
-  try {
-    const services = await ListAllServices();
-    renderServices(services);
-  } catch (error) {
-    renderError(error);
-  }
+  await loadServices();
+  if (currentRoute() === route) scheduleLiveRefresh(route);
 }
 
 window.addEventListener('hashchange', () => { void boot(); });
+document.addEventListener('visibilitychange', () => {
+  const route = currentRoute();
+  if (!document.hidden && liveRefreshDelay(route) !== undefined) {
+    clearLiveRefresh();
+    void refreshRoute(route).finally(() => {
+      if (currentRoute() === route) scheduleLiveRefresh(route);
+    });
+  }
+});
 void boot();
