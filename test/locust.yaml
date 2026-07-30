@@ -7,7 +7,13 @@ spec:
   locustfile:
     content: |
       from locust import HttpUser, task
-      class TestUser(HttpUser):
+
+
+      class HandlerUser(HttpUser):
           @task
-          def index(self):
-              self.client.get("/")
+          def call_main_handler(self):
+              self.client.get("/", name="Main UI/API")
+
+          @task
+          def call_sleep_handler(self):
+              self.client.get("/sleep", name="Sleep handler")
