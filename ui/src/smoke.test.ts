@@ -1,19 +1,35 @@
 import { expect } from 'chai';
 import 'mocha';
 import { CreateService, GetServiceDetail, ListAlerts, ListAllServices, ReviewAlertOccurrence, ServicesApiError } from './api';
-import { datetimeLocalToUtcISOString } from './datetime';
+import { datetimeLocalToUtcISOString, historicalRangeToUtc } from './datetime';
 import {
   LIVE_REFRESH_MILLISECONDS,
   LIVE_REFRESH_OFFSET_MILLISECONDS,
   liveRefreshDelay,
 } from './live-refresh';
 import { searchValueForRender } from './navigation';
-import { alertCardClasses, groupAlertsByStatus, renderServiceUrl } from './rendering';
+import { alertCardClasses, groupAlertsByStatus, renderServiceUrl, reviewableAnomalousOccurrencesByService } from './rendering';
 
 describe('datetimeLocalToUtcISOString', () => {
 
   it('interprets a timezone-less form value as UTC', () => {
     expect(datetimeLocalToUtcISOString('2026-07-01T00:00')).to.equal('2026-07-01T00:00:00.000Z');
+  });
+
+});
+
+describe('historicalRangeToUtc', () => {
+
+  it('returns a strictly increasing UTC range', () => {
+    expect(historicalRangeToUtc('2026-07-29T12:00', '2026-07-30T12:00')).to.deep.equal({
+      start: '2026-07-29T12:00:00.000Z',
+      end: '2026-07-30T12:00:00.000Z',
+    });
+  });
+
+  it('rejects a range whose start is not before its end', () => {
+    expect(() => historicalRangeToUtc('2026-07-30T12:00', '2026-07-30T11:00'))
+      .to.throw('Import start must be before import end.');
   });
 
 });
@@ -96,6 +112,46 @@ describe('groupAlertsByStatus', () => {
 
     expect(grouped.active.map((alert) => alert.id)).to.deep.equal([2]);
     expect(grouped.resolved.map((alert) => alert.id)).to.deep.equal([1, 3]);
+  });
+
+});
+
+describe('reviewableAnomalousOccurrencesByService', () => {
+
+  it('separates unaccepted Bad chunks by service', () => {
+    const targets = reviewableAnomalousOccurrencesByService([
+      {
+        serviceId: 10,
+        serviceName: 'checkout',
+        status: 'firing',
+        occurrences: [
+          { id: 1, reviewRevision: 0, chunkTimestamp: '2026-07-30T12:00:00Z' },
+          { id: 2, reviewRevision: 1, chunkTimestamp: '2026-07-30T12:01:00Z', reviewOverride: true },
+          { id: 3, reviewRevision: 0 },
+        ],
+      },
+      {
+        serviceId: 20,
+        serviceName: 'catalog',
+        status: 'firing',
+        occurrences: [
+          { id: 4, reviewRevision: 2, chunkTimestamp: '2026-07-30T12:02:00Z' },
+        ],
+      },
+      {
+        serviceId: 10,
+        serviceName: 'checkout',
+        status: 'resolved',
+        occurrences: [
+          { id: 5, reviewRevision: 0, chunkTimestamp: '2026-07-29T12:00:00Z' },
+        ],
+      },
+    ]);
+
+    expect(targets).to.deep.equal([
+      { serviceKey: '10', serviceName: 'checkout', targets: [{ id: 1, revision: 0 }] },
+      { serviceKey: '20', serviceName: 'catalog', targets: [{ id: 4, revision: 2 }] },
+    ]);
   });
 
 });

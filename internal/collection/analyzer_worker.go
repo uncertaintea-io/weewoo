@@ -38,6 +38,10 @@ type AnalysisQueue interface {
 	Submit(AnalysisRequest) error
 }
 
+type contextualAnalysisQueue interface {
+	SubmitContext(context.Context, AnalysisRequest) error
+}
+
 // AnalysisWorker evaluates samples from a bounded background queue.
 type AnalysisWorker struct {
 	cfg         config.Config
@@ -74,15 +78,13 @@ func NewAnalysisWorker(cfg config.Config, jointStore ecdf.JointStore, chunks ecd
 
 // Submit queues analysis without waiting for it to finish.
 func (w *AnalysisWorker) Submit(request AnalysisRequest) error {
-	request.Loads = slices.Clone(request.Loads)
-	request.Latencies = slices.Clone(request.Latencies)
-
 	select {
 	case <-w.done:
 		return ErrAnalyzerStopped
 	default:
 	}
 
+	request = cloneAnalysisRequest(request)
 	jobs := w.liveJobs
 	if request.Historical {
 		jobs = w.historyJobs
@@ -95,6 +97,30 @@ func (w *AnalysisWorker) Submit(request AnalysisRequest) error {
 	default:
 		return ErrAnalysisQueueFull
 	}
+}
+
+// SubmitContext applies backpressure until historical analysis capacity is
+// available, the caller cancels, or the worker stops.
+func (w *AnalysisWorker) SubmitContext(ctx context.Context, request AnalysisRequest) error {
+	request = cloneAnalysisRequest(request)
+	jobs := w.liveJobs
+	if request.Historical {
+		jobs = w.historyJobs
+	}
+	select {
+	case jobs <- request:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-w.done:
+		return ErrAnalyzerStopped
+	}
+}
+
+func cloneAnalysisRequest(request AnalysisRequest) AnalysisRequest {
+	request.Loads = slices.Clone(request.Loads)
+	request.Latencies = slices.Clone(request.Latencies)
+	return request
 }
 
 func (w *AnalysisWorker) Stop() {

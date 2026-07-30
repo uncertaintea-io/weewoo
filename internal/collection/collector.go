@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"time"
@@ -14,16 +15,44 @@ import (
 )
 
 const (
-	LoadLatencyIndicator = 1
-	TimeOfDayIndicator   = 2
+	LoadLatencyIndicator  = 1
+	TimeOfDayIndicator    = 2
+	historicalBatchPoints = 10_000
+	historicalBatchSpan   = time.Duration(historicalBatchPoints-1) * 15 * time.Second
 )
 
 type Collector interface {
 	Stop()
 	Schedule(service *config.Service) error
 	Unschedule(serviceID int)
-	Import(ctx context.Context, service *config.Service, start, end time.Time) error
+	Import(ctx context.Context, service *config.Service, start, end time.Time, progress ImportProgressHandler) (ImportSummary, error)
 }
+
+type ImportSummary struct {
+	TotalWindows    int
+	ImportedWindows int
+	GapWindows      int
+}
+
+type historicalImportWindowPolicy struct{}
+
+func (historicalImportWindowPolicy) Classify(_ windowAttempt, err error) windowResult {
+	switch {
+	case err == nil:
+		return windowResult{Outcome: windowCompleted}
+	case errors.Is(err, errWindowHasNoMetrics), errors.Is(err, ErrNoPrometheusData):
+		return windowResult{Outcome: windowMonitoringGap, Err: err}
+	default:
+		return windowResult{Outcome: windowFailed, Err: err}
+	}
+}
+
+type ImportProgress struct {
+	Percent int
+	ImportSummary
+}
+
+type ImportProgressHandler func(ImportProgress)
 
 type collectionRecovery interface {
 	Stop()
@@ -132,8 +161,157 @@ func (c *collector) Schedule(service *config.Service) error {
 }
 
 // Import collects an explicit historical window for a service.
-func (c *collector) Import(ctx context.Context, service *config.Service, start, end time.Time) error {
-	return c.collectSamples(ctx, service, start, end, true)
+func (c *collector) Import(ctx context.Context, service *config.Service, start, end time.Time, progress ImportProgressHandler) (ImportSummary, error) {
+	summary := ImportSummary{TotalWindows: countHistoricalWindows(start, end, service.Interval)}
+	if service.Interval <= 0 {
+		return summary, fmt.Errorf("invalid service interval")
+	}
+	processor := newWindowProcessor(time.Now)
+	windows := newHistoricalWindows(start, end, service.Interval)
+	for batchStart := start; batchStart.Before(end); {
+		if err := ctx.Err(); err != nil {
+			return summary, err
+		}
+		batchEnd := batchStart.Add(historicalBatchSpan)
+		if batchEnd.After(end) {
+			batchEnd = end
+		}
+		loadPoints, err := queryPrometheusRangePoints(ctx, c.client, service.PrometheusURL, service.LoadQuery, batchStart, batchEnd)
+		if err != nil && !errors.Is(err, ErrNoPrometheusData) {
+			return summary, err
+		}
+		latencyPoints, err := queryPrometheusRangePoints(ctx, c.client, service.PrometheusURL, service.LatencyQuery, batchStart, batchEnd)
+		if err != nil && !errors.Is(err, ErrNoPrometheusData) {
+			return summary, err
+		}
+		windows.add(batchStart, start, loadPoints, latencyPoints)
+		if err := windows.flushThrough(batchEnd, func(window collectionWindow, loads, latencies []float64) error {
+			result := processor.Process(ctx, windowAttempt{Window: window}, func(context.Context) error {
+				if len(loads) == 0 || len(latencies) == 0 {
+					return errWindowHasNoMetrics
+				}
+				return c.writeTimeChunk(ctx, service, window.End, loads, latencies, true)
+			}, historicalImportWindowPolicy{})
+			switch result.Outcome {
+			case windowCompleted:
+				summary.ImportedWindows++
+			case windowMonitoringGap:
+				summary.GapWindows++
+			case windowCancelled, windowFailed:
+				return result.Err
+			}
+			return nil
+		}); err != nil {
+			return summary, err
+		}
+		if progress != nil {
+			percent := int(batchEnd.Sub(start) * 100 / end.Sub(start))
+			progress(ImportProgress{Percent: percent, ImportSummary: summary})
+		}
+		batchStart = batchEnd
+	}
+	return summary, nil
+}
+
+func countHistoricalWindows(start, end time.Time, interval time.Duration) int {
+	if interval <= 0 || !start.Before(end) {
+		return 0
+	}
+	duration := end.Sub(start)
+	windows := duration / interval
+	if duration%interval != 0 {
+		windows++
+	}
+	return int(windows)
+}
+
+type historicalWindowValues struct {
+	loads     []float64
+	latencies []float64
+}
+
+type historicalWindows struct {
+	start     time.Time
+	end       time.Time
+	interval  time.Duration
+	nextStart time.Time
+	nextFlush time.Time
+	values    map[time.Time]*historicalWindowValues
+}
+
+func newHistoricalWindows(start, end time.Time, interval time.Duration) *historicalWindows {
+	nextFlush := start.Add(interval)
+	if nextFlush.After(end) {
+		nextFlush = end
+	}
+	return &historicalWindows{
+		start: start, end: end, interval: interval, nextStart: start, nextFlush: nextFlush,
+		values: make(map[time.Time]*historicalWindowValues),
+	}
+}
+
+func (w *historicalWindows) add(batchStart, importStart time.Time, loads, latencies []prometheusPoint) {
+	for _, point := range loads {
+		if batchStart.After(importStart) && !point.Timestamp.After(batchStart) {
+			continue
+		}
+		if windowEnd, ok := w.windowEnd(point.Timestamp); ok {
+			values := w.valueFor(windowEnd)
+			values.loads = append(values.loads, point.Value)
+		}
+	}
+	for _, point := range latencies {
+		if batchStart.After(importStart) && !point.Timestamp.After(batchStart) {
+			continue
+		}
+		if windowEnd, ok := w.windowEnd(point.Timestamp); ok {
+			values := w.valueFor(windowEnd)
+			values.latencies = append(values.latencies, point.Value)
+		}
+	}
+}
+
+func (w *historicalWindows) windowEnd(timestamp time.Time) (time.Time, bool) {
+	if timestamp.Before(w.start) || !timestamp.Before(w.end) {
+		return time.Time{}, false
+	}
+	index := timestamp.Sub(w.start) / w.interval
+	windowEnd := w.start.Add((index + 1) * w.interval)
+	if windowEnd.After(w.end) {
+		windowEnd = w.end
+	}
+	return windowEnd, true
+}
+
+func (w *historicalWindows) valueFor(windowEnd time.Time) *historicalWindowValues {
+	values := w.values[windowEnd]
+	if values == nil {
+		values = &historicalWindowValues{}
+		w.values[windowEnd] = values
+	}
+	return values
+}
+
+func (w *historicalWindows) flushThrough(through time.Time, write func(collectionWindow, []float64, []float64) error) error {
+	for !w.nextFlush.After(through) {
+		values := w.values[w.nextFlush]
+		if values == nil {
+			values = &historicalWindowValues{}
+		}
+		if err := write(collectionWindow{Start: w.nextStart, End: w.nextFlush}, values.loads, values.latencies); err != nil {
+			return err
+		}
+		delete(w.values, w.nextFlush)
+		if w.nextFlush.Equal(w.end) {
+			break
+		}
+		w.nextStart = w.nextFlush
+		w.nextFlush = w.nextFlush.Add(w.interval)
+		if w.nextFlush.After(w.end) {
+			w.nextFlush = w.end
+		}
+	}
+	return nil
 }
 
 // this collects the samples from the prometheus server and writes them to the chunk store
@@ -155,8 +333,12 @@ func (c *collector) collectSamples(ctx context.Context, service *config.Service,
 	if err != nil {
 		return err
 	}
-	loads := ecdf.CountSamples(loadValue)
-	latencies := ecdf.CountSamples(latencyValue)
+	return c.writeTimeChunk(ctx, service, end, loadValue, latencyValue, historical)
+}
+
+func (c *collector) writeTimeChunk(ctx context.Context, service *config.Service, end time.Time, loadValues, latencyValues []float64, historical bool) error {
+	loads := ecdf.CountSamples(loadValues)
+	latencies := ecdf.CountSamples(latencyValues)
 	chunk, err := ecdf.Encode(end, loads, latencies)
 	if err != nil {
 		return err
@@ -173,13 +355,26 @@ func (c *collector) collectSamples(ctx context.Context, service *config.Service,
 			Latencies:   latencies,
 			Historical:  historical,
 		}
-		if err := c.analyzer.Submit(request); err != nil {
+		var submitErr error
+		if historical {
+			if queue, ok := c.analyzer.(contextualAnalysisQueue); ok {
+				submitErr = queue.SubmitContext(ctx, request)
+			} else {
+				submitErr = c.analyzer.Submit(request)
+			}
+		} else {
+			submitErr = c.analyzer.Submit(request)
+		}
+		if submitErr != nil {
+			if historical {
+				return fmt.Errorf("queue historical time chunk analysis: %w", submitErr)
+			}
 			slog.Error(
 				"failed to queue sample analysis",
 				"service_id", service.Id,
 				"indicator_id", LoadLatencyIndicator,
 				"timestamp", end,
-				"error", err,
+				"error", submitErr,
 			)
 		}
 	}

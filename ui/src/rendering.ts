@@ -38,3 +38,42 @@ export function groupAlertsByStatus<T extends { status: string }>(alerts: T[]): 
     resolved: alerts.filter((alert) => alert.status === 'resolved'),
   };
 }
+
+export interface AlertReviewTarget {
+  id: number;
+  revision: number;
+}
+
+interface AlertWithReviewOccurrences {
+  serviceId?: number;
+  serviceName: string;
+  status: string;
+  occurrences: {
+    id: number;
+    reviewRevision: number;
+    chunkTimestamp?: string;
+    reviewOverride?: boolean;
+  }[];
+}
+
+export interface ServiceAlertReviewTargets {
+  serviceKey: string;
+  serviceName: string;
+  targets: AlertReviewTarget[];
+}
+
+export function reviewableAnomalousOccurrencesByService(alerts: AlertWithReviewOccurrences[]): ServiceAlertReviewTargets[] {
+  const grouped = new Map<string, ServiceAlertReviewTargets>();
+  for (const alert of alerts) {
+    if (alert.status !== 'firing') continue;
+    const targets = alert.occurrences
+      .filter((occurrence) => occurrence.chunkTimestamp !== undefined && occurrence.reviewOverride !== true)
+      .map((occurrence) => ({ id: occurrence.id, revision: occurrence.reviewRevision }));
+    if (targets.length === 0) continue;
+    const serviceKey = alert.serviceId === undefined ? `name:${alert.serviceName}` : String(alert.serviceId);
+    const group = grouped.get(serviceKey) ?? { serviceKey, serviceName: alert.serviceName, targets: [] };
+    group.targets.push(...targets);
+    grouped.set(serviceKey, group);
+  }
+  return Array.from(grouped.values());
+}
