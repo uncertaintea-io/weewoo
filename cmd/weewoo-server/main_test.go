@@ -207,6 +207,36 @@ func TestServiceAPIUpdatesConfigurationAsANewAuditedGeneration(t *testing.T) {
 	assert.True(t, history[0].Material)
 }
 
+func TestServiceAPIResetsBaselineForNewServiceVersion(t *testing.T) {
+	cfg := config.NewFakeConfig()
+	service := &config.Service{
+		Name: "checkout", PrometheusURL: "http://prometheus.example.com",
+		LoadQuery: "load", LatencyQuery: "latency", Interval: time.Minute,
+	}
+	require.NoError(t, cfg.WriteService(service))
+	monitor := newTrackingMonitor()
+	tracker := &fakeServiceCollector{}
+	handler := NewServiceAPIHandler(cfg, tracker, monitor, newImportManager(tracker, monitor), http.DefaultClient)
+	recorder := httptest.NewRecorder()
+
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/api/services/1/baseline-reset", nil))
+
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	updated, err := cfg.ReadService(service.Id)
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), updated.Revision)
+	assert.Equal(t, int64(2), updated.Generation)
+	require.NotZero(t, updated.BaselineResetAt)
+	require.NotNil(t, tracker.scheduled)
+	assert.Equal(t, int64(2), tracker.scheduled.Generation)
+	history, err := cfg.ReadServiceHistory(service.Id)
+	require.NoError(t, err)
+	require.Len(t, history, 1)
+	assert.True(t, history[0].Material)
+	assert.Equal(t, int64(1), history[0].Previous.Generation)
+	assert.Equal(t, int64(2), history[0].Current.Generation)
+}
+
 func TestServiceAPIPauseAndResumeAreRevisionedAndAudited(t *testing.T) {
 	cfg := config.NewFakeConfig()
 	service := &config.Service{
