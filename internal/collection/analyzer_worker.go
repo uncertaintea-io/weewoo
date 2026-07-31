@@ -32,13 +32,13 @@ type AnalysisRequest struct {
 	Loads       []ecdf.Sample
 	Latencies   []ecdf.Sample
 	Historical  bool
-	// Observations preserves timestamped load values for the time-of-day model.
-	Observations []LoadObservation
-	// VerdictTimestamps are the singleton indicator chunks governed by this analysis.
-	VerdictTimestamps []time.Time
+	// Observations preserves timestamped values when an indicator analyzes a rolling window.
+	Observations []Observation
+	// ChunkTimestamps are the chunks governed by this analysis result.
+	ChunkTimestamps []time.Time
 }
 
-type LoadObservation struct {
+type Observation struct {
 	Timestamp time.Time
 	Value     float64
 }
@@ -58,17 +58,17 @@ type contextualAnalysisQueue interface {
 
 // AnalysisWorker evaluates samples from a bounded background queue.
 type AnalysisWorker struct {
-	cfg         config.Config
-	jointStore  ecdf.JointStore
-	chunks      ecdf.ChunkStore
-	alerts      alerting.AnalysisRecorder
-	liveJobs    chan AnalysisRequest
-	historyJobs chan AnalysisRequest
-	ctx         context.Context
-	cancel      context.CancelFunc
-	done        chan struct{}
-	stopOnce    sync.Once
-	timeOfDay   map[serviceGeneration][]LoadObservation
+	cfg          config.Config
+	jointStore   ecdf.JointStore
+	chunks       ecdf.ChunkStore
+	alerts       alerting.AnalysisRecorder
+	liveJobs     chan AnalysisRequest
+	historyJobs  chan AnalysisRequest
+	ctx          context.Context
+	cancel       context.CancelFunc
+	done         chan struct{}
+	stopOnce     sync.Once
+	observations map[serviceGeneration][]Observation
 }
 
 func NewAnalysisWorker(cfg config.Config, jointStore ecdf.JointStore, chunks ecdf.ChunkStore, alerts alerting.AnalysisRecorder, capacity int) *AnalysisWorker {
@@ -77,16 +77,16 @@ func NewAnalysisWorker(cfg config.Config, jointStore ecdf.JointStore, chunks ecd
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	worker := &AnalysisWorker{
-		cfg:         cfg,
-		jointStore:  jointStore,
-		chunks:      chunks,
-		alerts:      alerts,
-		liveJobs:    make(chan AnalysisRequest, capacity),
-		historyJobs: make(chan AnalysisRequest, capacity),
-		ctx:         ctx,
-		cancel:      cancel,
-		done:        make(chan struct{}),
-		timeOfDay:   make(map[serviceGeneration][]LoadObservation),
+		cfg:          cfg,
+		jointStore:   jointStore,
+		chunks:       chunks,
+		alerts:       alerts,
+		liveJobs:     make(chan AnalysisRequest, capacity),
+		historyJobs:  make(chan AnalysisRequest, capacity),
+		ctx:          ctx,
+		cancel:       cancel,
+		done:         make(chan struct{}),
+		observations: make(map[serviceGeneration][]Observation),
 	}
 	go worker.run()
 	return worker
@@ -137,7 +137,7 @@ func cloneAnalysisRequest(request AnalysisRequest) AnalysisRequest {
 	request.Loads = slices.Clone(request.Loads)
 	request.Latencies = slices.Clone(request.Latencies)
 	request.Observations = slices.Clone(request.Observations)
-	request.VerdictTimestamps = slices.Clone(request.VerdictTimestamps)
+	request.ChunkTimestamps = slices.Clone(request.ChunkTimestamps)
 	return request
 }
 
@@ -183,21 +183,21 @@ func (w *AnalysisWorker) analyze(request AnalysisRequest) {
 		}
 	}()
 
-	var timeOfDayObservations []LoadObservation
+	var windowObservations []Observation
 	if request.IndicatorID == TimeOfDayIndicator {
 		key := serviceGeneration{serviceID: request.Service.Id, generation: request.Service.Generation}
-		w.timeOfDay[key] = append(w.timeOfDay[key], request.Observations...)
+		w.observations[key] = append(w.observations[key], request.Observations...)
 		cutoff := request.Timestamp.Add(-5 * time.Minute)
-		observations := w.timeOfDay[key]
+		observations := w.observations[key]
 		first := 0
 		for first < len(observations) && observations[first].Timestamp.Before(cutoff) {
 			first++
 		}
-		w.timeOfDay[key] = slices.Clone(observations[first:])
-		timeOfDayObservations = w.timeOfDay[key]
-		for buffered := range w.timeOfDay {
+		w.observations[key] = slices.Clone(observations[first:])
+		windowObservations = w.observations[key]
+		for buffered := range w.observations {
 			if buffered.serviceID == key.serviceID && buffered.generation < key.generation {
-				delete(w.timeOfDay, buffered)
+				delete(w.observations, buffered)
 			}
 		}
 	}
@@ -207,7 +207,7 @@ func (w *AnalysisWorker) analyze(request AnalysisRequest) {
 		var err error
 		if request.IndicatorID == TimeOfDayIndicator {
 			_, err = analyzeTimeOfDay(ctx, w.cfg, w.jointStore, w.chunks, w.alerts, &request.Service,
-				request.Timestamp, timeOfDayObservations, request.VerdictTimestamps, request.Historical)
+				request.Timestamp, windowObservations, request.ChunkTimestamps, request.Historical)
 		} else {
 			_, err = analyzeSample(
 				ctx,

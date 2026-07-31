@@ -66,25 +66,25 @@ func SleepHandler(sleepTime time.Duration) http.Handler {
 }
 
 type serviceResponse struct {
-	ID              int                  `json:"id"`
-	Name            string               `json:"name"`
-	PrometheusURL   string               `json:"prometheusUrl"`
-	LoadQuery       string               `json:"loadQuery"`
-	LatencyQuery    string               `json:"latencyQuery"`
-	IntervalSeconds int64                `json:"intervalSeconds"`
-	Revision        int64                `json:"revision"`
-	Generation      int64                `json:"generation"`
-	BaselineResetAt *time.Time           `json:"baselineResetAt,omitempty"`
-	Tracking        trackingStatus       `json:"tracking"`
-	Imports         []importJob          `json:"imports"`
-	TimeOfDayModel  timeOfDayModelStatus `json:"timeOfDayModel"`
+	ID              int            `json:"id"`
+	Name            string         `json:"name"`
+	PrometheusURL   string         `json:"prometheusUrl"`
+	LoadQuery       string         `json:"loadQuery"`
+	LatencyQuery    string         `json:"latencyQuery"`
+	IntervalSeconds int64          `json:"intervalSeconds"`
+	Revision        int64          `json:"revision"`
+	Generation      int64          `json:"generation"`
+	BaselineResetAt *time.Time     `json:"baselineResetAt,omitempty"`
+	Tracking        trackingStatus `json:"tracking"`
+	Imports         []importJob    `json:"imports"`
+	TimeOfDayModel  modelStatus    `json:"timeOfDayModel"`
 }
 
-type timeOfDayModelStatus struct {
-	State        string     `json:"state"`
-	Coverage     float64    `json:"coverage"`
-	RequiredDays int        `json:"requiredDays"`
-	LatestBuild  *time.Time `json:"latestBuild,omitempty"`
+type modelStatus struct {
+	State       string     `json:"state"`
+	Coverage    float64    `json:"coverage"`
+	Required    int        `json:"requiredDays"`
+	LatestBuild *time.Time `json:"latestBuild,omitempty"`
 }
 
 type createServiceRequest struct {
@@ -141,7 +141,7 @@ func newServiceResponse(service *config.Service) serviceResponse {
 		Generation:      service.Generation,
 		Tracking:        trackingStatus{State: "pending", Activity: []activityEntry{}},
 		Imports:         []importJob{},
-		TimeOfDayModel:  timeOfDayModelStatus{State: "learning", RequiredDays: 5},
+		TimeOfDayModel:  modelStatus{State: "learning", Required: 5},
 	}
 	if !service.BaselineResetAt.IsZero() {
 		resetAt := service.BaselineResetAt
@@ -306,7 +306,10 @@ func main() {
 	registerAPIHandlers(
 		appMux,
 		observeRequestDuration(NewAlertAPIHandler(alertManager)),
-		observeRequestDuration(NewServiceAPIHandler(cfg, tracker, monitor, imports, http.DefaultClient, alertManager, &databaseModelStatusReader{db: db})),
+		observeRequestDuration(NewServiceAPIHandler(cfg, tracker, monitor, imports, http.DefaultClient, serviceAPIOptions{
+			Alerts:      alertManager,
+			ModelStatus: &databaseModelStatusReader{db: db, cfg: cfg, chunks: chunkStore},
+		})),
 	)
 	//edit this to change the sleep time
 	appMux.Handle("/sleep", observeRequestDuration(SleepHandler(sleep_duration)))

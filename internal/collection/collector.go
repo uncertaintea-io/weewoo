@@ -190,7 +190,7 @@ func (c *collector) Import(ctx context.Context, service *config.Service, start, 
 				if len(loads) == 0 || len(latencies) == 0 {
 					return errWindowHasNoMetrics
 				}
-				return c.writeTimeChunk(ctx, service, window.End, loads, latencies, true)
+				return c.writeCollectedIndicators(ctx, service, window.End, loads, latencies, true)
 			}, historicalImportWindowPolicy{})
 			switch result.Outcome {
 			case windowCompleted:
@@ -339,7 +339,7 @@ func (c *collector) collectSamples(ctx context.Context, service *config.Service,
 	for i, point := range latencyPoints {
 		latencyValue[i] = point.Value
 	}
-	return c.writeTimeChunk(ctx, service, end, loadPoints, latencyValue, historical)
+	return c.writeCollectedIndicators(ctx, service, end, loadPoints, latencyValue, historical)
 }
 
 func pointsInWindow(points []prometheusPoint, start, end time.Time) []prometheusPoint {
@@ -352,18 +352,14 @@ func pointsInWindow(points []prometheusPoint, start, end time.Time) []prometheus
 	return filtered
 }
 
-func (c *collector) writeTimeChunk(ctx context.Context, service *config.Service, end time.Time, loadPoints []prometheusPoint, latencyValues []float64, historical bool) error {
+func (c *collector) writeCollectedIndicators(ctx context.Context, service *config.Service, end time.Time, loadPoints []prometheusPoint, latencyValues []float64, historical bool) error {
 	loadValues := make([]float64, len(loadPoints))
 	for i, point := range loadPoints {
 		loadValues[i] = point.Value
 	}
 	loads := ecdf.CountSamples(loadValues)
 	latencies := ecdf.CountSamples(latencyValues)
-	chunk, err := ecdf.Encode(end, loads, latencies)
-	if err != nil {
-		return err
-	}
-	if err := c.chunkStore.WriteChunk(service.Id, LoadLatencyIndicator, service.Generation, end, chunk); err != nil {
+	if err := c.writeIndicatorChunk(service, LoadLatencyIndicator, end, loads, latencies); err != nil {
 		return err
 	}
 	observations, err := c.writeTimeOfDayChunks(service, loadPoints)
@@ -371,69 +367,49 @@ func (c *collector) writeTimeChunk(ctx context.Context, service *config.Service,
 		return err
 	}
 	if c.analyzer != nil {
-		request := AnalysisRequest{
+		requests := []AnalysisRequest{{
 			Service:     *service,
 			IndicatorID: LoadLatencyIndicator,
 			Timestamp:   end,
 			Loads:       loads,
 			Latencies:   latencies,
 			Historical:  historical,
-		}
-		var submitErr error
-		if historical {
-			if queue, ok := c.analyzer.(contextualAnalysisQueue); ok {
-				submitErr = queue.SubmitContext(ctx, request)
-			} else {
-				submitErr = c.analyzer.Submit(request)
-			}
-		} else {
-			submitErr = c.analyzer.Submit(request)
-		}
-		if submitErr != nil {
-			if historical {
-				return fmt.Errorf("queue historical time chunk analysis: %w", submitErr)
-			}
-			slog.Error(
-				"failed to queue sample analysis",
-				"service_id", service.Id,
-				"indicator_id", LoadLatencyIndicator,
-				"timestamp", end,
-				"error", submitErr,
-			)
-		}
+		}}
 		if len(observations) > 0 {
 			timestamps := make([]time.Time, len(observations))
 			for i := range observations {
 				timestamps[i] = observations[i].Timestamp
 			}
-			todRequest := AnalysisRequest{Service: *service, IndicatorID: TimeOfDayIndicator, Timestamp: end,
-				Observations: observations, VerdictTimestamps: timestamps, Historical: historical}
-			if historical {
-				if queue, ok := c.analyzer.(contextualAnalysisQueue); ok {
-					submitErr = queue.SubmitContext(ctx, todRequest)
-				} else {
-					submitErr = c.analyzer.Submit(todRequest)
-				}
-			} else {
-				submitErr = c.analyzer.Submit(todRequest)
-			}
-			if submitErr != nil {
+			requests = append(requests, AnalysisRequest{Service: *service, IndicatorID: TimeOfDayIndicator, Timestamp: end,
+				Observations: observations, ChunkTimestamps: timestamps, Historical: historical})
+		}
+		for _, request := range requests {
+			if submitErr := c.submitAnalysis(ctx, request); submitErr != nil {
 				if historical {
-					return fmt.Errorf("queue historical time-of-day analysis: %w", submitErr)
+					return fmt.Errorf("queue historical indicator %d analysis: %w", request.IndicatorID, submitErr)
 				}
-				slog.Error("failed to queue time-of-day analysis", "service_id", service.Id,
-					"indicator_id", TimeOfDayIndicator, "timestamp", end, "error", submitErr)
+				slog.Error("failed to queue analysis", "service_id", service.Id,
+					"indicator_id", request.IndicatorID, "timestamp", end, "error", submitErr)
 			}
 		}
 	}
 	return nil
 }
 
-func (c *collector) writeTimeOfDayChunks(service *config.Service, points []prometheusPoint) ([]LoadObservation, error) {
+func (c *collector) submitAnalysis(ctx context.Context, request AnalysisRequest) error {
+	if request.Historical {
+		if queue, ok := c.analyzer.(contextualAnalysisQueue); ok {
+			return queue.SubmitContext(ctx, request)
+		}
+	}
+	return c.analyzer.Submit(request)
+}
+
+func (c *collector) writeTimeOfDayChunks(service *config.Service, points []prometheusPoint) ([]Observation, error) {
 	if service.Interval <= 0 {
 		return nil, fmt.Errorf("invalid service interval")
 	}
-	observations := make([]LoadObservation, 0, len(points))
+	observations := make([]Observation, 0, len(points))
 	seen := make(map[time.Time]struct{}, len(points))
 	for _, point := range points {
 		timestamp := point.Timestamp.UTC().Truncate(time.Second)
@@ -442,16 +418,21 @@ func (c *collector) writeTimeOfDayChunks(service *config.Service, points []prome
 		}
 		seen[timestamp] = struct{}{}
 		x := timeOfDayBucket(timestamp, service.Interval)
-		chunk, err := ecdf.Encode(timestamp, []ecdf.Sample{{Value: x, Count: 1}}, []ecdf.Sample{{Value: point.Value, Count: 1}})
-		if err != nil {
+		if err := c.writeIndicatorChunk(service, TimeOfDayIndicator, timestamp,
+			[]ecdf.Sample{{Value: x, Count: 1}}, []ecdf.Sample{{Value: point.Value, Count: 1}}); err != nil {
 			return nil, err
 		}
-		if err := c.chunkStore.WriteChunk(service.Id, TimeOfDayIndicator, service.Generation, timestamp, chunk); err != nil {
-			return nil, err
-		}
-		observations = append(observations, LoadObservation{Timestamp: timestamp, Value: point.Value})
+		observations = append(observations, Observation{Timestamp: timestamp, Value: point.Value})
 	}
 	return observations, nil
+}
+
+func (c *collector) writeIndicatorChunk(service *config.Service, indicatorID int, timestamp time.Time, x, y []ecdf.Sample) error {
+	chunk, err := ecdf.Encode(timestamp, x, y)
+	if err != nil {
+		return err
+	}
+	return c.chunkStore.WriteChunk(service.Id, indicatorID, service.Generation, timestamp, chunk)
 }
 
 func timeOfDayBucket(timestamp time.Time, interval time.Duration) float64 {

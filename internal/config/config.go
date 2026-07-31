@@ -19,7 +19,7 @@ var (
 
 // MinimumServiceInterval bounds Prometheus range queries to the batch size the
 // historical importer is designed to handle.
-const MinimumServiceInterval = 15 * time.Second
+var MinimumServiceInterval = 15 * time.Second
 
 // this struct tells config how to connect to the database using yaml files
 type SystemSettings struct {

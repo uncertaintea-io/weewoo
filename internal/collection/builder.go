@@ -27,8 +27,6 @@ const (
 	ECDFBaselineChunksConfigKey        = "ecdf_baseline_chunks"
 	defaultECDFScheduledBuildTimeout   = 5 * time.Minute
 	defaultECDFBaselineChunks          = 10
-	timeOfDayBaselineDays              = 5
-	timeOfDayRequiredCoverage          = 0.95
 )
 
 var errServiceGenerationChanged = errors.New("service generation changed during ECDF publication")
@@ -109,87 +107,27 @@ func ScheduleECDFBuilder(serviceID int, chunkStore ecdf.ChunkStore, jointStore e
 		buildCtx, cancel := context.WithTimeout(ctx, buildTimeout)
 		defer cancel()
 
-		minimumChunks, err := configuredPositiveInt(cfg, ECDFBaselineChunksConfigKey, defaultECDFBaselineChunks)
-		if err != nil {
-			return IntervalPermanent(err)
-		}
 		service, err := cfg.ReadService(serviceID)
 		if err != nil {
 			return IntervalRetry(fmt.Errorf("read service generation: %w", err))
 		}
-		eligibleChunks, err := chunkStore.CountEligibleChunks(buildCtx, serviceID, LoadLatencyIndicator, service.Generation)
-		if err != nil {
-			return IntervalRetry(err)
-		}
-		if eligibleChunks < minimumChunks {
-			slog.Info("deferring first joint ECDF build until baseline is ready",
-				"service_id", serviceID, "eligible_chunks", eligibleChunks, "required_chunks", minimumChunks)
-			return IntervalSuccess()
-		}
-
-		bytesWritten, published, err := jointStore.Publish(buildCtx, serviceID, LoadLatencyIndicator, end, func(out io.Writer) error {
-			activeService, err := cfg.ReadService(serviceID)
+		for _, indicatorID := range indicatorIDs {
+			if indicatorID == TimeOfDayIndicator && service.Interval <= 0 {
+				continue
+			}
+			readiness, err := ReadModelReadiness(buildCtx, cfg, chunkStore, service, indicatorID)
 			if err != nil {
-				return fmt.Errorf("re-read service generation under publication lock: %w", err)
+				return IntervalRetry(fmt.Errorf("measure indicator %d readiness: %w", indicatorID, err))
 			}
-			if activeService.Generation != service.Generation {
-				return fmt.Errorf("%w: started generation %d, active generation %d", errServiceGenerationChanged, service.Generation, activeService.Generation)
+			if !readiness.Ready {
+				slog.Info("deferring joint ECDF build until reference data is ready", "service_id", serviceID,
+					"indicator_id", indicatorID, "coverage", readiness.Coverage, "eligible", readiness.Eligible, "required", readiness.Required)
+				continue
 			}
-			if err := ecdf.BuildJointECDFContextGeneration(buildCtx, chunkStore, serviceID, LoadLatencyIndicator, service.Generation, out); err != nil {
-				return fmt.Errorf("ECDF generation failed: %w", err)
+			result := publishIndicator(buildCtx, cfg, chunkStore, jointStore, service, indicatorID, start, end)
+			if result.Err != nil {
+				return result
 			}
-			return nil
-		})
-		if err != nil {
-			if errors.Is(err, errServiceGenerationChanged) {
-				slog.Info("discarding superseded joint ECDF publication", "service_id", serviceID, "indicator_id", LoadLatencyIndicator, "generation", service.Generation)
-				return IntervalSuccess()
-			}
-			stage := "publication"
-			if buildCtx.Err() != nil {
-				stage = "scheduled build deadline"
-				err = fmt.Errorf("%s failed: %w", stage, errors.Join(err, buildCtx.Err()))
-			}
-			slog.Error("failed to publish joint ECDF", "service_id", serviceID, "indicator_id", LoadLatencyIndicator, "stage", stage, "error", err)
-			return IntervalRetry(err)
-		}
-		if !published {
-			slog.Info("this is being handled by another publisher", "service_id", serviceID, "indicator_id", LoadLatencyIndicator)
-			return IntervalSuccess()
-		}
-		slog.Info("built joint ECDF", "service_id", serviceID, "indicator_id", LoadLatencyIndicator, "start", start, "end", end, "bytes", bytesWritten)
-
-		if service.Interval <= 0 {
-			slog.Warn("skipping time-of-day ECDF for service with invalid interval", "service_id", serviceID)
-			return IntervalSuccess()
-		}
-		coverage, ready, err := timeOfDayCoverage(buildCtx, chunkStore, serviceID, service.Generation, service.Interval)
-		if err != nil {
-			return IntervalRetry(fmt.Errorf("measure time-of-day baseline coverage: %w", err))
-		}
-		if !ready {
-			slog.Info("deferring time-of-day ECDF build until baseline is ready", "service_id", serviceID,
-				"indicator_id", TimeOfDayIndicator, "coverage", coverage, "required_coverage", timeOfDayRequiredCoverage)
-			return IntervalSuccess()
-		}
-		todBytes, todPublished, err := jointStore.Publish(buildCtx, serviceID, TimeOfDayIndicator, end, func(out io.Writer) error {
-			activeService, err := cfg.ReadService(serviceID)
-			if err != nil {
-				return fmt.Errorf("re-read service generation under publication lock: %w", err)
-			}
-			if activeService.Generation != service.Generation {
-				return fmt.Errorf("%w: started generation %d, active generation %d", errServiceGenerationChanged, service.Generation, activeService.Generation)
-			}
-			return ecdf.BuildJointECDFContextGeneration(buildCtx, chunkStore, serviceID, TimeOfDayIndicator, service.Generation, out)
-		})
-		if err != nil {
-			if errors.Is(err, errServiceGenerationChanged) {
-				return IntervalSuccess()
-			}
-			return IntervalRetry(fmt.Errorf("time-of-day ECDF publication failed: %w", err))
-		}
-		if todPublished {
-			slog.Info("built joint ECDF", "service_id", serviceID, "indicator_id", TimeOfDayIndicator, "start", start, "end", end, "bytes", todBytes)
 		}
 		return IntervalSuccess()
 	}, WithLastEnd(time.Now().UTC().Truncate(serviceInterval).Add(-serviceInterval)))
@@ -199,56 +137,39 @@ func ScheduleECDFBuilder(serviceID int, chunkStore ecdf.ChunkStore, jointStore e
 	return nil
 }
 
-func timeOfDayCoverage(ctx context.Context, store ecdf.ChunkStore, serviceID int, generation int64, interval time.Duration) (float64, bool, error) {
-	if interval <= 0 {
-		return 0, false, fmt.Errorf("invalid service interval")
-	}
-	totalBuckets := int((24*time.Hour + interval - 1) / interval)
-	datesByBucket := make(map[int]map[string]struct{})
-	chunks := make(chan []byte, 2)
-	errCh := make(chan error, 1)
-	go func() {
-		defer close(chunks)
-		errCh <- store.ScanGoodChunks(ctx, serviceID, TimeOfDayIndicator, generation, chunks)
-	}()
-	var decodeErr error
-	for chunk := range chunks {
-		if decodeErr != nil {
-			continue
-		}
-		timestamp, xs, _, err := ecdf.Decode(chunk)
+func publishIndicator(ctx context.Context, cfg config.Config, chunks ecdf.ChunkStore, joints ecdf.JointStore, service *config.Service, indicatorID int, start, end time.Time) IntervalResult {
+	bytesWritten, published, err := joints.Publish(ctx, service.Id, indicatorID, end, func(out io.Writer) error {
+		active, err := cfg.ReadService(service.Id)
 		if err != nil {
-			decodeErr = fmt.Errorf("decode time-of-day chunk: %w", err)
-			continue
+			return fmt.Errorf("re-read service generation under publication lock: %w", err)
 		}
-		if len(xs) != 1 || xs[0].Count != 1 {
-			decodeErr = fmt.Errorf("time-of-day chunk must contain one x observation")
-			continue
+		if active.Generation != service.Generation {
+			return fmt.Errorf("%w: started generation %d, active generation %d", errServiceGenerationChanged, service.Generation, active.Generation)
 		}
-		bucket := int(xs[0].Value)
-		if bucket < 0 || bucket >= totalBuckets {
-			decodeErr = fmt.Errorf("time-of-day bucket %d outside range", bucket)
-			continue
+		if err := ecdf.BuildJointECDFContextGeneration(ctx, chunks, service.Id, indicatorID, service.Generation, out); err != nil {
+			return fmt.Errorf("ECDF generation failed: %w", err)
 		}
-		if datesByBucket[bucket] == nil {
-			datesByBucket[bucket] = make(map[string]struct{})
-		}
-		datesByBucket[bucket][timestamp.UTC().Format(time.DateOnly)] = struct{}{}
+		return nil
+	})
+	if errors.Is(err, errServiceGenerationChanged) {
+		slog.Info("discarding superseded joint ECDF publication", "service_id", service.Id, "indicator_id", indicatorID, "generation", service.Generation)
+		return IntervalSuccess()
 	}
-	if err := <-errCh; err != nil {
-		return 0, false, err
-	}
-	if decodeErr != nil {
-		return 0, false, decodeErr
-	}
-	qualified := 0
-	for _, dates := range datesByBucket {
-		if len(dates) >= timeOfDayBaselineDays {
-			qualified++
+	if err != nil {
+		stage := "publication"
+		if ctx.Err() != nil {
+			stage = "scheduled build deadline"
+			err = fmt.Errorf("%s failed: %w", stage, errors.Join(err, ctx.Err()))
 		}
+		slog.Error("failed to publish joint ECDF", "service_id", service.Id, "indicator_id", indicatorID, "stage", stage, "error", err)
+		return IntervalRetry(err)
 	}
-	coverage := float64(qualified) / float64(totalBuckets)
-	return coverage, coverage >= timeOfDayRequiredCoverage, nil
+	if !published {
+		slog.Info("this is being handled by another publisher", "service_id", service.Id, "indicator_id", indicatorID)
+		return IntervalSuccess()
+	}
+	slog.Info("built joint ECDF", "service_id", service.Id, "indicator_id", indicatorID, "start", start, "end", end, "bytes", bytesWritten)
+	return IntervalSuccess()
 }
 
 func configuredPositiveInt(cfg config.Config, key string, fallback int) (int, error) {
