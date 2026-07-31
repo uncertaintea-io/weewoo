@@ -21,6 +21,11 @@ critical. A Good chunk resolves it. Every Bad chunk remains a separate
 Occurrence so it can be reviewed independently. If all Occurrences are
 accepted as normal, the condition resolves with that reason.
 
+Load vs. UTC Time of Day uses the same lifecycle and significance threshold as
+Load vs. Latency, while keeping independent Verdicts, Occurrences, and Review
+eligibility. Its window-level Verdict applies to all singleton load chunks
+collected by that scheduler window.
+
 Collection failures use one condition per service. Every attempt is an
 Occurrence. The third consecutive failure is critical, and the first
 successful collection resolves the condition. Pausing or deleting a service

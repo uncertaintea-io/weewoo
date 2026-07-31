@@ -99,12 +99,19 @@ func QueryPrometheusRange(ctx context.Context, client *http.Client, baseURL, pro
 }
 
 func queryPrometheusRangePoints(ctx context.Context, client *http.Client, baseURL, promQL string, start, end time.Time) ([]prometheusPoint, error) {
+	return queryPrometheusRangePointsAtStep(ctx, client, baseURL, promQL, start, end, 15*time.Second)
+}
+
+func queryPrometheusRangePointsAtStep(ctx context.Context, client *http.Client, baseURL, promQL string, start, end time.Time, step time.Duration) ([]prometheusPoint, error) {
+	if step <= 0 || step%time.Second != 0 {
+		return nil, fmt.Errorf("Prometheus range step must be a positive whole number of seconds")
+	}
 	var pr promRangeResponse
 	if err := queryPrometheus(ctx, client, baseURL, promRangeEndpoint, url.Values{
 		"query": {promQL},
 		"start": {strconv.FormatInt(start.Unix(), 10)},
 		"end":   {strconv.FormatInt(end.Unix(), 10)},
-		"step":  {promRangeStep},
+		"step":  {strconv.FormatInt(int64(step/time.Second), 10) + "s"},
 	}, &pr); err != nil {
 		return nil, err
 	}

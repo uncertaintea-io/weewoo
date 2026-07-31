@@ -27,6 +27,8 @@ const (
 	ECDFBaselineChunksConfigKey        = "ecdf_baseline_chunks"
 	defaultECDFScheduledBuildTimeout   = 5 * time.Minute
 	defaultECDFBaselineChunks          = 10
+	timeOfDayBaselineDays              = 5
+	timeOfDayRequiredCoverage          = 0.95
 )
 
 var errServiceGenerationChanged = errors.New("service generation changed during ECDF publication")
@@ -156,12 +158,97 @@ func ScheduleECDFBuilder(serviceID int, chunkStore ecdf.ChunkStore, jointStore e
 			return IntervalSuccess()
 		}
 		slog.Info("built joint ECDF", "service_id", serviceID, "indicator_id", LoadLatencyIndicator, "start", start, "end", end, "bytes", bytesWritten)
+
+		if service.Interval <= 0 {
+			slog.Warn("skipping time-of-day ECDF for service with invalid interval", "service_id", serviceID)
+			return IntervalSuccess()
+		}
+		coverage, ready, err := timeOfDayCoverage(buildCtx, chunkStore, serviceID, service.Generation, service.Interval)
+		if err != nil {
+			return IntervalRetry(fmt.Errorf("measure time-of-day baseline coverage: %w", err))
+		}
+		if !ready {
+			slog.Info("deferring time-of-day ECDF build until baseline is ready", "service_id", serviceID,
+				"indicator_id", TimeOfDayIndicator, "coverage", coverage, "required_coverage", timeOfDayRequiredCoverage)
+			return IntervalSuccess()
+		}
+		todBytes, todPublished, err := jointStore.Publish(buildCtx, serviceID, TimeOfDayIndicator, end, func(out io.Writer) error {
+			activeService, err := cfg.ReadService(serviceID)
+			if err != nil {
+				return fmt.Errorf("re-read service generation under publication lock: %w", err)
+			}
+			if activeService.Generation != service.Generation {
+				return fmt.Errorf("%w: started generation %d, active generation %d", errServiceGenerationChanged, service.Generation, activeService.Generation)
+			}
+			return ecdf.BuildJointECDFContextGeneration(buildCtx, chunkStore, serviceID, TimeOfDayIndicator, service.Generation, out)
+		})
+		if err != nil {
+			if errors.Is(err, errServiceGenerationChanged) {
+				return IntervalSuccess()
+			}
+			return IntervalRetry(fmt.Errorf("time-of-day ECDF publication failed: %w", err))
+		}
+		if todPublished {
+			slog.Info("built joint ECDF", "service_id", serviceID, "indicator_id", TimeOfDayIndicator, "start", start, "end", end, "bytes", todBytes)
+		}
 		return IntervalSuccess()
 	}, WithLastEnd(time.Now().UTC().Truncate(serviceInterval).Add(-serviceInterval)))
 	if err != nil {
 		return fmt.Errorf("failed to add callback for service %d: %w", serviceID, err)
 	}
 	return nil
+}
+
+func timeOfDayCoverage(ctx context.Context, store ecdf.ChunkStore, serviceID int, generation int64, interval time.Duration) (float64, bool, error) {
+	if interval <= 0 {
+		return 0, false, fmt.Errorf("invalid service interval")
+	}
+	totalBuckets := int((24*time.Hour + interval - 1) / interval)
+	datesByBucket := make(map[int]map[string]struct{})
+	chunks := make(chan []byte, 2)
+	errCh := make(chan error, 1)
+	go func() {
+		defer close(chunks)
+		errCh <- store.ScanGoodChunks(ctx, serviceID, TimeOfDayIndicator, generation, chunks)
+	}()
+	var decodeErr error
+	for chunk := range chunks {
+		if decodeErr != nil {
+			continue
+		}
+		timestamp, xs, _, err := ecdf.Decode(chunk)
+		if err != nil {
+			decodeErr = fmt.Errorf("decode time-of-day chunk: %w", err)
+			continue
+		}
+		if len(xs) != 1 || xs[0].Count != 1 {
+			decodeErr = fmt.Errorf("time-of-day chunk must contain one x observation")
+			continue
+		}
+		bucket := int(xs[0].Value)
+		if bucket < 0 || bucket >= totalBuckets {
+			decodeErr = fmt.Errorf("time-of-day bucket %d outside range", bucket)
+			continue
+		}
+		if datesByBucket[bucket] == nil {
+			datesByBucket[bucket] = make(map[string]struct{})
+		}
+		datesByBucket[bucket][timestamp.UTC().Format(time.DateOnly)] = struct{}{}
+	}
+	if err := <-errCh; err != nil {
+		return 0, false, err
+	}
+	if decodeErr != nil {
+		return 0, false, decodeErr
+	}
+	qualified := 0
+	for _, dates := range datesByBucket {
+		if len(dates) >= timeOfDayBaselineDays {
+			qualified++
+		}
+	}
+	coverage := float64(qualified) / float64(totalBuckets)
+	return coverage, coverage >= timeOfDayRequiredCoverage, nil
 }
 
 func configuredPositiveInt(cfg config.Config, key string, fallback int) (int, error) {

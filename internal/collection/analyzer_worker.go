@@ -32,6 +32,15 @@ type AnalysisRequest struct {
 	Loads       []ecdf.Sample
 	Latencies   []ecdf.Sample
 	Historical  bool
+	// Observations preserves timestamped load values for the time-of-day model.
+	Observations []LoadObservation
+	// VerdictTimestamps are the singleton indicator chunks governed by this analysis.
+	VerdictTimestamps []time.Time
+}
+
+type LoadObservation struct {
+	Timestamp time.Time
+	Value     float64
 }
 
 type AnalysisQueue interface {
@@ -54,6 +63,7 @@ type AnalysisWorker struct {
 	cancel      context.CancelFunc
 	done        chan struct{}
 	stopOnce    sync.Once
+	timeOfDay   map[int][]LoadObservation
 }
 
 func NewAnalysisWorker(cfg config.Config, jointStore ecdf.JointStore, chunks ecdf.ChunkStore, alerts alerting.AnalysisRecorder, capacity int) *AnalysisWorker {
@@ -71,6 +81,7 @@ func NewAnalysisWorker(cfg config.Config, jointStore ecdf.JointStore, chunks ecd
 		ctx:         ctx,
 		cancel:      cancel,
 		done:        make(chan struct{}),
+		timeOfDay:   make(map[int][]LoadObservation),
 	}
 	go worker.run()
 	return worker
@@ -120,6 +131,8 @@ func (w *AnalysisWorker) SubmitContext(ctx context.Context, request AnalysisRequ
 func cloneAnalysisRequest(request AnalysisRequest) AnalysisRequest {
 	request.Loads = slices.Clone(request.Loads)
 	request.Latencies = slices.Clone(request.Latencies)
+	request.Observations = slices.Clone(request.Observations)
+	request.VerdictTimestamps = slices.Clone(request.VerdictTimestamps)
 	return request
 }
 
@@ -165,22 +178,40 @@ func (w *AnalysisWorker) analyze(request AnalysisRequest) {
 		}
 	}()
 
+	var timeOfDayObservations []LoadObservation
+	if request.IndicatorID == TimeOfDayIndicator {
+		w.timeOfDay[request.Service.Id] = append(w.timeOfDay[request.Service.Id], request.Observations...)
+		cutoff := request.Timestamp.Add(-5 * time.Minute)
+		observations := w.timeOfDay[request.Service.Id]
+		first := 0
+		for first < len(observations) && observations[first].Timestamp.Before(cutoff) {
+			first++
+		}
+		w.timeOfDay[request.Service.Id] = slices.Clone(observations[first:])
+		timeOfDayObservations = w.timeOfDay[request.Service.Id]
+	}
 	retryDelay := verdictRetryInitialDelay
 	for attempt := 1; attempt <= verdictMaxAttempts; attempt++ {
 		ctx, cancel := context.WithTimeout(w.ctx, analyzeSampleTimeout)
-		_, err := analyzeSample(
-			ctx,
-			w.cfg,
-			w.jointStore,
-			w.chunks,
-			w.alerts,
-			&request.Service,
-			request.IndicatorID,
-			request.Timestamp,
-			request.Loads,
-			request.Latencies,
-			request.Historical,
-		)
+		var err error
+		if request.IndicatorID == TimeOfDayIndicator {
+			_, err = analyzeTimeOfDay(ctx, w.cfg, w.jointStore, w.chunks, w.alerts, &request.Service,
+				request.Timestamp, timeOfDayObservations, request.VerdictTimestamps, request.Historical)
+		} else {
+			_, err = analyzeSample(
+				ctx,
+				w.cfg,
+				w.jointStore,
+				w.chunks,
+				w.alerts,
+				&request.Service,
+				request.IndicatorID,
+				request.Timestamp,
+				request.Loads,
+				request.Latencies,
+				request.Historical,
+			)
+		}
 		cancel()
 		if err == nil {
 			return

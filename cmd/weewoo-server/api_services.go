@@ -24,14 +24,25 @@ type serviceAPI struct {
 	imports    *importManager
 	httpClient *http.Client
 	alerts     *alerting.Manager
+	models     modelStatusReader
 }
 
-func NewServiceAPIHandler(cfg config.Config, tracker serviceCollector, monitor *trackingMonitor, imports *importManager, client *http.Client, alerts ...*alerting.Manager) http.Handler {
+type modelStatusReader interface {
+	TimeOfDayStatus(context.Context, *config.Service) (timeOfDayModelStatus, error)
+}
+
+func NewServiceAPIHandler(cfg config.Config, tracker serviceCollector, monitor *trackingMonitor, imports *importManager, client *http.Client, options ...any) http.Handler {
 	var alertManager *alerting.Manager
-	if len(alerts) > 0 {
-		alertManager = alerts[0]
+	var models modelStatusReader
+	for _, option := range options {
+		switch value := option.(type) {
+		case *alerting.Manager:
+			alertManager = value
+		case modelStatusReader:
+			models = value
+		}
 	}
-	return &serviceAPI{cfg: cfg, tracker: tracker, monitor: monitor, imports: imports, httpClient: client, alerts: alertManager}
+	return &serviceAPI{cfg: cfg, tracker: tracker, monitor: monitor, imports: imports, httpClient: client, alerts: alertManager, models: models}
 }
 
 func (a *serviceAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -237,6 +248,11 @@ func (a *serviceAPI) response(service *config.Service) serviceResponse {
 	response := newServiceResponse(service)
 	response.Tracking = a.monitor.status(service.Id)
 	response.Imports = a.imports.listForService(service.Id)
+	if a.models != nil {
+		if status, err := a.models.TimeOfDayStatus(context.Background(), service); err == nil {
+			response.TimeOfDayModel = status
+		}
+	}
 	return response
 }
 

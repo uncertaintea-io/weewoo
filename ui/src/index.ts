@@ -699,6 +699,7 @@ function renderServiceHistory(history: ServiceChange[]): string {
 }
 
 function renderServiceDetail(service: Service, history: ServiceChange[] = [], historyUnavailable = false): void {
+  const timeOfDay = service.timeOfDayModel ?? { state: 'learning' as const, coverage: 0, requiredDays: 5 };
   renderShell(`
     <section class="detail-header">
       <div><a class="back-link" href="#services">← All services</a><p class="eyebrow">Service #${String(service.id)}</p><h2>${escapeHtml(service.name)}</h2>${renderServiceUrl(service.prometheusUrl)}</div>
@@ -708,6 +709,7 @@ function renderServiceDetail(service: Service, history: ServiceChange[] = [], hi
       <article class="detail-card"><span>Tracking state</span><strong>${escapeHtml(statusLabel(service.tracking.state))}</strong><p>${escapeHtml(service.tracking.error ?? `Database revision ${String(service.revision ?? 1)}; active revision ${String(service.tracking.activeRevision ?? 'pending')}.`)}</p></article>
       <article class="detail-card"><span>Last successful collection</span><strong>${escapeHtml(formatTimestamp(service.tracking.lastSuccess))}</strong><p>Every ${escapeHtml(formatInterval(service.intervalSeconds))}</p></article>
       <article class="detail-card"><span>Last collection error</span><strong>${escapeHtml(formatTimestamp(service.tracking.lastError))}</strong><p>${escapeHtml(service.tracking.error ?? 'No errors recorded')}</p></article>
+      <article class="detail-card"><span>Load vs. UTC Time of Day</span><strong>${escapeHtml(timeOfDay.state === 'ready' ? 'Ready' : timeOfDay.state === 'degraded' ? 'Degraded' : 'Learning')}</strong><p>${String(Math.round(timeOfDay.coverage * 100))}% slot coverage · ${String(timeOfDay.requiredDays)} UTC days required · latest build ${escapeHtml(formatTimestamp(timeOfDay.latestBuild))}</p></article>
     </section>
     <section class="detail-columns">
       <article class="detail-panel"><div class="panel-header"><h2>Collection activity</h2><span>Latest first</span></div>${renderActivity(service)}</article>

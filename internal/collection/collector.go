@@ -176,16 +176,16 @@ func (c *collector) Import(ctx context.Context, service *config.Service, start, 
 		if batchEnd.After(end) {
 			batchEnd = end
 		}
-		loadPoints, err := queryPrometheusRangePoints(ctx, c.client, service.PrometheusURL, service.LoadQuery, batchStart, batchEnd)
+		loadPoints, err := queryPrometheusRangePointsAtStep(ctx, c.client, service.PrometheusURL, service.LoadQuery, batchStart, batchEnd, service.Interval)
 		if err != nil && !errors.Is(err, ErrNoPrometheusData) {
 			return summary, err
 		}
-		latencyPoints, err := queryPrometheusRangePoints(ctx, c.client, service.PrometheusURL, service.LatencyQuery, batchStart, batchEnd)
+		latencyPoints, err := queryPrometheusRangePointsAtStep(ctx, c.client, service.PrometheusURL, service.LatencyQuery, batchStart, batchEnd, service.Interval)
 		if err != nil && !errors.Is(err, ErrNoPrometheusData) {
 			return summary, err
 		}
 		windows.add(batchStart, start, loadPoints, latencyPoints)
-		if err := windows.flushThrough(batchEnd, func(window collectionWindow, loads, latencies []float64) error {
+		if err := windows.flushThrough(batchEnd, func(window collectionWindow, loads []prometheusPoint, latencies []float64) error {
 			result := processor.Process(ctx, windowAttempt{Window: window}, func(context.Context) error {
 				if len(loads) == 0 || len(latencies) == 0 {
 					return errWindowHasNoMetrics
@@ -226,7 +226,7 @@ func countHistoricalWindows(start, end time.Time, interval time.Duration) int {
 }
 
 type historicalWindowValues struct {
-	loads     []float64
+	loads     []prometheusPoint
 	latencies []float64
 }
 
@@ -257,7 +257,7 @@ func (w *historicalWindows) add(batchStart, importStart time.Time, loads, latenc
 		}
 		if windowEnd, ok := w.windowEnd(point.Timestamp); ok {
 			values := w.valueFor(windowEnd)
-			values.loads = append(values.loads, point.Value)
+			values.loads = append(values.loads, point)
 		}
 	}
 	for _, point := range latencies {
@@ -292,7 +292,7 @@ func (w *historicalWindows) valueFor(windowEnd time.Time) *historicalWindowValue
 	return values
 }
 
-func (w *historicalWindows) flushThrough(through time.Time, write func(collectionWindow, []float64, []float64) error) error {
+func (w *historicalWindows) flushThrough(through time.Time, write func(collectionWindow, []prometheusPoint, []float64) error) error {
 	for !w.nextFlush.After(through) {
 		values := w.values[w.nextFlush]
 		if values == nil {
@@ -325,18 +325,38 @@ func (c *collector) collectHistorical(ctx context.Context, service *config.Servi
 
 func (c *collector) collectSamples(ctx context.Context, service *config.Service, start, end time.Time, historicalOption ...bool) error {
 	historical := len(historicalOption) > 0 && historicalOption[0]
-	loadValue, err := QueryPrometheusRange(ctx, c.client, service.PrometheusURL, service.LoadQuery, start, end)
+	loadPoints, err := queryPrometheusRangePointsAtStep(ctx, c.client, service.PrometheusURL, service.LoadQuery, start, end, service.Interval)
 	if err != nil {
 		return err
 	}
-	latencyValue, err := QueryPrometheusRange(ctx, c.client, service.PrometheusURL, service.LatencyQuery, start, end)
+	loadPoints = pointsInWindow(loadPoints, start, end)
+	latencyPoints, err := queryPrometheusRangePointsAtStep(ctx, c.client, service.PrometheusURL, service.LatencyQuery, start, end, service.Interval)
 	if err != nil {
 		return err
 	}
-	return c.writeTimeChunk(ctx, service, end, loadValue, latencyValue, historical)
+	latencyPoints = pointsInWindow(latencyPoints, start, end)
+	latencyValue := make([]float64, len(latencyPoints))
+	for i, point := range latencyPoints {
+		latencyValue[i] = point.Value
+	}
+	return c.writeTimeChunk(ctx, service, end, loadPoints, latencyValue, historical)
 }
 
-func (c *collector) writeTimeChunk(ctx context.Context, service *config.Service, end time.Time, loadValues, latencyValues []float64, historical bool) error {
+func pointsInWindow(points []prometheusPoint, start, end time.Time) []prometheusPoint {
+	filtered := points[:0]
+	for _, point := range points {
+		if point.Timestamp.After(start) && !point.Timestamp.After(end) {
+			filtered = append(filtered, point)
+		}
+	}
+	return filtered
+}
+
+func (c *collector) writeTimeChunk(ctx context.Context, service *config.Service, end time.Time, loadPoints []prometheusPoint, latencyValues []float64, historical bool) error {
+	loadValues := make([]float64, len(loadPoints))
+	for i, point := range loadPoints {
+		loadValues[i] = point.Value
+	}
 	loads := ecdf.CountSamples(loadValues)
 	latencies := ecdf.CountSamples(latencyValues)
 	chunk, err := ecdf.Encode(end, loads, latencies)
@@ -344,6 +364,10 @@ func (c *collector) writeTimeChunk(ctx context.Context, service *config.Service,
 		return err
 	}
 	if err := c.chunkStore.WriteChunk(service.Id, LoadLatencyIndicator, service.Generation, end, chunk); err != nil {
+		return err
+	}
+	observations, err := c.writeTimeOfDayChunks(service, loadPoints)
+	if err != nil {
 		return err
 	}
 	if c.analyzer != nil {
@@ -377,8 +401,63 @@ func (c *collector) writeTimeChunk(ctx context.Context, service *config.Service,
 				"error", submitErr,
 			)
 		}
+		if len(observations) > 0 {
+			timestamps := make([]time.Time, len(observations))
+			for i := range observations {
+				timestamps[i] = observations[i].Timestamp
+			}
+			todRequest := AnalysisRequest{Service: *service, IndicatorID: TimeOfDayIndicator, Timestamp: end,
+				Observations: observations, VerdictTimestamps: timestamps, Historical: historical}
+			if historical {
+				if queue, ok := c.analyzer.(contextualAnalysisQueue); ok {
+					submitErr = queue.SubmitContext(ctx, todRequest)
+				} else {
+					submitErr = c.analyzer.Submit(todRequest)
+				}
+			} else {
+				submitErr = c.analyzer.Submit(todRequest)
+			}
+			if submitErr != nil {
+				if historical {
+					return fmt.Errorf("queue historical time-of-day analysis: %w", submitErr)
+				}
+				slog.Error("failed to queue time-of-day analysis", "service_id", service.Id,
+					"indicator_id", TimeOfDayIndicator, "timestamp", end, "error", submitErr)
+			}
+		}
 	}
 	return nil
+}
+
+func (c *collector) writeTimeOfDayChunks(service *config.Service, points []prometheusPoint) ([]LoadObservation, error) {
+	if service.Interval <= 0 {
+		return nil, fmt.Errorf("invalid service interval")
+	}
+	observations := make([]LoadObservation, 0, len(points))
+	seen := make(map[time.Time]struct{}, len(points))
+	for _, point := range points {
+		timestamp := point.Timestamp.UTC().Truncate(time.Second)
+		if _, duplicate := seen[timestamp]; duplicate {
+			return nil, fmt.Errorf("duplicate load observation at %s", timestamp.Format(time.RFC3339))
+		}
+		seen[timestamp] = struct{}{}
+		x := timeOfDayBucket(timestamp, service.Interval)
+		chunk, err := ecdf.Encode(timestamp, []ecdf.Sample{{Value: x, Count: 1}}, []ecdf.Sample{{Value: point.Value, Count: 1}})
+		if err != nil {
+			return nil, err
+		}
+		if err := c.chunkStore.WriteChunk(service.Id, TimeOfDayIndicator, service.Generation, timestamp, chunk); err != nil {
+			return nil, err
+		}
+		observations = append(observations, LoadObservation{Timestamp: timestamp, Value: point.Value})
+	}
+	return observations, nil
+}
+
+func timeOfDayBucket(timestamp time.Time, interval time.Duration) float64 {
+	u := timestamp.UTC()
+	seconds := time.Duration(u.Hour())*time.Hour + time.Duration(u.Minute())*time.Minute + time.Duration(u.Second())*time.Second
+	return float64(seconds / interval)
 }
 
 func (c *collector) emit(serviceID int, kind, message string) {
