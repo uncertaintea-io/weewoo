@@ -16,9 +16,14 @@ type database struct {
 	db *sql.DB
 }
 
-// This key must match collection.LoadLatencyIndicator. The shared PostgreSQL
-// advisory lock prevents a material edit from racing an in-flight ECDF publish.
-const loadLatencyBaselineIndicatorID = 1
+// These keys must match the collection indicator IDs. Taking every publication
+// lock prevents a material edit from racing an in-flight ECDF publish.
+const (
+	loadLatencyBaselineIndicatorID = 1
+	timeOfDayBaselineIndicatorID   = 2
+)
+
+var baselinePublicationIndicatorIDs = []int{loadLatencyBaselineIndicatorID, timeOfDayBaselineIndicatorID}
 
 // gets the value for a given key from the config table and returns the value. If the key is not found it returns an error, if the key is empty it returns an error.
 func (c *database) GetConfig(key string) (string, error) {
@@ -197,8 +202,10 @@ func (c *database) updateService(ctx context.Context, service *Service, expected
 		return fmt.Errorf("insert service revision: %w", err)
 	}
 	if material {
-		if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1, $2)`, service.Id, loadLatencyBaselineIndicatorID); err != nil {
-			return fmt.Errorf("lock service baseline: %w", err)
+		for _, indicatorID := range baselinePublicationIndicatorIDs {
+			if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1, $2)`, service.Id, indicatorID); err != nil {
+				return fmt.Errorf("lock service baseline indicator %d: %w", indicatorID, err)
+			}
 		}
 		if _, err := tx.ExecContext(ctx, `DELETE FROM ecdf WHERE service_id=$1`, service.Id); err != nil {
 			return fmt.Errorf("invalidate service baseline: %w", err)

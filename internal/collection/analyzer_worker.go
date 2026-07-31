@@ -43,6 +43,11 @@ type LoadObservation struct {
 	Value     float64
 }
 
+type serviceGeneration struct {
+	serviceID  int
+	generation int64
+}
+
 type AnalysisQueue interface {
 	Submit(AnalysisRequest) error
 }
@@ -63,7 +68,7 @@ type AnalysisWorker struct {
 	cancel      context.CancelFunc
 	done        chan struct{}
 	stopOnce    sync.Once
-	timeOfDay   map[int][]LoadObservation
+	timeOfDay   map[serviceGeneration][]LoadObservation
 }
 
 func NewAnalysisWorker(cfg config.Config, jointStore ecdf.JointStore, chunks ecdf.ChunkStore, alerts alerting.AnalysisRecorder, capacity int) *AnalysisWorker {
@@ -81,7 +86,7 @@ func NewAnalysisWorker(cfg config.Config, jointStore ecdf.JointStore, chunks ecd
 		ctx:         ctx,
 		cancel:      cancel,
 		done:        make(chan struct{}),
-		timeOfDay:   make(map[int][]LoadObservation),
+		timeOfDay:   make(map[serviceGeneration][]LoadObservation),
 	}
 	go worker.run()
 	return worker
@@ -180,15 +185,21 @@ func (w *AnalysisWorker) analyze(request AnalysisRequest) {
 
 	var timeOfDayObservations []LoadObservation
 	if request.IndicatorID == TimeOfDayIndicator {
-		w.timeOfDay[request.Service.Id] = append(w.timeOfDay[request.Service.Id], request.Observations...)
+		key := serviceGeneration{serviceID: request.Service.Id, generation: request.Service.Generation}
+		w.timeOfDay[key] = append(w.timeOfDay[key], request.Observations...)
 		cutoff := request.Timestamp.Add(-5 * time.Minute)
-		observations := w.timeOfDay[request.Service.Id]
+		observations := w.timeOfDay[key]
 		first := 0
 		for first < len(observations) && observations[first].Timestamp.Before(cutoff) {
 			first++
 		}
-		w.timeOfDay[request.Service.Id] = slices.Clone(observations[first:])
-		timeOfDayObservations = w.timeOfDay[request.Service.Id]
+		w.timeOfDay[key] = slices.Clone(observations[first:])
+		timeOfDayObservations = w.timeOfDay[key]
+		for buffered := range w.timeOfDay {
+			if buffered.serviceID == key.serviceID && buffered.generation < key.generation {
+				delete(w.timeOfDay, buffered)
+			}
+		}
 	}
 	retryDelay := verdictRetryInitialDelay
 	for attempt := 1; attempt <= verdictMaxAttempts; attempt++ {
