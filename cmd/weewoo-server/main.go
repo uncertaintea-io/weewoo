@@ -164,8 +164,9 @@ func validateCreateService(request createServiceRequest) error {
 	if err != nil || parsedURL.Host == "" || (parsedURL.Scheme != "http" && parsedURL.Scheme != "https") {
 		return fmt.Errorf("prometheusUrl must be an HTTP or HTTPS URL")
 	}
-	if request.IntervalSeconds <= 0 {
-		return fmt.Errorf("intervalSeconds must be greater than zero")
+	minimumIntervalSeconds := int64(config.MinimumServiceInterval / time.Second)
+	if request.IntervalSeconds < minimumIntervalSeconds {
+		return fmt.Errorf("intervalSeconds must be at least %d", minimumIntervalSeconds)
 	}
 	if (request.ImportStart == nil) != (request.ImportEnd == nil) {
 		return fmt.Errorf("importStart and importEnd must be provided together")

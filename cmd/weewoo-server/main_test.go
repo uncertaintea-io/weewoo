@@ -351,6 +351,46 @@ func TestServiceAPIRejectsHistoricalRangeUnlessStartIsBeforeEnd(t *testing.T) {
 	assert.Nil(t, tracker.scheduled)
 }
 
+func TestServiceAPIRejectsIntervalBelowConfiguredMinimum(t *testing.T) {
+	cfg := config.NewFakeConfig()
+	monitor := newTrackingMonitor()
+	tracker := &fakeServiceCollector{}
+	handler := NewServiceAPIHandler(cfg, tracker, monitor, newImportManager(tracker, monitor), http.DefaultClient)
+	body := bytes.NewBufferString(`{
+		"name":"checkout", "prometheusUrl":"http://prometheus.example.com",
+		"loadQuery":"load", "latencyQuery":"latency", "intervalSeconds":14
+	}`)
+	recorder := httptest.NewRecorder()
+
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/api/services", body))
+
+	require.Equal(t, http.StatusBadRequest, recorder.Code)
+	assert.Equal(t, "intervalSeconds must be at least 15\n", recorder.Body.String())
+	services, err := cfg.ReadAllServices()
+	require.NoError(t, err)
+	assert.Empty(t, services)
+	assert.Nil(t, tracker.scheduled)
+}
+
+func TestServiceAPIAcceptsConfiguredMinimumInterval(t *testing.T) {
+	cfg := config.NewFakeConfig()
+	monitor := newTrackingMonitor()
+	tracker := &fakeServiceCollector{}
+	handler := NewServiceAPIHandler(cfg, tracker, monitor, newImportManager(tracker, monitor), http.DefaultClient)
+	body := bytes.NewBufferString(`{
+		"name":"checkout", "prometheusUrl":"http://prometheus.example.com",
+		"loadQuery":"load", "latencyQuery":"latency", "intervalSeconds":15
+	}`)
+	recorder := httptest.NewRecorder()
+
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/api/services", body))
+
+	require.Equal(t, http.StatusCreated, recorder.Code, recorder.Body.String())
+	service, err := cfg.ReadService(1)
+	require.NoError(t, err)
+	assert.Equal(t, config.MinimumServiceInterval, service.Interval)
+}
+
 func TestSleepHandlerReturnsSuccessfulPingAfterDelay(t *testing.T) {
 	delay := 20 * time.Millisecond
 	request := httptest.NewRequest(http.MethodGet, "/sleep", nil)
