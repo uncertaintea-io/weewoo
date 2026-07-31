@@ -34,6 +34,31 @@ type unreadableServiceConfig struct {
 	config.Config
 }
 
+type blockedJointStore struct {
+	entered   chan struct{}
+	release   chan struct{}
+	published chan struct{}
+}
+
+func (s *blockedJointStore) Publish(ctx context.Context, _ int, _ int, _ time.Time, build func(io.Writer) error) (int64, bool, error) {
+	close(s.entered)
+	select {
+	case <-s.release:
+	case <-ctx.Done():
+		return 0, false, ctx.Err()
+	}
+	var body bytes.Buffer
+	if err := build(&body); err != nil {
+		return 0, false, err
+	}
+	close(s.published)
+	return int64(body.Len()), true, nil
+}
+
+func (*blockedJointStore) ReadCurrent(context.Context, int, int) ([]byte, error) {
+	return nil, errors.New("not implemented")
+}
+
 func (unreadableServiceConfig) ReadService(int) (*config.Service, error) {
 	return nil, errors.New("configuration temporarily unavailable")
 }
@@ -182,6 +207,42 @@ func TestECDFBuilderDoesNotReuseChunksFromBeforeConfigurationChange(t *testing.T
 	select {
 	case <-joint.published:
 		t.Fatal("old-generation chunks produced a new baseline")
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
+func TestECDFBuilderDoesNotPublishAfterServiceGenerationChanges(t *testing.T) {
+	setFakeJECDF(t, "#!/bin/sh\ncat >/dev/null\necho -n 'old-generation-ecdf'\n")
+	cfg := config.NewFakeConfig()
+	service := &config.Service{Id: 7, Name: "api"}
+	require.NoError(t, cfg.WriteService(service))
+	require.NoError(t, cfg.SetConfig(ECDFBaselineChunksConfigKey, "1"))
+	chunks := ecdf.NewFakeChunkStore()
+	chunkTime := time.Now().Add(-30 * time.Minute)
+	chunk, err := ecdf.Encode(chunkTime, []ecdf.Sample{{Value: 1, Count: 1}}, []ecdf.Sample{{Value: 2, Count: 1}})
+	require.NoError(t, err)
+	require.NoError(t, chunks.WriteChunk(7, LoadLatencyIndicator, service.Generation, chunkTime, chunk))
+	joint := &blockedJointStore{
+		entered:   make(chan struct{}),
+		release:   make(chan struct{}),
+		published: make(chan struct{}),
+	}
+	scheduler := NewIntervalScheduler(WithSchedulerEventHandler(nil))
+	defer scheduler.Stop()
+
+	require.NoError(t, ScheduleECDFBuilder(7, chunks, joint, cfg, scheduler))
+	select {
+	case <-joint.entered:
+	case <-time.After(time.Second):
+		t.Fatal("publisher did not reach the advisory-lock boundary")
+	}
+	_, err = cfg.ResetServiceBaseline(context.Background(), service.Id, service.Revision, "test")
+	require.NoError(t, err)
+	close(joint.release)
+
+	select {
+	case <-joint.published:
+		t.Fatal("old-generation ECDF was published after baseline reset")
 	case <-time.After(50 * time.Millisecond):
 	}
 }

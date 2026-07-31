@@ -29,6 +29,8 @@ const (
 	defaultECDFBaselineChunks          = 10
 )
 
+var errServiceGenerationChanged = errors.New("service generation changed during ECDF publication")
+
 type CallbackType int
 
 const (
@@ -124,12 +126,23 @@ func ScheduleECDFBuilder(serviceID int, chunkStore ecdf.ChunkStore, jointStore e
 		}
 
 		bytesWritten, published, err := jointStore.Publish(buildCtx, serviceID, LoadLatencyIndicator, end, func(out io.Writer) error {
+			activeService, err := cfg.ReadService(serviceID)
+			if err != nil {
+				return fmt.Errorf("re-read service generation under publication lock: %w", err)
+			}
+			if activeService.Generation != service.Generation {
+				return fmt.Errorf("%w: started generation %d, active generation %d", errServiceGenerationChanged, service.Generation, activeService.Generation)
+			}
 			if err := ecdf.BuildJointECDFContextGeneration(buildCtx, chunkStore, serviceID, LoadLatencyIndicator, service.Generation, out); err != nil {
 				return fmt.Errorf("ECDF generation failed: %w", err)
 			}
 			return nil
 		})
 		if err != nil {
+			if errors.Is(err, errServiceGenerationChanged) {
+				slog.Info("discarding superseded joint ECDF publication", "service_id", serviceID, "indicator_id", LoadLatencyIndicator, "generation", service.Generation)
+				return IntervalSuccess()
+			}
 			stage := "publication"
 			if buildCtx.Err() != nil {
 				stage = "scheduled build deadline"
