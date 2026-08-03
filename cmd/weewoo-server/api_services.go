@@ -28,16 +28,29 @@ type serviceAPI struct {
 }
 
 type modelStatusReader interface {
-	Status(context.Context, *config.Service, int) (modelStatus, error)
+	ModelStatus(context.Context, *config.Service, int) (modelStatus, error)
 }
 
 type serviceAPIOptions struct {
+	Config      config.Config
+	Tracker     serviceCollector
+	Monitor     *trackingMonitor
+	Imports     *importManager
+	HTTPClient  *http.Client
 	Alerts      *alerting.Manager
 	ModelStatus modelStatusReader
 }
 
-func NewServiceAPIHandler(cfg config.Config, tracker serviceCollector, monitor *trackingMonitor, imports *importManager, client *http.Client, options serviceAPIOptions) http.Handler {
-	return &serviceAPI{cfg: cfg, tracker: tracker, monitor: monitor, imports: imports, httpClient: client, alerts: options.Alerts, models: options.ModelStatus}
+func NewServiceAPIHandler(options serviceAPIOptions) http.Handler {
+	return &serviceAPI{
+		cfg:        options.Config,
+		tracker:    options.Tracker,
+		monitor:    options.Monitor,
+		imports:    options.Imports,
+		httpClient: options.HTTPClient,
+		alerts:     options.Alerts,
+		models:     options.ModelStatus,
+	}
 }
 
 func (a *serviceAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -244,7 +257,7 @@ func (a *serviceAPI) response(service *config.Service) serviceResponse {
 	response.Tracking = a.monitor.status(service.Id)
 	response.Imports = a.imports.listForService(service.Id)
 	if a.models != nil {
-		if status, err := a.models.Status(context.Background(), service, collection.TimeOfDayIndicator); err == nil {
+		if status, err := a.models.ModelStatus(context.Background(), service, collection.TimeOfDayIndicator); err == nil {
 			response.TimeOfDayModel = status
 		}
 	}

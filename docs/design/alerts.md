@@ -23,7 +23,7 @@ accepted as normal, the condition resolves with that reason.
 
 Load vs. UTC Time of Day uses the same lifecycle and significance threshold as
 Load vs. Latency, while keeping independent Verdicts, Occurrences, and Review
-eligibility. Its window-level Verdict applies to all singleton load chunks
+eligibility. Its window-level Verdict applies to all load chunks
 collected by that scheduler window.
 
 Collection failures use one condition per service. Every attempt is an

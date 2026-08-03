@@ -16,7 +16,7 @@ type databaseModelStatusReader struct {
 	chunks ecdf.ChunkStore
 }
 
-func (r *databaseModelStatusReader) Status(ctx context.Context, service *config.Service, indicatorID int) (modelStatus, error) {
+func (r *databaseModelStatusReader) ModelStatus(ctx context.Context, service *config.Service, indicatorID int) (modelStatus, error) {
 	readiness, err := collection.ReadModelReadiness(ctx, r.cfg, r.chunks, service, indicatorID)
 	if err != nil {
 		return modelStatus{}, fmt.Errorf("read model readiness: %w", err)

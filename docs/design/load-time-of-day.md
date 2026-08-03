@@ -10,26 +10,30 @@ Its indicator ID is `2`; Load vs. Latency remains indicator ID `1`.
 
 The existing service scheduler remains the only collection scheduler, and its
 `interval_seconds` is also the Prometheus range-query step. The load range query
-must return one aggregate series. Every returned
-observation becomes a singleton Time chunk for indicator 2:
+must return one aggregate series. The observations returned for a collection
+window are stored together in one Time chunk for indicator 2:
 
-- the database and encoded timestamp are the observation's UTC timestamp at
-  whole-second precision;
-- X is `floor(seconds since UTC midnight / service interval_seconds)`;
-- Y is the observed load;
-- a service interval that does not divide a day has one shorter final bucket.
+- the chunk has one database and encoded timestamp at whole-second UTC
+  precision;
+- each load sample contributes an X and Y pair to that chunk;
+- X is the sample's whole number of seconds since UTC midnight;
+- Y is that sample's observed load;
+- the service interval controls sampling cadence but does not scale or otherwise
+  transform X.
 
-Several observations may have the same X bucket while retaining distinct chunk
-timestamps. Writes are idempotent. If any indicator-2 write fails, the complete
+One chunk may therefore contain several load samples under the same chunk
+timestamp. Writes are idempotent. If an indicator-2 write fails, the complete
 collection window fails and is retried. Historical imports create the same
 chunks and count toward learning, but never emit live historical alerts.
 
 ## Learning and publication
 
-A bucket is trained after it contains eligible observations from five distinct
-UTC dates. The model is ready when at least 95% of
-`ceil(86,400 / interval_seconds)` buckets are trained. Counts use eligible
-Baseline and Good chunks plus reviewed Bad chunks accepted as normal; raw
+A time-of-day position is trained after it contains eligible observations from
+five distinct UTC dates. The model is ready when at least 95% of the
+`ceil(86,400 / interval_seconds)` expected daily sampling positions are trained.
+The interval determines the expected sampling positions for this readiness
+calculation; their X coordinates remain seconds since midnight. Counts use
+eligible Baseline and Good chunks plus reviewed Bad chunks accepted as normal; raw
 observation counts cannot satisfy the distinct-day requirement.
 
 The hourly ECDF publisher defers indicator 2 until it is ready, then publishes
@@ -46,17 +50,16 @@ last published artifact remains stored and is replaced after readiness returns.
 
 Analysis covers the trailing five minutes of timestamped load observations,
 independent of scheduler interval. Each observation is queried against the
-conditional JECDF for its UTC bucket and converted to a historical percentile.
-A two-sided one-sample KS test compares those percentiles with the uniform
-distribution using the existing significance threshold.
+conditional JECDF at its UTC second-of-day and converted to a historical
+percentile. A two-sided one-sample KS test compares those percentiles with the
+uniform distribution using the existing significance threshold.
 
-One scheduler window produces one result. Its verdict applies to every new
-indicator-2 singleton chunk written by that window, and it creates at most one
-alert occurrence. The existing lifecycle applies: the first Bad result opens a
-warning, three consecutive Bad results escalate to critical, and a Good result
-resolves the condition. Alert evidence identifies whether load shifted higher
-or lower. Indicator-2 verdicts, reviews, eligibility, and alerts remain separate
-from indicator 1.
+The indicator-2 chunk written for a scheduler window receives that window's
+single result, which creates at most one alert occurrence. The existing
+lifecycle applies: the first Bad result opens a warning, three consecutive Bad
+results escalate to critical, and a Good result resolves the condition. Alert
+evidence identifies whether load shifted higher or lower. Indicator-2 verdicts,
+reviews, eligibility, and alerts remain separate from indicator 1.
 
 ## Status and known limits
 

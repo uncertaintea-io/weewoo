@@ -306,7 +306,12 @@ func main() {
 	registerAPIHandlers(
 		appMux,
 		observeRequestDuration(NewAlertAPIHandler(alertManager)),
-		observeRequestDuration(NewServiceAPIHandler(cfg, tracker, monitor, imports, http.DefaultClient, serviceAPIOptions{
+		observeRequestDuration(NewServiceAPIHandler(serviceAPIOptions{
+			Config:      cfg,
+			Tracker:     tracker,
+			Monitor:     monitor,
+			Imports:     imports,
+			HTTPClient:  http.DefaultClient,
 			Alerts:      alertManager,
 			ModelStatus: &databaseModelStatusReader{db: db, cfg: cfg, chunks: chunkStore},
 		})),

@@ -51,7 +51,7 @@ func analyzeTimeOfDay(ctx context.Context, cfg config.Config, jointStore ecdf.Jo
 		if observation.Timestamp.Before(cutoff) || observation.Timestamp.After(windowEnd) {
 			continue
 		}
-		cdf, available, queryErr := queryConditionalECDF(ctx, joint, timeOfDayBucket(observation.Timestamp, service.Interval))
+		cdf, available, queryErr := queryJointECDF(ctx, joint, timeOfDayBucket(observation.Timestamp, service.Interval))
 		if queryErr != nil {
 			return false, fmt.Errorf("query time-of-day ECDF: %w", queryErr)
 		}
@@ -65,6 +65,10 @@ func analyzeTimeOfDay(ctx context.Context, cfg config.Config, jointStore ecdf.Jo
 	if len(percentiles) == 0 {
 		return false, fmt.Errorf("time-of-day analysis window has no observations")
 	}
+	// If current loads follow the time-of-day reference, their reference CDF
+	// percentiles follow a uniform distribution on [0, 1]. Use a one-sample KS
+	// test against that uniform CDF to detect a shift across the window without
+	// requiring a second sample of historical observations.
 	percentileSamples := ecdf.CountSamples(percentiles)
 	result := oneSampleKS(func(value float64) float64 {
 		if value < 0 {

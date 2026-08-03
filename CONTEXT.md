@@ -9,7 +9,7 @@ A service's collected load and latency observations for one sampling interval.
 _Avoid_: Sample
 
 **Time-of-day chunk**:
-A singleton observation used by the Load vs. UTC Time of Day indicator. Its X
+An observation used by the Load vs. UTC Time of Day indicator. Its X
 value is the service-interval bucket since UTC midnight and its Y value is load.
 Its durable timestamp is the original UTC Prometheus observation time.
 

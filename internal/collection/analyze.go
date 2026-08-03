@@ -70,7 +70,7 @@ func analyzeSample(ctx context.Context, cfg config.Config, jointStore ecdf.Joint
 	}
 
 	loadValue := weightedMean(loads)
-	cdf, available, err := queryConditionalECDF(ctx, jointECDF, loadValue)
+	cdf, available, err := queryJointECDF(ctx, jointECDF, loadValue)
 	if err != nil {
 		return false, fmt.Errorf("failed to query joint ECDF: %w", err)
 	}
@@ -113,7 +113,7 @@ func analyzeSample(ctx context.Context, cfg config.Config, jointStore ecdf.Joint
 	return anomalous, nil
 }
 
-func queryConditionalECDF(ctx context.Context, joint []byte, x float64) (func(float64) float64, bool, error) {
+func queryJointECDF(ctx context.Context, joint []byte, x float64) (func(float64) float64, bool, error) {
 	cdf, err := ecdf.Query(ctx, joint, x)
 	if err != nil {
 		return nil, false, err
@@ -160,6 +160,11 @@ func isActiveGeneration(cfg config.Config, service *config.Service) (bool, error
 	return false, nil
 }
 
+// readReference loads the currently published joint ECDF for an indicator. The
+// reference is the comparison model built from eligible chunks from earlier
+// collection windows. If no reference has been published yet, readReference
+// records the current chunks as baseline data and returns baseline=true so the
+// caller can skip anomaly analysis for this window.
 func readReference(ctx context.Context, joints ecdf.JointStore, chunks ecdf.ChunkStore, alerts alerting.AnalysisRecorder, service *config.Service, indicatorID int, timestamps []time.Time) ([]byte, bool, error) {
 	joint, err := joints.ReadCurrent(ctx, service.Id, indicatorID)
 	if !errors.Is(err, sql.ErrNoRows) {
@@ -171,6 +176,11 @@ func readReference(ctx context.Context, joints ecdf.JointStore, chunks ecdf.Chun
 	return nil, true, nil
 }
 
+// recordBaseline marks chunks as eligible input for the first reference model
+// without claiming that they passed anomaly analysis. It is intended for data
+// collected while no usable reference exists, when comparison against prior
+// behavior is not yet possible. Once a reference is available, callers should
+// persist a Good or Bad verdict with recordAnalysisResult instead.
 func recordBaseline(ctx context.Context, chunks ecdf.ChunkStore, alerts alerting.AnalysisRecorder, service *config.Service, indicatorID int, timestamps []time.Time) error {
 	for _, timestamp := range timestamps {
 		var err error
@@ -188,10 +198,19 @@ func recordBaseline(ctx context.Context, chunks ecdf.ChunkStore, alerts alerting
 	return nil
 }
 
+// recordAnalysisResult applies one comparison result to the chunks named by
+// timestamps. Callers must order timestamps from oldest to newest; the final
+// timestamp is the primary chunk representing the scheduler window. Every
+// chunk receives the same Good or Bad verdict for future model eligibility,
+// but only a live primary chunk is allowed to advance the alert lifecycle.
 func recordAnalysisResult(ctx context.Context, cfg config.Config, chunks ecdf.ChunkStore, alerts alerting.AnalysisRecorder, service *config.Service, indicatorID int, timestamps []time.Time, historical bool, result analysisResult) error {
 	if len(timestamps) == 0 {
 		return fmt.Errorf("analysis has no chunks")
 	}
+
+	// A time-of-day window may contain several chunks, but it represents one
+	// analysis event. Persist verdicts for all earlier chunks directly so they
+	// affect eligibility without creating additional alert occurrences.
 	primary := timestamps[len(timestamps)-1]
 	for _, timestamp := range timestamps[:len(timestamps)-1] {
 		if chunks == nil {
@@ -201,6 +220,9 @@ func recordAnalysisResult(ctx context.Context, cfg config.Config, chunks ecdf.Ch
 			return fmt.Errorf("%w: %w", errVerdictPersistence, err)
 		}
 	}
+
+	// Historical analysis must not change live alert state. A nil alert recorder
+	// uses the same direct-persistence path for deployments without alerting.
 	if historical || alerts == nil {
 		if chunks == nil {
 			return fmt.Errorf("nil chunk store")
@@ -210,6 +232,9 @@ func recordAnalysisResult(ctx context.Context, cfg config.Config, chunks ecdf.Ch
 		}
 		return nil
 	}
+
+	// Delegate the live primary result to the alert recorder, which persists its
+	// verdict and updates the service's alert condition as one operation.
 	generatorURL, _ := cfg.GetConfig("alert_generator_url")
 	if err := alerts.RecordAnalysis(ctx, alerting.AnalysisOutcome{ServiceID: service.Id, ServiceName: service.Name,
 		IndicatorID: indicatorID, Indicator: result.indicator, Timestamp: primary, Load: result.load,

@@ -41,6 +41,13 @@ func (c *fakeServiceCollector) Schedule(service *config.Service) error {
 	return nil
 }
 
+func newTestServiceAPIHandler(cfg config.Config, tracker serviceCollector, monitor *trackingMonitor) http.Handler {
+	return NewServiceAPIHandler(serviceAPIOptions{
+		Config: cfg, Tracker: tracker, Monitor: monitor,
+		Imports: newImportManager(tracker, monitor), HTTPClient: http.DefaultClient,
+	})
+}
+
 func TestLiveServiceTrackerSchedulesCollectionAndPublishing(t *testing.T) {
 	collector := &fakeServiceCollector{}
 	builderServiceID := 0
@@ -114,7 +121,7 @@ func TestAppRoutesListRequestsThroughLiveServiceAPI(t *testing.T) {
 	monitor := newTrackingMonitor()
 	monitor.record(service.Id, "healthy", "collection_succeeded", "collected", time.Now().UTC())
 	tracker := &fakeServiceCollector{}
-	apiHandler := NewServiceAPIHandler(cfg, tracker, monitor, newImportManager(tracker, monitor), http.DefaultClient, serviceAPIOptions{})
+	apiHandler := newTestServiceAPIHandler(cfg, tracker, monitor)
 	appHandler := http.NewServeMux()
 	registerAPIHandlers(appHandler, http.NotFoundHandler(), apiHandler)
 	recorder := httptest.NewRecorder()
@@ -136,7 +143,10 @@ func TestServiceAPIReportsTrackingStatusAndDeletesService(t *testing.T) {
 	monitor.record(service.Id, "healthy", "collection_succeeded", "collected", now)
 	tracker := &fakeServiceCollector{}
 	imports := newImportManager(tracker, monitor)
-	handler := NewServiceAPIHandler(cfg, tracker, monitor, imports, http.DefaultClient, serviceAPIOptions{})
+	handler := NewServiceAPIHandler(serviceAPIOptions{
+		Config: cfg, Tracker: tracker, Monitor: monitor,
+		Imports: imports, HTTPClient: http.DefaultClient,
+	})
 
 	getRecorder := httptest.NewRecorder()
 	handler.ServeHTTP(getRecorder, httptest.NewRequest(http.MethodGet, "/api/services/1", nil))
@@ -162,7 +172,7 @@ func TestServiceAPIReturnsEmptyArrayForServiceWithoutConfigurationHistory(t *tes
 	require.NoError(t, cfg.WriteService(service))
 	monitor := newTrackingMonitor()
 	tracker := &fakeServiceCollector{}
-	handler := NewServiceAPIHandler(cfg, tracker, monitor, newImportManager(tracker, monitor), http.DefaultClient, serviceAPIOptions{})
+	handler := newTestServiceAPIHandler(cfg, tracker, monitor)
 	recorder := httptest.NewRecorder()
 
 	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/services/1/history", nil))
@@ -180,7 +190,7 @@ func TestServiceAPIUpdatesConfigurationAsANewAuditedGeneration(t *testing.T) {
 	require.NoError(t, cfg.WriteService(service))
 	monitor := newTrackingMonitor()
 	tracker := &fakeServiceCollector{}
-	handler := NewServiceAPIHandler(cfg, tracker, monitor, newImportManager(tracker, monitor), http.DefaultClient, serviceAPIOptions{})
+	handler := newTestServiceAPIHandler(cfg, tracker, monitor)
 	body := bytes.NewBufferString(`{
 		"name":"checkout", "prometheusUrl":"http://prometheus.example.com",
 		"loadQuery":"new_load", "latencyQuery":"new_latency",
@@ -216,7 +226,7 @@ func TestServiceAPIResetsBaselineForNewServiceVersion(t *testing.T) {
 	require.NoError(t, cfg.WriteService(service))
 	monitor := newTrackingMonitor()
 	tracker := &fakeServiceCollector{}
-	handler := NewServiceAPIHandler(cfg, tracker, monitor, newImportManager(tracker, monitor), http.DefaultClient, serviceAPIOptions{})
+	handler := newTestServiceAPIHandler(cfg, tracker, monitor)
 	recorder := httptest.NewRecorder()
 
 	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/api/services/1/baseline-reset", nil))
@@ -246,7 +256,7 @@ func TestServiceAPIPauseAndResumeAreRevisionedAndAudited(t *testing.T) {
 	require.NoError(t, cfg.WriteService(service))
 	monitor := newTrackingMonitor()
 	tracker := &fakeServiceCollector{}
-	handler := NewServiceAPIHandler(cfg, tracker, monitor, newImportManager(tracker, monitor), http.DefaultClient, serviceAPIOptions{})
+	handler := newTestServiceAPIHandler(cfg, tracker, monitor)
 
 	pause := httptest.NewRecorder()
 	handler.ServeHTTP(pause, httptest.NewRequest(http.MethodPost, "/api/services/1/pause", nil))
@@ -280,7 +290,10 @@ func TestServiceAPITestsBothQueriesBeforeActivation(t *testing.T) {
 	})}
 	cfg := config.NewFakeConfig()
 	tracker := &fakeServiceCollector{}
-	handler := NewServiceAPIHandler(cfg, tracker, newTrackingMonitor(), newImportManager(tracker, newTrackingMonitor()), client, serviceAPIOptions{})
+	handler := NewServiceAPIHandler(serviceAPIOptions{
+		Config: cfg, Tracker: tracker, Monitor: newTrackingMonitor(),
+		Imports: newImportManager(tracker, newTrackingMonitor()), HTTPClient: client,
+	})
 	body := bytes.NewBufferString(fmt.Sprintf(`{
 		"name":"checkout", "prometheusUrl":%q, "loadQuery":"load",
 		"latencyQuery":"latency", "intervalSeconds":60
@@ -312,7 +325,10 @@ func TestServiceAPICreatesBackgroundImport(t *testing.T) {
 	monitor := newTrackingMonitor()
 	tracker := &fakeServiceCollector{}
 	imports := newImportManager(tracker, monitor)
-	handler := NewServiceAPIHandler(cfg, tracker, monitor, imports, http.DefaultClient, serviceAPIOptions{})
+	handler := NewServiceAPIHandler(serviceAPIOptions{
+		Config: cfg, Tracker: tracker, Monitor: monitor,
+		Imports: imports, HTTPClient: http.DefaultClient,
+	})
 	body := bytes.NewBufferString(`{
 		"name":"checkout", "prometheusUrl":"http://prometheus.example.com",
 		"loadQuery":"load", "latencyQuery":"latency", "intervalSeconds":60,
@@ -333,7 +349,7 @@ func TestServiceAPIRejectsHistoricalRangeUnlessStartIsBeforeEnd(t *testing.T) {
 	cfg := config.NewFakeConfig()
 	monitor := newTrackingMonitor()
 	tracker := &fakeServiceCollector{}
-	handler := NewServiceAPIHandler(cfg, tracker, monitor, newImportManager(tracker, monitor), http.DefaultClient, serviceAPIOptions{})
+	handler := newTestServiceAPIHandler(cfg, tracker, monitor)
 	body := bytes.NewBufferString(`{
 		"name":"checkout", "prometheusUrl":"http://prometheus.example.com",
 		"loadQuery":"load", "latencyQuery":"latency", "intervalSeconds":60,
@@ -355,7 +371,9 @@ func TestServiceAPIRejectsIntervalBelowConfiguredMinimum(t *testing.T) {
 	cfg := config.NewFakeConfig()
 	monitor := newTrackingMonitor()
 	tracker := &fakeServiceCollector{}
-	handler := NewServiceAPIHandler(cfg, tracker, monitor, newImportManager(tracker, monitor), http.DefaultClient, serviceAPIOptions{})
+	handler := newTestServiceAPIHandler(cfg, tracker, monitor)
+	// The configured minimum is 15 seconds, so this request exercises the
+	// validation path with an interval one second below the allowed boundary.
 	body := bytes.NewBufferString(`{
 		"name":"checkout", "prometheusUrl":"http://prometheus.example.com",
 		"loadQuery":"load", "latencyQuery":"latency", "intervalSeconds":14
@@ -366,6 +384,8 @@ func TestServiceAPIRejectsIntervalBelowConfiguredMinimum(t *testing.T) {
 
 	require.Equal(t, http.StatusBadRequest, recorder.Code)
 	assert.Equal(t, "intervalSeconds must be at least 15\n", recorder.Body.String())
+	// Rejected service creation must have no side effects: it is neither saved
+	// in configuration nor handed to the live collector for scheduling.
 	services, err := cfg.ReadAllServices()
 	require.NoError(t, err)
 	assert.Empty(t, services)
@@ -376,7 +396,7 @@ func TestServiceAPIAcceptsConfiguredMinimumInterval(t *testing.T) {
 	cfg := config.NewFakeConfig()
 	monitor := newTrackingMonitor()
 	tracker := &fakeServiceCollector{}
-	handler := NewServiceAPIHandler(cfg, tracker, monitor, newImportManager(tracker, monitor), http.DefaultClient, serviceAPIOptions{})
+	handler := newTestServiceAPIHandler(cfg, tracker, monitor)
 	body := bytes.NewBufferString(`{
 		"name":"checkout", "prometheusUrl":"http://prometheus.example.com",
 		"loadQuery":"load", "latencyQuery":"latency", "intervalSeconds":15
