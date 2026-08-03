@@ -26,7 +26,7 @@ func TestRenderJointECDFWithRealTool(t *testing.T) {
 	)
 	require.NoError(t, err)
 	store := NewFakeChunkStore()
-	require.NoError(t, store.WriteChunk(serviceID, indicatorID, timestamp, chunk))
+	require.NoError(t, store.WriteChunk(serviceID, indicatorID, 1, timestamp, chunk))
 
 	var jointECDF bytes.Buffer
 	require.NoError(t, BuildJointECDFContext(context.Background(), store, serviceID, indicatorID, &jointECDF))
@@ -41,8 +41,8 @@ func TestRenderJointECDFWithRealTool(t *testing.T) {
 	assert.Equal(t, 100.0, response.YMin)
 	assert.Equal(t, 200.0, response.YMax)
 	assert.InDeltaSlice(t, []float64{
-		0.02144660940672627, 0.125,
-		0.10355339059327373, 0,
+		0.07322330470336313, 0.07322330470336313,
+		0.051776695296636865, 0.051776695296636865,
 	}, response.Masses, 1e-12)
 }
 
