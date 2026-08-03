@@ -1,12 +1,12 @@
 package ecdf
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 )
 
@@ -27,9 +27,8 @@ func runJECDF(ctx context.Context, args []string, input jecdfInputWriter, output
 		return fmt.Errorf("failed to open jecdf stdin: %w", err)
 	}
 
-	var stderr bytes.Buffer
 	cmd.Stdout = output
-	cmd.Stderr = &stderr
+	cmd.Stderr = os.Stderr
 
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("failed to start jecdf: %w", err)
@@ -57,9 +56,6 @@ func runJECDF(ctx context.Context, args []string, input jecdfInputWriter, output
 		return ctx.Err()
 	}
 	if waitErr != nil {
-		if stderr.Len() > 0 {
-			return fmt.Errorf("jecdf failed: %w: %s", waitErr, stderr.String())
-		}
 		return fmt.Errorf("jecdf failed: %w", waitErr)
 	}
 	return err

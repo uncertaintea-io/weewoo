@@ -129,6 +129,20 @@ export interface AlertRecord {
   events: AlertEvent[];
 }
 
+export interface JointECDFRender {
+  width: number;
+  height: number;
+  xMin: number;
+  xMax: number;
+  yMin: number;
+  yMax: number;
+  /** Image-row order: X varies fastest and rows run from yMax to yMin. */
+  masses: number[];
+}
+
+export const JECDF_RENDER_OPTION_LOG_X = 1;
+export const JECDF_RENDER_OPTION_LOG_Y = 2;
+
 type Fetcher = typeof fetch;
 
 export class ServicesApiError extends Error {
@@ -282,6 +296,38 @@ function parseAlert(value: unknown): AlertRecord {
   };
 }
 
+function parseJointECDFRender(value: unknown): JointECDFRender {
+  if (!isRecord(value)) {
+    throw new Error('Joint ECDF response must be an object.');
+  }
+
+  const width = readNumber(value.width, 'width');
+  const height = readNumber(value.height, 'height');
+  if (!Number.isInteger(width) || width < 2 || !Number.isInteger(height) || height < 2) {
+    throw new Error('Joint ECDF response dimensions must be integers of at least 2.');
+  }
+
+  const xMin = readNumber(value.xMin, 'xMin');
+  const xMax = readNumber(value.xMax, 'xMax');
+  const yMin = readNumber(value.yMin, 'yMin');
+  const yMax = readNumber(value.yMax, 'yMax');
+  if (xMin > xMax || yMin > yMax) {
+    throw new Error('Joint ECDF response bounds are invalid.');
+  }
+  if (!Array.isArray(value.masses) || value.masses.length !== width * height) {
+    throw new Error(`Joint ECDF response must contain ${String(width * height)} cell masses.`);
+  }
+  const masses = value.masses.map((mass, index) => {
+    const parsed = readNumber(mass, `masses[${String(index)}]`);
+    if (parsed < 0 || parsed > 1) {
+      throw new Error(`Joint ECDF response mass at index ${String(index)} must be between 0 and 1.`);
+    }
+    return parsed;
+  });
+
+  return { width, height, xMin, xMax, yMin, yMax, masses };
+}
+
 async function serviceRequest(path: string, init: RequestInit, fetcher: Fetcher): Promise<Service> {
   const response = await fetcher(path, init);
   if (!response.ok) throw await readServiceError(response);
@@ -398,6 +444,23 @@ export async function ListAlerts(includeHistory = true, fetcher: Fetcher = fetch
   const body: unknown = await response.json();
   if (!Array.isArray(body)) throw new Error('Alerts response must be an array.');
   return body.map(parseAlert);
+}
+
+export async function GetJointECDF(
+  serviceID: number,
+  indicatorID: number,
+  options = 0,
+  fetcher: Fetcher = fetch,
+): Promise<JointECDFRender> {
+  const optionsQuery = options === 0
+    ? ''
+    : `&options=${encodeURIComponent(String(options))}`;
+  const response = await fetcher(
+    `/api/jecdf?serviceId=${encodeURIComponent(String(serviceID))}&indicatorId=${encodeURIComponent(String(indicatorID))}${optionsQuery}`,
+    { headers: { Accept: 'application/json' } },
+  );
+  if (!response.ok) throw await readServiceError(response);
+  return parseJointECDFRender(await response.json());
 }
 
 export async function ReviewAlertOccurrence(

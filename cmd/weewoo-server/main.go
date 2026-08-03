@@ -316,6 +316,7 @@ func main() {
 			ModelStatus: &databaseModelStatusReader{db: db, cfg: cfg, chunks: chunkStore},
 		})),
 	)
+	appMux.Handle("/api/jecdf", observeRequestDuration(NewJointECDFAPIHandler(jointStore)))
 	//edit this to change the sleep time
 	appMux.Handle("/sleep", observeRequestDuration(SleepHandler(sleep_duration)))
 	//Serve files from static folder
