@@ -327,12 +327,12 @@ func (c *collector) collectSamples(ctx context.Context, service *config.Service,
 	historical := len(historicalOption) > 0 && historicalOption[0]
 	loadPoints, err := queryPrometheusRangePointsAtStep(ctx, c.client, service.PrometheusURL, service.LoadQuery, start, end, service.Interval)
 	if err != nil {
-		return err
+		return prometheusQueryFailure("load", service.LoadQuery, err)
 	}
 	loadPoints = pointsInWindow(loadPoints, start, end)
 	latencyPoints, err := queryPrometheusRangePointsAtStep(ctx, c.client, service.PrometheusURL, service.LatencyQuery, start, end, service.Interval)
 	if err != nil {
-		return err
+		return prometheusQueryFailure("latency", service.LatencyQuery, err)
 	}
 	latencyPoints = pointsInWindow(latencyPoints, start, end)
 	latencyValue := make([]float64, len(latencyPoints))
@@ -340,6 +340,10 @@ func (c *collector) collectSamples(ctx context.Context, service *config.Service,
 		latencyValue[i] = point.Value
 	}
 	return c.writeCollectedIndicators(ctx, service, end, loadPoints, latencyValue, historical)
+}
+
+func prometheusQueryFailure(metric, query string, err error) error {
+	return fmt.Errorf("Prometheus %s query %q failed: %w", metric, query, err)
 }
 
 func pointsInWindow(points []prometheusPoint, start, end time.Time) []prometheusPoint {

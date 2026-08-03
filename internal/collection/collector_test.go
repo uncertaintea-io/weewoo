@@ -59,6 +59,50 @@ func TestCollectionSucceedsWhenAnalysisFails(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestCollectionFailureIdentifiesThePrometheusQuery(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": {"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"status":"success","data":{"result":[]}}`)),
+		}, nil
+	})}
+	collector := &collector{client: client, chunkStore: ecdf.NewFakeChunkStore()}
+	service := &config.Service{
+		Id: 1, Name: "checkout", PrometheusURL: "http://prometheus.example",
+		LoadQuery: "sum(rate(http_requests_total[5m]))", LatencyQuery: "histogram_quantile(0.99, latency_bucket)", Interval: time.Minute,
+	}
+
+	err := collector.collectSamples(context.Background(), service, time.Unix(0, 0), time.Unix(60, 0))
+
+	require.EqualError(t, err, `Prometheus load query "sum(rate(http_requests_total[5m]))" failed: no data returned`)
+}
+
+func TestCollectionFailureIdentifiesTheLatencyQuery(t *testing.T) {
+	requests := 0
+	client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		requests++
+		body := `{"status":"success","data":{"result":[{"values":[[60,"1"]]}]}}`
+		if requests == 2 {
+			body = `{"status":"success","data":{"result":[]}}`
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": {"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(body)),
+		}, nil
+	})}
+	collector := &collector{client: client, chunkStore: ecdf.NewFakeChunkStore()}
+	service := &config.Service{
+		Id: 1, Name: "checkout", PrometheusURL: "http://prometheus.example",
+		LoadQuery: "sum(rate(http_requests_total[5m]))", LatencyQuery: "histogram_quantile(0.99, latency_bucket)", Interval: time.Minute,
+	}
+
+	err := collector.collectSamples(context.Background(), service, time.Unix(0, 0), time.Unix(60, 0))
+
+	require.EqualError(t, err, `Prometheus latency query "histogram_quantile(0.99, latency_bucket)" failed: no data returned`)
+}
+
 func TestHistoricalImportBatchesAYearBelowPrometheusPointLimit(t *testing.T) {
 	const maxPoints = 10_000
 	var (
