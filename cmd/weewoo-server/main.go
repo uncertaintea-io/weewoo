@@ -77,6 +77,14 @@ type serviceResponse struct {
 	BaselineResetAt *time.Time     `json:"baselineResetAt,omitempty"`
 	Tracking        trackingStatus `json:"tracking"`
 	Imports         []importJob    `json:"imports"`
+	TimeOfDayModel  modelStatus    `json:"timeOfDayModel"`
+}
+
+type modelStatus struct {
+	State       string     `json:"state"`
+	Coverage    float64    `json:"coverage"`
+	Required    int        `json:"requiredDays"`
+	LatestBuild *time.Time `json:"latestBuild,omitempty"`
 }
 
 type createServiceRequest struct {
@@ -133,6 +141,7 @@ func newServiceResponse(service *config.Service) serviceResponse {
 		Generation:      service.Generation,
 		Tracking:        trackingStatus{State: "pending", Activity: []activityEntry{}},
 		Imports:         []importJob{},
+		TimeOfDayModel:  modelStatus{State: "learning", Required: 5},
 	}
 	if !service.BaselineResetAt.IsZero() {
 		resetAt := service.BaselineResetAt
@@ -155,8 +164,9 @@ func validateCreateService(request createServiceRequest) error {
 	if err != nil || parsedURL.Host == "" || (parsedURL.Scheme != "http" && parsedURL.Scheme != "https") {
 		return fmt.Errorf("prometheusUrl must be an HTTP or HTTPS URL")
 	}
-	if request.IntervalSeconds <= 0 {
-		return fmt.Errorf("intervalSeconds must be greater than zero")
+	minimumIntervalSeconds := int64(config.MinimumServiceInterval / time.Second)
+	if request.IntervalSeconds < minimumIntervalSeconds {
+		return fmt.Errorf("intervalSeconds must be at least %d", minimumIntervalSeconds)
 	}
 	if (request.ImportStart == nil) != (request.ImportEnd == nil) {
 		return fmt.Errorf("importStart and importEnd must be provided together")
@@ -296,7 +306,15 @@ func main() {
 	registerAPIHandlers(
 		appMux,
 		observeRequestDuration(NewAlertAPIHandler(alertManager)),
-		observeRequestDuration(NewServiceAPIHandler(cfg, tracker, monitor, imports, http.DefaultClient, alertManager)),
+		observeRequestDuration(NewServiceAPIHandler(serviceAPIOptions{
+			Config:      cfg,
+			Tracker:     tracker,
+			Monitor:     monitor,
+			Imports:     imports,
+			HTTPClient:  http.DefaultClient,
+			Alerts:      alertManager,
+			ModelStatus: &databaseModelStatusReader{db: db, cfg: cfg, chunks: chunkStore},
+		})),
 	)
 	//edit this to change the sleep time
 	appMux.Handle("/sleep", observeRequestDuration(SleepHandler(sleep_duration)))

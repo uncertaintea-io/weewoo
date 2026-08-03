@@ -41,3 +41,17 @@ func TestQueryPrometheusRangeIncludesPrometheusErrorDetails(t *testing.T) {
 		err.Error(),
 	)
 }
+
+func TestQueryPrometheusRangePointsUsesRequestedServiceStep(t *testing.T) {
+	var step string
+	client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		step = request.URL.Query().Get("step")
+		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"application/json"}},
+			Body: io.NopCloser(strings.NewReader(`{"status":"success","data":{"result":[{"values":[[30,"1"]]}]}}`))}, nil
+	})}
+
+	_, err := queryPrometheusRangePointsAtStep(context.Background(), client, "http://prometheus.example.com", "load", time.Unix(0, 0), time.Unix(30, 0), 30*time.Second)
+
+	require.NoError(t, err)
+	assert.Equal(t, "30s", step)
+}

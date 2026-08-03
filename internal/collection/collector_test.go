@@ -138,7 +138,7 @@ func TestHistoricalImportContinuesAfterBatchWithNoData(t *testing.T) {
 
 type importRecordingChunkStore struct {
 	ecdf.ChunkStore
-	timestamps []time.Time
+	timestamps map[int][]time.Time
 }
 
 type backpressureAnalysisQueue struct {
@@ -155,7 +155,7 @@ func (q *backpressureAnalysisQueue) SubmitContext(_ context.Context, _ AnalysisR
 }
 
 func (s *importRecordingChunkStore) WriteChunk(serviceID, indicatorID int, generation int64, timestamp time.Time, chunk []byte) error {
-	s.timestamps = append(s.timestamps, timestamp)
+	s.timestamps[indicatorID] = append(s.timestamps[indicatorID], timestamp)
 	return s.ChunkStore.WriteChunk(serviceID, indicatorID, generation, timestamp, chunk)
 }
 
@@ -173,7 +173,7 @@ func TestHistoricalImportWritesOneTimeChunkPerServiceInterval(t *testing.T) {
 			Body:       io.NopCloser(strings.NewReader(body)),
 		}, nil
 	})}
-	chunks := &importRecordingChunkStore{ChunkStore: ecdf.NewFakeChunkStore()}
+	chunks := &importRecordingChunkStore{ChunkStore: ecdf.NewFakeChunkStore(), timestamps: make(map[int][]time.Time)}
 	collector := &collector{client: client, chunkStore: chunks}
 	service := &config.Service{
 		Id: 1, Name: "checkout", PrometheusURL: "http://prometheus.example",
@@ -183,7 +183,8 @@ func TestHistoricalImportWritesOneTimeChunkPerServiceInterval(t *testing.T) {
 	_, err := collector.Import(context.Background(), service, start, start.Add(2*time.Hour), nil)
 
 	require.NoError(t, err)
-	require.Equal(t, []time.Time{start.Add(time.Hour), start.Add(2 * time.Hour)}, chunks.timestamps)
+	require.Equal(t, []time.Time{start.Add(time.Hour), start.Add(2 * time.Hour)}, chunks.timestamps[LoadLatencyIndicator])
+	require.Len(t, chunks.timestamps[TimeOfDayIndicator], 8)
 }
 
 func TestHistoricalImportUsesAnalysisBackpressureInsteadOfDroppingChunks(t *testing.T) {
@@ -211,7 +212,7 @@ func TestHistoricalImportUsesAnalysisBackpressureInsteadOfDroppingChunks(t *test
 	_, err := collector.Import(context.Background(), service, start, start.Add(time.Hour), nil)
 
 	require.NoError(t, err)
-	require.Equal(t, 1, analysis.contextSubmissions)
+	require.Equal(t, 2, analysis.contextSubmissions)
 }
 
 type pendingRecovery struct {

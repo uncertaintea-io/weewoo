@@ -32,21 +32,12 @@ func analyzeSample(ctx context.Context, cfg config.Config, jointStore ecdf.Joint
 	if jointStore == nil {
 		return false, fmt.Errorf("nil joint ECDF store")
 	}
-	if service.Generation > 0 {
-		active, err := cfg.ReadService(service.Id)
-		if err != nil {
-			return false, fmt.Errorf("read active service generation: %w", err)
-		}
-		if active.Generation != service.Generation {
-			slog.Info(
-				"skipping analysis from a superseded service generation",
-				"service_id", service.Id,
-				"collected_generation", service.Generation,
-				"active_generation", active.Generation,
-				"timestamp", timestamp,
-			)
-			return false, nil
-		}
+	active, err := isActiveGeneration(cfg, service)
+	if err != nil {
+		return false, err
+	}
+	if !active {
+		return false, nil
 	}
 
 	if len(loads) == 0 {
@@ -70,79 +61,43 @@ func analyzeSample(ctx context.Context, cfg config.Config, jointStore ecdf.Joint
 		return false, fmt.Errorf("chunk has no latency observations")
 	}
 
-	jointECDF, err := jointStore.ReadCurrent(ctx, service.Id, indicatorID)
+	jointECDF, baseline, err := readReference(ctx, jointStore, chunks, alerts, service, indicatorID, []time.Time{timestamp})
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) && alerts != nil {
-			if recordErr := alerts.RecordBaseline(ctx, service.Id, indicatorID, timestamp); recordErr != nil {
-				return false, fmt.Errorf("%w: %w", errVerdictPersistence, recordErr)
-			}
-			return false, nil
-		}
 		return false, fmt.Errorf("failed to read current joint ECDF: %w", err)
+	}
+	if baseline {
+		return false, nil
 	}
 
 	loadValue := weightedMean(loads)
-	cdf, err := ecdf.Query(ctx, jointECDF, loadValue)
+	cdf, available, err := queryJointECDF(ctx, jointECDF, loadValue)
 	if err != nil {
 		return false, fmt.Errorf("failed to query joint ECDF: %w", err)
 	}
-	if cdf == nil {
+	if !available {
 		slog.Info(
 			"skipping sample analysis because no JECDF points are available",
 			"service_id", service.Id,
 			"indicator_id", indicatorID,
 			"timestamp", timestamp,
 		)
-		if alerts != nil {
-			if err := alerts.RecordBaseline(ctx, service.Id, indicatorID, timestamp); err != nil {
-				return false, fmt.Errorf("%w: %w", errVerdictPersistence, err)
-			}
+		if err := recordBaseline(ctx, chunks, alerts, service, indicatorID, []time.Time{timestamp}); err != nil {
+			return false, err
 		}
 		return false, nil
 	}
 
-	sortedLatencies := slices.Clone(latencies)
-	slices.SortFunc(sortedLatencies, func(a, b ecdf.Sample) int {
-		return cmp.Compare(a.Value, b.Value)
-	})
-	latencyValues := func(yield func(float64, uint64) bool) {
-		for _, sample := range sortedLatencies {
-			if !yield(sample.Value, sample.Count) {
-				return
-			}
-		}
-	}
-	ksResult := kstests.OneSampleIter(cdf, latencyCount, iter.Seq2[float64, uint64](latencyValues))
+	ksResult := oneSampleKS(cdf, latencies, latencyCount)
 	anomalous := isStatisticallySignificant(ksResult.PValue)
-	generatorURL, _ := cfg.GetConfig("alert_generator_url")
 	description := fmt.Sprintf(
 		"Current latency distribution differs from the reference at load %f (KS p-value %g; threshold %g).",
 		loadValue, ksResult.PValue, ksSignificanceLevel,
 	)
 	isHistorical := len(historical) > 0 && historical[0]
-	if isHistorical {
-		if chunks == nil {
-			return false, fmt.Errorf("nil chunk store")
-		}
-		if err := chunks.WriteVerdict(ctx, service.Id, indicatorID, service.Generation, timestamp, !anomalous, ksResult.PValue); err != nil {
-			return false, fmt.Errorf("%w: %w", errVerdictPersistence, err)
-		}
-	} else if alerts != nil {
-		if err := alerts.RecordAnalysis(ctx, alerting.AnalysisOutcome{
-			ServiceID: service.Id, ServiceName: service.Name, IndicatorID: indicatorID,
-			Indicator: "Load vs. Latency", Timestamp: timestamp, Load: loadValue,
-			PValue: ksResult.PValue, Threshold: ksSignificanceLevel, Anomalous: anomalous,
-			GeneratorURL: generatorURL, Description: description, TechnicalDetails: description,
-		}); err != nil {
-			return false, fmt.Errorf("%w: %w", errVerdictPersistence, err)
-		}
-	} else {
-		if chunks == nil {
-			return false, fmt.Errorf("nil chunk store")
-		}
-		if err := chunks.WriteVerdict(ctx, service.Id, indicatorID, service.Generation, timestamp, !anomalous, ksResult.PValue); err != nil {
-			return false, fmt.Errorf("%w: %w", errVerdictPersistence, err)
-		}
+	if err := recordAnalysisResult(ctx, cfg, chunks, alerts, service, indicatorID, []time.Time{timestamp}, isHistorical, analysisResult{
+		indicator: "Load vs. Latency", load: loadValue, pValue: ksResult.PValue, anomalous: anomalous, description: description,
+	}); err != nil {
+		return false, err
 	}
 
 	slog.Info(
@@ -156,6 +111,138 @@ func analyzeSample(ctx context.Context, cfg config.Config, jointStore ecdf.Joint
 	)
 
 	return anomalous, nil
+}
+
+func queryJointECDF(ctx context.Context, joint []byte, x float64) (func(float64) float64, bool, error) {
+	cdf, err := ecdf.Query(ctx, joint, x)
+	if err != nil {
+		return nil, false, err
+	}
+	return cdf, cdf != nil, nil
+}
+
+func oneSampleKS(cdf func(float64) float64, samples []ecdf.Sample, count uint64) kstests.Result {
+	sorted := slices.Clone(samples)
+	slices.SortFunc(sorted, func(a, b ecdf.Sample) int {
+		return cmp.Compare(a.Value, b.Value)
+	})
+	values := func(yield func(float64, uint64) bool) {
+		for _, sample := range sorted {
+			if !yield(sample.Value, sample.Count) {
+				return
+			}
+		}
+	}
+	return kstests.OneSampleIter(cdf, count, iter.Seq2[float64, uint64](values))
+}
+
+type analysisResult struct {
+	indicator   string
+	load        float64
+	pValue      float64
+	anomalous   bool
+	description string
+}
+
+func isActiveGeneration(cfg config.Config, service *config.Service) (bool, error) {
+	if service.Generation <= 0 {
+		return true, nil
+	}
+	active, err := cfg.ReadService(service.Id)
+	if err != nil {
+		return false, fmt.Errorf("read active service generation: %w", err)
+	}
+	if active.Generation == service.Generation {
+		return true, nil
+	}
+	slog.Info("skipping analysis from a superseded service generation", "service_id", service.Id,
+		"collected_generation", service.Generation, "active_generation", active.Generation)
+	return false, nil
+}
+
+// readReference loads the currently published joint ECDF for an indicator. The
+// reference is the comparison model built from eligible chunks from earlier
+// collection windows. If no reference has been published yet, readReference
+// records the current chunks as baseline data and returns baseline=true so the
+// caller can skip anomaly analysis for this window.
+func readReference(ctx context.Context, joints ecdf.JointStore, chunks ecdf.ChunkStore, alerts alerting.AnalysisRecorder, service *config.Service, indicatorID int, timestamps []time.Time) ([]byte, bool, error) {
+	joint, err := joints.ReadCurrent(ctx, service.Id, indicatorID)
+	if !errors.Is(err, sql.ErrNoRows) {
+		return joint, false, err
+	}
+	if err := recordBaseline(ctx, chunks, alerts, service, indicatorID, timestamps); err != nil {
+		return nil, false, err
+	}
+	return nil, true, nil
+}
+
+// recordBaseline marks chunks as eligible input for the first reference model
+// without claiming that they passed anomaly analysis. It is intended for data
+// collected while no usable reference exists, when comparison against prior
+// behavior is not yet possible. Once a reference is available, callers should
+// persist a Good or Bad verdict with recordAnalysisResult instead.
+func recordBaseline(ctx context.Context, chunks ecdf.ChunkStore, alerts alerting.AnalysisRecorder, service *config.Service, indicatorID int, timestamps []time.Time) error {
+	for _, timestamp := range timestamps {
+		var err error
+		if alerts != nil {
+			err = alerts.RecordBaseline(ctx, service.Id, indicatorID, timestamp)
+		} else if chunks != nil {
+			err = chunks.WriteVerdict(ctx, service.Id, indicatorID, service.Generation, timestamp, true, 1)
+		} else {
+			return fmt.Errorf("cannot record baseline without chunk store or alert recorder")
+		}
+		if err != nil {
+			return fmt.Errorf("%w: %w", errVerdictPersistence, err)
+		}
+	}
+	return nil
+}
+
+// recordAnalysisResult applies one comparison result to the chunks named by
+// timestamps. Callers must order timestamps from oldest to newest; the final
+// timestamp is the primary chunk representing the scheduler window. Every
+// chunk receives the same Good or Bad verdict for future model eligibility,
+// but only a live primary chunk is allowed to advance the alert lifecycle.
+func recordAnalysisResult(ctx context.Context, cfg config.Config, chunks ecdf.ChunkStore, alerts alerting.AnalysisRecorder, service *config.Service, indicatorID int, timestamps []time.Time, historical bool, result analysisResult) error {
+	if len(timestamps) == 0 {
+		return fmt.Errorf("analysis has no chunks")
+	}
+
+	// A time-of-day window may contain several chunks, but it represents one
+	// analysis event. Persist verdicts for all earlier chunks directly so they
+	// affect eligibility without creating additional alert occurrences.
+	primary := timestamps[len(timestamps)-1]
+	for _, timestamp := range timestamps[:len(timestamps)-1] {
+		if chunks == nil {
+			return fmt.Errorf("nil chunk store")
+		}
+		if err := chunks.WriteVerdict(ctx, service.Id, indicatorID, service.Generation, timestamp, !result.anomalous, result.pValue); err != nil {
+			return fmt.Errorf("%w: %w", errVerdictPersistence, err)
+		}
+	}
+
+	// Historical analysis must not change live alert state. A nil alert recorder
+	// uses the same direct-persistence path for deployments without alerting.
+	if historical || alerts == nil {
+		if chunks == nil {
+			return fmt.Errorf("nil chunk store")
+		}
+		if err := chunks.WriteVerdict(ctx, service.Id, indicatorID, service.Generation, primary, !result.anomalous, result.pValue); err != nil {
+			return fmt.Errorf("%w: %w", errVerdictPersistence, err)
+		}
+		return nil
+	}
+
+	// Delegate the live primary result to the alert recorder, which persists its
+	// verdict and updates the service's alert condition as one operation.
+	generatorURL, _ := cfg.GetConfig("alert_generator_url")
+	if err := alerts.RecordAnalysis(ctx, alerting.AnalysisOutcome{ServiceID: service.Id, ServiceName: service.Name,
+		IndicatorID: indicatorID, Indicator: result.indicator, Timestamp: primary, Load: result.load,
+		PValue: result.pValue, Threshold: ksSignificanceLevel, Anomalous: result.anomalous,
+		GeneratorURL: generatorURL, Description: result.description, TechnicalDetails: result.description}); err != nil {
+		return fmt.Errorf("%w: %w", errVerdictPersistence, err)
+	}
+	return nil
 }
 
 func isStatisticallySignificant(pValue float64) bool {

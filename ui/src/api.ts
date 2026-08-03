@@ -10,6 +10,14 @@ export interface Service {
   baselineResetAt?: string;
   tracking: TrackingStatus;
   imports: ImportJob[];
+  timeOfDayModel?: TimeOfDayModelStatus;
+}
+
+export interface TimeOfDayModelStatus {
+  state: 'learning' | 'ready' | 'degraded';
+  coverage: number;
+  requiredDays: number;
+  latestBuild?: string;
 }
 
 export interface ActivityEntry {
@@ -186,6 +194,7 @@ function parseService(value: unknown): Service {
     startedAt: readString(job.startedAt, 'import.startedAt'),
     ...(typeof job.endedAt === 'string' ? { endedAt: job.endedAt } : {}),
   })) : [];
+  const timeOfDayValue = isRecord(value.timeOfDayModel) ? value.timeOfDayModel : {};
   return {
     id: readNumber(value.id, 'id'),
     name: readString(value.name, 'name'),
@@ -205,6 +214,12 @@ function parseService(value: unknown): Service {
       activity,
     },
     imports,
+    ...(isRecord(value.timeOfDayModel) ? { timeOfDayModel: {
+      state: (typeof timeOfDayValue.state === 'string' ? timeOfDayValue.state : 'learning') as TimeOfDayModelStatus['state'],
+      coverage: typeof timeOfDayValue.coverage === 'number' ? timeOfDayValue.coverage : 0,
+      requiredDays: typeof timeOfDayValue.requiredDays === 'number' ? timeOfDayValue.requiredDays : 5,
+      ...(typeof timeOfDayValue.latestBuild === 'string' ? { latestBuild: timeOfDayValue.latestBuild } : {}),
+    } } : {}),
   };
 }
 

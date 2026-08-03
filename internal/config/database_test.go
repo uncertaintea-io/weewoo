@@ -9,10 +9,26 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
+func TestBaselinePublicationLocksCoverEveryIndicator(t *testing.T) {
+	assert.ElementsMatch(t, []int{1, 2}, baselinePublicationIndicatorIDs)
+}
+
 func TestMaterialServiceUpdateWaitsForInFlightBaselinePublication(t *testing.T) {
+	for name, indicatorID := range map[string]int{
+		"load-latency": loadLatencyBaselineIndicatorID,
+		"time-of-day":  timeOfDayBaselineIndicatorID,
+	} {
+		t.Run(name, func(t *testing.T) {
+			testMaterialServiceUpdateWaitsForInFlightBaselinePublication(t, indicatorID)
+		})
+	}
+}
+
+func testMaterialServiceUpdateWaitsForInFlightBaselinePublication(t *testing.T, indicatorID int) {
 	connString := os.Getenv("DATABASE_URL")
 	if connString == "" {
 		t.Skip("DATABASE_URL is not set")
@@ -37,7 +53,7 @@ func TestMaterialServiceUpdateWaitsForInFlightBaselinePublication(t *testing.T) 
 	defer publisher.Close()
 	var locked bool
 	require.NoError(t, publisher.QueryRowContext(context.Background(),
-		`SELECT pg_try_advisory_lock($1,$2)`, service.Id, loadLatencyBaselineIndicatorID).Scan(&locked))
+		`SELECT pg_try_advisory_lock($1,$2)`, service.Id, indicatorID).Scan(&locked))
 	require.True(t, locked)
 
 	updated := *service
@@ -57,10 +73,10 @@ func TestMaterialServiceUpdateWaitsForInFlightBaselinePublication(t *testing.T) 
 	_, err = publisher.ExecContext(context.Background(), `
 		INSERT INTO ecdf (service_id, indicator_id, version, body, bytes, sha256, interval_end)
 		VALUES ($1,$2,1,$3,$4,$5,$6)
-	`, service.Id, loadLatencyBaselineIndicatorID, body, len(body), hex.EncodeToString(sum[:]), time.Now().UTC())
+	`, service.Id, indicatorID, body, len(body), hex.EncodeToString(sum[:]), time.Now().UTC())
 	require.NoError(t, err)
 	require.NoError(t, publisher.QueryRowContext(context.Background(),
-		`SELECT pg_advisory_unlock($1,$2)`, service.Id, loadLatencyBaselineIndicatorID).Scan(&locked))
+		`SELECT pg_advisory_unlock($1,$2)`, service.Id, indicatorID).Scan(&locked))
 	require.True(t, locked)
 	require.NoError(t, <-updateDone)
 

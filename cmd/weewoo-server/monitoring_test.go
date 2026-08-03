@@ -34,7 +34,10 @@ func TestCancelImportDoesNotDegradeHealthyService(t *testing.T) {
 	imports := newImportManager(tracker, monitor)
 	job := imports.start(service, time.Now().Add(-time.Hour), time.Now())
 	<-tracker.started
-	handler := NewServiceAPIHandler(config.NewFakeConfig(), tracker, monitor, imports, http.DefaultClient)
+	handler := NewServiceAPIHandler(serviceAPIOptions{
+		Config: config.NewFakeConfig(), HTTPClient: http.DefaultClient,
+		Tracker: tracker, Monitor: monitor, Imports: imports,
+	})
 	recorder := httptest.NewRecorder()
 
 	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/imports/%d/cancel", job.ID), nil))
