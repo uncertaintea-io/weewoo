@@ -1,237 +1,214 @@
 package collection
 
 import (
+	"cmp"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"math"
 	"net/http"
-	"net/url"
-	"strconv"
-	"strings"
+	"slices"
 	"time"
+
+	"github.com/prometheus/client_golang/api"
+	v1 "github.com/prometheus/client_golang/api/prometheus/v1"
+	"github.com/prometheus/common/model"
+
+	"github.com/uncertaintea-io/weewoo/internal/ecdf"
 )
 
 var ErrNoPrometheusData = errors.New("no data returned")
 
-const (
-	promInstantEndpoint = "/api/v1/query"
-	promRangeEndpoint   = "/api/v1/query_range"
-	promSuccessStatus   = "success"
-	promRangeStep       = "15s"
-	promErrorBodyLimit  = 8 << 10
-)
-
-type promSample []any // [timestamp, "value"]
-
-type prometheusPoint struct {
+type PrometheusPoint struct {
 	Timestamp time.Time
 	Value     float64
 }
 
-type promInstantResponse struct {
-	Status string `json:"status"`
-	Data   struct {
-		Result []struct {
-			Value promSample `json:"value"`
-		} `json:"result"`
-	} `json:"data"`
-}
-
-type promRangeResponse struct {
-	Status string `json:"status"`
-	Data   struct {
-		Result []struct {
-			Values []promSample `json:"values"`
-		} `json:"result"`
-	} `json:"data"`
-}
-
-type promErrorResponse struct {
-	ErrorType string `json:"errorType"`
-	Error     string `json:"error"`
-}
-
-// QueryPrometheusInstant returns the largest value from an instant PromQL query.
-func QueryPrometheusInstant(ctx context.Context, client *http.Client, baseURL, promQL string) (float64, error) {
-	var pr promInstantResponse
-	if err := queryPrometheus(ctx, client, baseURL, promInstantEndpoint, url.Values{
-		"query": {promQL},
-	}, &pr); err != nil {
-		return 0, err
+// QueryPrometheusRangeSamples returns every (value, count) pair from a single-series range query.
+func QueryPrometheusRangeSamples(ctx context.Context, httpClient *http.Client, baseURL, promQL string, start, end time.Time, step time.Duration) ([]ecdf.Sample, error) {
+	client, err := newPrometheusClient(baseURL, httpClient)
+	if err != nil {
+		return nil, fmt.Errorf("creating Prometheus client: %w", err)
+	}
+	queryRange := v1.Range{
+		Start: start,
+		End:   end,
+		Step:  step,
+	}
+	result, warnings, err := v1.NewAPI(client).QueryRange(
+		ctx,
+		promQL,
+		queryRange,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("query Prometheus: %w", err)
+	}
+	for _, warning := range warnings {
+		slog.Warn(warning)
 	}
 
-	if pr.Status != promSuccessStatus || len(pr.Data.Result) == 0 {
-		return 0, ErrNoPrometheusData
+	// Inspect the value to ensure it's a range matrix.
+	matrix, ok := result.(model.Matrix)
+	if !ok {
+		return nil, fmt.Errorf("query returned %s, expected a range matrix", result.Type())
 	}
+	switch len(matrix) {
+	case 0:
+		return nil, ErrNoPrometheusData
+	case 1:
+		// Expected case.
+	default:
+		return nil, fmt.Errorf("unexpected 1 time series, got %d", len(matrix))
+	}
+	stream := matrix[0]
+	if len(stream.Histograms) > 0 {
+		return getSamplesFromHistograms(stream.Histograms)
+	}
+	if len(stream.Values) > 0 {
+		return getSamplesFromValues(stream.Values)
+	}
+	return nil, ErrNoPrometheusData
+}
 
-	maxVal := math.Inf(-1)
-	for _, r := range pr.Data.Result {
-		v, err := parsePromSample(r.Value)
-		if err != nil {
-			continue
+func getBucketCountsFromHistogram(histogram *model.SampleHistogram) (map[float64]uint64, error) {
+	out := make(map[float64]uint64, len(histogram.Buckets))
+	for _, bucket := range histogram.Buckets {
+		upper := float64(bucket.Upper)
+		if _, exists := out[upper]; exists {
+			return nil, fmt.Errorf("duplicate bucket upper bound: %f", upper)
 		}
-		if v > maxVal {
-			maxVal = v
-		}
+		count := uint64(math.Round(float64(bucket.Count)))
+		out[upper] = count
 	}
-
-	if math.IsInf(maxVal, -1) {
-		return 0, fmt.Errorf("invalid value")
-	}
-	return maxVal, nil
+	return out, nil
 }
 
-// QueryPrometheusRange returns every sample value from a single-series range query.
-func QueryPrometheusRange(ctx context.Context, client *http.Client, baseURL, promQL string, start, end time.Time) ([]float64, error) {
-	points, err := queryPrometheusRangePoints(ctx, client, baseURL, promQL, start, end)
+func getSamplesFromHistograms(histograms []model.SampleHistogramPair) ([]ecdf.Sample, error) {
+	n := len(histograms)
+	if n < 2 {
+		return nil, fmt.Errorf("not enough histogram samples to compute rate: got %d, need at least 2", len(histograms))
+	}
+
+	// Get the bucket counts from the first histogram in the results
+	last, err := getBucketCountsFromHistogram(histograms[0].Histogram)
 	if err != nil {
 		return nil, err
 	}
-	values := make([]float64, len(points))
-	for i, point := range points {
-		values[i] = point.Value
+
+	// For each subsequent histogram, compute the difference in counts for each bucket and accumulate the total counts.
+	// The count can go down if the histogram is reset, so we only accumulate counts that are greater than the last count.
+	totalCount := make(map[float64]uint64)
+	for _, pair := range histograms[1:] {
+		current, err := getBucketCountsFromHistogram(pair.Histogram)
+		if err != nil {
+			return nil, err
+		}
+		for upper, currentCount := range current {
+			lastCount := last[upper]
+			if currentCount < lastCount {
+				break // Histogram reset, skip this bucket for this sample
+			}
+			totalCount[upper] = totalCount[upper] + currentCount - lastCount
+		}
+		last = current
 	}
-	return values, nil
+
+	samples := make([]ecdf.Sample, 0, len(last))
+	for upper, count := range totalCount {
+		samples = append(samples, ecdf.Sample{
+			Value: float64(upper),
+			Count: count,
+		})
+	}
+	return samples, nil
 }
 
-func queryPrometheusRangePoints(ctx context.Context, client *http.Client, baseURL, promQL string, start, end time.Time) ([]prometheusPoint, error) {
-	return queryPrometheusRangePointsAtStep(ctx, client, baseURL, promQL, start, end, 15*time.Second)
+func getSamplesFromValues(values []model.SamplePair) ([]ecdf.Sample, error) {
+	samples := make([]ecdf.Sample, 0, len(values))
+	for _, pair := range values {
+		value := float64(pair.Value)
+		i, found := slices.BinarySearchFunc(samples, value, func(sample ecdf.Sample, value float64) int {
+			return cmp.Compare(sample.Value, value)
+		})
+		if found {
+			samples[i].Count++
+		} else {
+			samples = slices.Insert(samples, i, ecdf.Sample{
+				Value: value,
+				Count: 1,
+			})
+		}
+	}
+	return samples, nil
 }
 
-func queryPrometheusRangePointsAtStep(ctx context.Context, client *http.Client, baseURL, promQL string, start, end time.Time, step time.Duration) ([]prometheusPoint, error) {
+func QueryPrometheusRangePoints(ctx context.Context, httpClient *http.Client, baseURL, promQL string, start, end time.Time, step time.Duration) ([]PrometheusPoint, error) {
 	if step <= 0 || step%time.Second != 0 {
 		return nil, fmt.Errorf("Prometheus range step must be a positive whole number of seconds")
 	}
-	var pr promRangeResponse
-	if err := queryPrometheus(ctx, client, baseURL, promRangeEndpoint, url.Values{
-		"query": {promQL},
-		"start": {strconv.FormatInt(start.Unix(), 10)},
-		"end":   {strconv.FormatInt(end.Unix(), 10)},
-		"step":  {strconv.FormatInt(int64(step/time.Second), 10) + "s"},
-	}, &pr); err != nil {
-		return nil, err
+
+	client, err := newPrometheusClient(baseURL, httpClient)
+	if err != nil {
+		return nil, fmt.Errorf("creating Prometheus client: %w", err)
+	}
+	queryRange := v1.Range{
+		Start: start,
+		End:   end,
+		Step:  step,
+	}
+	result, warnings, err := v1.NewAPI(client).QueryRange(
+		ctx,
+		promQL,
+		queryRange,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("query Prometheus: %w", err)
+	}
+	for _, warning := range warnings {
+		slog.Warn(warning)
 	}
 
-	if pr.Status != promSuccessStatus || len(pr.Data.Result) == 0 {
+	// Inspect the value to ensure it's a range matrix.
+	matrix, ok := result.(model.Matrix)
+	if !ok {
+		return nil, fmt.Errorf("query returned %s, expected a range matrix", result.Type())
+	}
+	switch len(matrix) {
+	case 0:
+		return nil, ErrNoPrometheusData
+	case 1:
+		// Expected case.
+	default:
+		return nil, fmt.Errorf("unexpected 1 time series, got %d", len(matrix))
+	}
+	stream := matrix[0]
+	if len(stream.Histograms) > 0 {
+		return nil, fmt.Errorf("expected value query, got histograms")
+	}
+	if len(stream.Values) == 0 {
 		return nil, ErrNoPrometheusData
 	}
-	if len(pr.Data.Result) != 1 {
-		return nil, fmt.Errorf("unexpected number of results, got %d", len(pr.Data.Result))
-	}
-
-	samples := pr.Data.Result[0].Values
-	if len(samples) == 0 {
-		return nil, fmt.Errorf("%w: no samples returned", ErrNoPrometheusData)
-	}
-	points := make([]prometheusPoint, len(samples))
-	for i, sample := range samples {
-		value, err := parsePromSample(sample)
-		if err != nil {
-			return nil, err
+	points := make([]PrometheusPoint, len(stream.Values))
+	for i, sample := range stream.Values {
+		if math.IsNaN(float64(sample.Value)) || math.IsInf(float64(sample.Value), 0) {
+			return nil, fmt.Errorf("query returned invalid sample value: %v", sample.Value)
 		}
-		timestamp, err := parsePromTimestamp(sample)
-		if err != nil {
-			return nil, err
+		points[i] = PrometheusPoint{
+			Timestamp: sample.Timestamp.Time(),
+			Value:     float64(sample.Value),
 		}
-		points[i] = prometheusPoint{Timestamp: timestamp, Value: value}
 	}
-
 	return points, nil
 }
 
-func queryPrometheus(
-	ctx context.Context,
-	client *http.Client,
-	baseURL string,
-	endpoint string,
-	params url.Values,
-	target any,
-) error {
-	u, err := url.Parse(baseURL)
-	if err != nil {
-		return err
-	}
-	u.Path = strings.TrimRight(u.Path, "/") + endpoint
-
-	q := u.Query()
-	for key, values := range params {
-		for _, value := range values {
-			q.Add(key, value)
+func newPrometheusClient(baseURL string, httpClient *http.Client) (api.Client, error) {
+	config := api.Config{Address: baseURL}
+	if httpClient != nil {
+		config.RoundTripper = httpClient.Transport
+		if config.RoundTripper == nil {
+			config.RoundTripper = http.DefaultTransport
 		}
 	}
-	u.RawQuery = q.Encode()
-	slog.Info("Querying Prometheus", "url", u.String())
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
-	if err != nil {
-		return err
-	}
-
-	if client == nil {
-		client = http.DefaultClient
-	}
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		queryErr := prometheusResponseError(resp)
-		slog.Error("Prometheus query failed", "status", resp.StatusCode, "error", queryErr)
-		return queryErr
-	}
-
-	err = json.NewDecoder(resp.Body).Decode(target)
-	if err != nil {
-		slog.Error("Failed to decode Prometheus response", "error", err)
-		return err
-	}
-	slog.Debug("Prometheus response decoded")
-	return nil
-}
-
-func prometheusResponseError(resp *http.Response) error {
-	base := fmt.Sprintf("prometheus returned HTTP %d", resp.StatusCode)
-	var detail promErrorResponse
-	if err := json.NewDecoder(io.LimitReader(resp.Body, promErrorBodyLimit)).Decode(&detail); err != nil || detail.Error == "" {
-		return fmt.Errorf("%s", base)
-	}
-	if detail.ErrorType == "" {
-		return fmt.Errorf("%s: %s", base, detail.Error)
-	}
-	return fmt.Errorf("%s (%s): %s", base, detail.ErrorType, detail.Error)
-}
-
-func parsePromSample(sample promSample) (float64, error) {
-	if len(sample) != 2 {
-		return 0, fmt.Errorf("unexpected number of values, got %d", len(sample))
-	}
-
-	value, ok := sample[1].(string)
-	if !ok {
-		return 0, fmt.Errorf("invalid value")
-	}
-
-	parsed, err := strconv.ParseFloat(value, 64)
-	if err != nil {
-		return 0, fmt.Errorf("invalid value: %w", err)
-	}
-	return parsed, nil
-}
-
-func parsePromTimestamp(sample promSample) (time.Time, error) {
-	if len(sample) != 2 {
-		return time.Time{}, fmt.Errorf("unexpected number of values, got %d", len(sample))
-	}
-	seconds, ok := sample[0].(float64)
-	if !ok {
-		return time.Time{}, fmt.Errorf("invalid timestamp")
-	}
-	wholeSeconds, fractionalSeconds := math.Modf(seconds)
-	return time.Unix(int64(wholeSeconds), int64(fractionalSeconds*float64(time.Second))).UTC(), nil
+	return api.NewClient(config)
 }
