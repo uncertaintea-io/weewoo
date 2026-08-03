@@ -1,17 +1,14 @@
 package ecdf
 
 import (
+	"bytes"
 	"context"
-	_ "embed"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-//go:embed testdata/ecdf.bin
-var sampleJointECDF []byte
 
 func TestQueryWithRealTool(t *testing.T) {
 	setJECDFTool(t, "../../jecdf")
@@ -23,8 +20,24 @@ func TestQueryWithRealTool(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
+	store := NewFakeChunkStore()
+	for i, point := range []struct{ x, y float64 }{
+		{1, 2},
+		{1, 4},
+		{2, 1},
+		{2, 5},
+	} {
+		timestamp := time.Unix(int64(i), 0)
+		chunk, err := newTestChunk(timestamp, point.x, point.y)
+		require.NoError(t, err)
+		require.NoError(t, store.WriteChunk(1, 1, 1, timestamp, chunk))
+	}
+
+	var jointECDF bytes.Buffer
+	require.NoError(t, BuildJointECDFContext(ctx, store, 1, 1, &jointECDF))
+
 	const value = 1.5
-	cdf, err := Query(ctx, sampleJointECDF, value)
+	cdf, err := Query(ctx, jointECDF.Bytes(), value)
 	require.NoError(t, err)
 	if cdf == nil {
 		t.Log("jecdf returned zero points; no CDF is available yet")
