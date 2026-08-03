@@ -75,7 +75,14 @@ func QueryPrometheusRangeSamples(ctx context.Context, httpClient *http.Client, b
 	}
 	stream := matrix[0]
 	if len(stream.Histograms) > 0 {
-		return getSamplesFromHistograms(stream.Histograms)
+		samples, err := getSamplesFromHistograms(stream.Histograms)
+		if err != nil {
+			return nil, err
+		}
+		if len(samples) == 0 {
+			return nil, ErrNoPrometheusData
+		}
+		return samples, nil
 	}
 	if len(stream.Values) > 0 {
 		values := stream.Values
