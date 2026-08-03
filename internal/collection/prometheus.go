@@ -25,7 +25,19 @@ type PrometheusPoint struct {
 	Value     float64
 }
 
+func newPrometheusClient(baseURL string, httpClient *http.Client) (api.Client, error) {
+	config := api.Config{Address: baseURL}
+	if httpClient != nil {
+		config.RoundTripper = httpClient.Transport
+		if config.RoundTripper == nil {
+			config.RoundTripper = http.DefaultTransport
+		}
+	}
+	return api.NewClient(config)
+}
+
 // QueryPrometheusRangeSamples returns every (value, count) pair from a single-series range query.
+// The results are adjusted to exclude any sample at the start boundary, as this will overlap with the previous window's end boundary.
 func QueryPrometheusRangeSamples(ctx context.Context, httpClient *http.Client, baseURL, promQL string, start, end time.Time, step time.Duration) ([]ecdf.Sample, error) {
 	client, err := newPrometheusClient(baseURL, httpClient)
 	if err != nil {
@@ -66,22 +78,30 @@ func QueryPrometheusRangeSamples(ctx context.Context, httpClient *http.Client, b
 		return getSamplesFromHistograms(stream.Histograms)
 	}
 	if len(stream.Values) > 0 {
-		return getSamplesFromValues(stream.Values)
+		values := stream.Values
+		if values[0].Timestamp.Time().Equal(start) {
+			values = values[1:]
+		}
+		if len(values) > 0 {
+			return getSamplesFromValues(values)
+		}
 	}
 	return nil, ErrNoPrometheusData
 }
 
-func getBucketCountsFromHistogram(histogram *model.SampleHistogram) (map[float64]uint64, error) {
-	out := make(map[float64]uint64, len(histogram.Buckets))
-	for _, bucket := range histogram.Buckets {
+type bucketCount struct {
+	upper float64
+	count uint64
+}
+
+func getBucketCountsFromHistogram(histogram *model.SampleHistogram) []bucketCount {
+	out := make([]bucketCount, len(histogram.Buckets))
+	for i, bucket := range histogram.Buckets {
 		upper := float64(bucket.Upper)
-		if _, exists := out[upper]; exists {
-			return nil, fmt.Errorf("duplicate bucket upper bound: %f", upper)
-		}
 		count := uint64(math.Round(float64(bucket.Count)))
-		out[upper] = count
+		out[i] = bucketCount{upper: upper, count: count}
 	}
-	return out, nil
+	return out
 }
 
 func getSamplesFromHistograms(histograms []model.SampleHistogramPair) ([]ecdf.Sample, error) {
@@ -91,35 +111,53 @@ func getSamplesFromHistograms(histograms []model.SampleHistogramPair) ([]ecdf.Sa
 	}
 
 	// Get the bucket counts from the first histogram in the results
-	last, err := getBucketCountsFromHistogram(histograms[0].Histogram)
-	if err != nil {
-		return nil, err
-	}
+	last := getBucketCountsFromHistogram(histograms[0].Histogram)
 
 	// For each subsequent histogram, compute the difference in counts for each bucket and accumulate the total counts.
 	// The count can go down if the histogram is reset, so we only accumulate counts that are greater than the last count.
-	totalCount := make(map[float64]uint64)
+	totalCount := make([]bucketCount, 0, len(last))
 	for _, pair := range histograms[1:] {
-		current, err := getBucketCountsFromHistogram(pair.Histogram)
-		if err != nil {
-			return nil, err
-		}
-		for upper, currentCount := range current {
-			lastCount := last[upper]
-			if currentCount < lastCount {
-				break // Histogram reset, skip this bucket for this sample
+		current := getBucketCountsFromHistogram(pair.Histogram)
+
+		// This assumes that the buckets returned by Prometheus are sorted by upper bound.
+		// We do not assume that they have the same buckets, but it is highly likely that they will.
+		// We will only accumulate counts for the buckets that are present in both histograms.
+		// Histogram resets are handled by only accumulating increases that are greater than zero.
+		for lastIndex, currentIndex, totalIndex := 0, 0, 0; lastIndex < len(last) && currentIndex < len(current); {
+			switch {
+			case last[lastIndex].upper < current[currentIndex].upper:
+				lastIndex++
+			case current[currentIndex].upper < last[lastIndex].upper:
+				currentIndex++
+			default:
+				if current[currentIndex].count > last[lastIndex].count {
+					increase := current[currentIndex].count - last[lastIndex].count
+					upper := current[currentIndex].upper
+					for totalIndex < len(totalCount) && totalCount[totalIndex].upper < upper {
+						totalIndex++
+					}
+					if totalIndex < len(totalCount) && totalCount[totalIndex].upper == upper {
+						totalCount[totalIndex].count += increase
+					} else {
+						totalCount = slices.Insert(totalCount, totalIndex, bucketCount{upper: upper, count: increase})
+					}
+					totalIndex++
+				}
+				lastIndex++
+				currentIndex++
 			}
-			totalCount[upper] = totalCount[upper] + currentCount - lastCount
 		}
 		last = current
 	}
 
-	samples := make([]ecdf.Sample, 0, len(last))
-	for upper, count := range totalCount {
-		samples = append(samples, ecdf.Sample{
-			Value: float64(upper),
-			Count: count,
-		})
+	samples := make([]ecdf.Sample, 0, len(totalCount))
+	for _, bucket := range totalCount {
+		if bucket.count > 0 {
+			samples = append(samples, ecdf.Sample{
+				Value: bucket.upper,
+				Count: bucket.count,
+			})
+		}
 	}
 	return samples, nil
 }
@@ -186,11 +224,21 @@ func QueryPrometheusRangePoints(ctx context.Context, httpClient *http.Client, ba
 	if len(stream.Histograms) > 0 {
 		return nil, fmt.Errorf("expected value query, got histograms")
 	}
-	if len(stream.Values) == 0 {
-		return nil, ErrNoPrometheusData
+	if len(stream.Values) > 0 {
+		values := stream.Values
+		if values[0].Timestamp.Time().Equal(start) {
+			values = values[1:]
+		}
+		if len(values) > 0 {
+			return getPointsFromValues(values)
+		}
 	}
-	points := make([]PrometheusPoint, len(stream.Values))
-	for i, sample := range stream.Values {
+	return nil, ErrNoPrometheusData
+}
+
+func getPointsFromValues(values []model.SamplePair) ([]PrometheusPoint, error) {
+	points := make([]PrometheusPoint, len(values))
+	for i, sample := range values {
 		if math.IsNaN(float64(sample.Value)) || math.IsInf(float64(sample.Value), 0) {
 			return nil, fmt.Errorf("query returned invalid sample value: %v", sample.Value)
 		}
@@ -200,15 +248,4 @@ func QueryPrometheusRangePoints(ctx context.Context, httpClient *http.Client, ba
 		}
 	}
 	return points, nil
-}
-
-func newPrometheusClient(baseURL string, httpClient *http.Client) (api.Client, error) {
-	config := api.Config{Address: baseURL}
-	if httpClient != nil {
-		config.RoundTripper = httpClient.Transport
-		if config.RoundTripper == nil {
-			config.RoundTripper = http.DefaultTransport
-		}
-	}
-	return api.NewClient(config)
 }
