@@ -1,6 +1,6 @@
 // Prometheus golden responses can be regenerated against a live server with:
 //
-//	go test ./internal/collection -run '^TestUpdatePrometheusGoldens$' -count=1 -args -update-prometheus-goldens -prometheus-url=http://pc0:9090
+//	go test ./internal/collection -run '^TestUpdatePrometheusGoldens$' -count=1 -args -update-prometheus-goldens -prometheus-url=http://your-server:9090
 package collection
 
 import (
