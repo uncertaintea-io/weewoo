@@ -2,11 +2,14 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/uncertaintea-io/weewoo/internal/ecdf"
 )
@@ -14,6 +17,7 @@ import (
 const (
 	jointECDFRenderWidth  = 128
 	jointECDFRenderHeight = 128
+	jointECDFRenderFormat = 1
 )
 
 type jointECDFRenderer func(
@@ -25,11 +29,19 @@ type jointECDFRenderer func(
 
 type jointECDFAPI struct {
 	store  ecdf.JointStore
-	render jointECDFRenderer
+	render *jointECDFRenderCoordinator
 }
 
 func NewJointECDFAPIHandler(store ecdf.JointStore) http.Handler {
-	return &jointECDFAPI{store: store, render: ecdf.Render}
+	return &jointECDFAPI{
+		store: store,
+		render: newJointECDFRenderCoordinator(
+			ecdf.Render,
+			jointECDFRenderConcurrency,
+			jointECDFRenderTimeout,
+			jointECDFRenderCacheBytes,
+		),
+	}
 }
 
 func (a *jointECDFAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -62,7 +74,7 @@ func (a *jointECDFAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	jointECDF, err := a.store.ReadCurrent(r.Context(), serviceID, indicatorID)
+	body, sha, err := a.store.ReadCurrent(r.Context(), serviceID, indicatorID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			http.Error(w, "joint ECDF not found", http.StatusNotFound)
@@ -73,13 +85,59 @@ func (a *jointECDFAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	response, err := a.render(r.Context(), jointECDF, jointECDFRenderWidth, jointECDFRenderHeight, options)
+	etag := jointECDFRenderETag(sha, jointECDFRenderWidth, jointECDFRenderHeight, options)
+	w.Header().Set("Cache-Control", "private, no-cache")
+	if ifNoneMatch(r.Header.Get("If-None-Match"), etag) {
+		w.Header().Set("ETag", etag)
+		jointECDFRenderEvents.WithLabelValues("not_modified").Inc()
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
+
+	response, err := a.render.Render(
+		r.Context(), etag, body,
+		jointECDFRenderWidth, jointECDFRenderHeight, options,
+	)
 	if err != nil {
+		if r.Context().Err() != nil {
+			return
+		}
 		slog.Error("failed to render joint ECDF", "service_id", serviceID, "indicator_id", indicatorID, "error", err)
+		if errors.Is(err, errJointECDFRenderBusy) {
+			w.Header().Set("Retry-After", "1")
+			http.Error(w, "joint ECDF renderer is busy", http.StatusServiceUnavailable)
+			return
+		}
+		if errors.Is(err, context.DeadlineExceeded) {
+			http.Error(w, "joint ECDF render timed out", http.StatusGatewayTimeout)
+			return
+		}
 		http.Error(w, "failed to render joint ECDF", http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, http.StatusOK, response)
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("ETag", etag)
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(response)
+}
+
+func jointECDFRenderETag(definitionHash string, width, height int, options ecdf.RenderOptions) string {
+	representation := fmt.Sprintf(
+		"definition=%s;width=%d;height=%d;options=%d;format=%d",
+		definitionHash, width, height, options, jointECDFRenderFormat,
+	)
+	sum := sha256.Sum256([]byte(representation))
+	return fmt.Sprintf("\"%x\"", sum)
+}
+
+func ifNoneMatch(header, current string) bool {
+	for candidate := range strings.SplitSeq(header, ",") {
+		candidate = strings.TrimSpace(candidate)
+		if candidate == "*" || strings.TrimPrefix(candidate, "W/") == current {
+			return true
+		}
+	}
+	return false
 }
 
 func renderOptionsQuery(r *http.Request) (ecdf.RenderOptions, error) {

@@ -3,6 +3,7 @@ import {
   JECDF_RENDER_OPTION_LOG_X,
   JECDF_RENDER_OPTION_LOG_Y,
   ServicesApiError,
+  type JointECDFFetchResult,
   type JointECDFRender,
 } from './api';
 import { viridis } from './colormap';
@@ -36,6 +37,23 @@ interface AxisOptions {
 interface PlotOptions {
   xAxis: AxisOptions;
   yAxis: AxisOptions;
+}
+
+interface JointECDFCacheEntry {
+  key: string;
+  etag: string;
+  render: JointECDFRender;
+}
+
+let lastJointECDFRender: JointECDFCacheEntry | undefined;
+
+export function jointECDFRenderCacheKey(
+  serviceID: number,
+  generation: number,
+  indicatorID: number,
+  options: number,
+): string {
+  return `${String(serviceID)}:${String(generation)}:${String(indicatorID)}:${String(options)}`;
 }
 
 export function renderAxisValue(
@@ -312,7 +330,7 @@ function selectionText(selection: CellSelection, options: PlotOptions): string {
 }
 
 // Take ownership of a canvas and create a visualization of a service's Load vs. Latency Joint ECDF.
-export function renderJECDF(id: string, serviceID: number): () => void {
+export function renderJECDF(id: string, serviceID: number, generation: number): () => void {
   const canvas = document.getElementById(id);
   const status = document.getElementById(`${id}-status`);
   if (!(canvas instanceof HTMLCanvasElement)) {
@@ -321,26 +339,31 @@ export function renderJECDF(id: string, serviceID: number): () => void {
 
   const controller = new AbortController();
   let plot: JointECDFPlot | null = null;
-  void GetJointECDF(
+  const cacheKey = jointECDFRenderCacheKey(
     serviceID,
+    generation,
     LOAD_LATENCY_INDICATOR_ID,
     LOAD_LATENCY_RENDER_OPTIONS,
-    (input, init) => fetch(input, { ...init, signal: controller.signal }),
-  ).then((data) => {
-    if (controller.signal.aborted) return;
+  );
+  const cached = lastJointECDFRender?.key === cacheKey ? lastJointECDFRender : undefined;
+  const plotOptions: PlotOptions = {
+    xAxis: {
+      label: 'Load',
+      logarithmic: (LOAD_LATENCY_RENDER_OPTIONS & JECDF_RENDER_OPTION_LOG_X) !== 0,
+      format: formatAxisValue,
+    },
+    yAxis: {
+      label: 'Latency',
+      logarithmic: (LOAD_LATENCY_RENDER_OPTIONS & JECDF_RENDER_OPTION_LOG_Y) !== 0,
+      format: formatLatencySeconds,
+    },
+  };
+
+  const showPlot = (data: JointECDFRender): void => {
+    plot?.destroy();
+    canvas.hidden = false;
     canvas.classList.remove('is-loading');
-    const plotOptions: PlotOptions = {
-      xAxis: {
-        label: 'Load',
-        logarithmic: (LOAD_LATENCY_RENDER_OPTIONS & JECDF_RENDER_OPTION_LOG_X) !== 0,
-        format: formatAxisValue,
-      },
-      yAxis: {
-        label: 'Latency',
-        logarithmic: (LOAD_LATENCY_RENDER_OPTIONS & JECDF_RENDER_OPTION_LOG_Y) !== 0,
-        format: formatLatencySeconds,
-      },
-    };
+    status?.classList.remove('is-error');
     plot = new JointECDFPlot(canvas, data, plotOptions, (selection) => {
       if (status !== null) {
         status.textContent = selection === null
@@ -349,13 +372,32 @@ export function renderJECDF(id: string, serviceID: number): () => void {
       }
     });
     if (status !== null) status.textContent = 'Hover over the plot to inspect a cell.';
+  };
+
+  if (cached !== undefined) showPlot(cached.render);
+
+  void GetJointECDF(serviceID, LOAD_LATENCY_INDICATOR_ID, {
+    renderOptions: LOAD_LATENCY_RENDER_OPTIONS,
+    ifNoneMatch: cached?.etag,
+    fetcher: (input, init) => fetch(input, { ...init, signal: controller.signal }),
+  }).then((result: JointECDFFetchResult) => {
+    if (controller.signal.aborted || !result.modified) return;
+    lastJointECDFRender = { key: cacheKey, etag: result.etag, render: result.render };
+    showPlot(result.render);
   }).catch((error: unknown) => {
     if (controller.signal.aborted) return;
-    canvas.hidden = true;
+    const notFound = error instanceof ServicesApiError && error.status === 404;
+    if (notFound && lastJointECDFRender?.key === cacheKey) lastJointECDFRender = undefined;
+    if (notFound || plot === null) {
+      plot?.destroy();
+      plot = null;
+      canvas.hidden = true;
+    }
     if (status !== null) {
       status.classList.add('is-error');
-      status.textContent = error instanceof ServicesApiError && error.status === 404
+      status.textContent = notFound
         ? 'The Load vs. Latency baseline is not available yet.'
+        : plot !== null ? 'Showing the last available baseline; refresh delayed.'
         : error instanceof Error ? error.message : 'Unable to load the Joint ECDF.';
     }
   });

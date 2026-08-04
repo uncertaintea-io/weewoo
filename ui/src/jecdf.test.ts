@@ -1,7 +1,7 @@
 import { expect } from 'chai';
 import 'mocha';
 import { viridis } from './colormap';
-import { densityPixels, formatLatencySeconds, normalizeMasses, renderAxisValue } from './jecdf';
+import { densityPixels, formatLatencySeconds, jointECDFRenderCacheKey, normalizeMasses, renderAxisValue } from './jecdf';
 
 describe('Joint ECDF density rendering', () => {
 
@@ -43,6 +43,13 @@ describe('Joint ECDF density rendering', () => {
   it('preserves axis endpoints and clamps positions outside the rendered image', () => {
     expect(renderAxisValue(1, 100, -1, true)).to.equal(1);
     expect(renderAxisValue(1, 100, 2, true)).to.equal(100);
+  });
+
+  it('does not share cached renders across service generations', () => {
+    const current = jointECDFRenderCacheKey(7, 3, 1, 2);
+    expect(jointECDFRenderCacheKey(7, 3, 1, 2)).to.equal(current);
+    expect(jointECDFRenderCacheKey(7, 4, 1, 2)).not.to.equal(current);
+    expect(jointECDFRenderCacheKey(8, 3, 1, 2)).not.to.equal(current);
   });
 
 });

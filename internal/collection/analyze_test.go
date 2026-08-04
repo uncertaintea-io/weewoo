@@ -21,7 +21,7 @@ func (unreadJointStore) Publish(context.Context, int, int, time.Time, func(io.Wr
 	panic("unexpected Publish call")
 }
 
-func (unreadJointStore) ReadCurrent(context.Context, int, int) ([]byte, error) {
+func (unreadJointStore) ReadCurrent(context.Context, int, int) ([]byte, string, error) {
 	panic("unexpected ReadCurrent call")
 }
 
@@ -31,8 +31,8 @@ func (staticJointStore) Publish(context.Context, int, int, time.Time, func(io.Wr
 	panic("unexpected Publish call")
 }
 
-func (staticJointStore) ReadCurrent(context.Context, int, int) ([]byte, error) {
-	return []byte("no published points"), nil
+func (staticJointStore) ReadCurrent(context.Context, int, int) ([]byte, string, error) {
+	return []byte("no published points"), "", nil
 }
 
 type recordingAlertQueue struct {

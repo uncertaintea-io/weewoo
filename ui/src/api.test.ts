@@ -16,20 +16,41 @@ describe('Joint ECDF API', () => {
         yMin: 100,
         yMax: 200,
         masses: [0.1, 0.2, 0.3, 0.4],
-      })));
+      }), { headers: { ETag: '"definition-1"' } }));
     };
 
-    const render = await GetJointECDF(7, 9, 2, fetcher);
+    const result = await GetJointECDF(7, 9, { renderOptions: 2, fetcher });
 
-    expect(render).to.deep.equal({
-      width: 2,
-      height: 2,
-      xMin: 10,
-      xMax: 20,
-      yMin: 100,
-      yMax: 200,
-      masses: [0.1, 0.2, 0.3, 0.4],
+    expect(result).to.deep.equal({
+      modified: true,
+      etag: '"definition-1"',
+      render: {
+        width: 2,
+        height: 2,
+        xMin: 10,
+        xMax: 20,
+        yMin: 100,
+        yMax: 200,
+        masses: [0.1, 0.2, 0.3, 0.4],
+      },
     });
+  });
+
+  it('sends a validator and accepts a not-modified response', async () => {
+    const fetcher = (_url: string | URL | Request, init?: RequestInit): Promise<Response> => {
+      expect(new Headers(init?.headers).get('If-None-Match')).to.equal('"definition-1"');
+      return Promise.resolve(new Response(null, {
+        status: 304,
+        headers: { ETag: '"definition-1"' },
+      }));
+    };
+
+    const result = await GetJointECDF(7, 9, {
+      ifNoneMatch: '"definition-1"',
+      fetcher,
+    });
+
+    expect(result).to.deep.equal({ modified: false, etag: '"definition-1"' });
   });
 
   it('rejects a response with the wrong number of cell masses', async () => {
@@ -41,10 +62,10 @@ describe('Joint ECDF API', () => {
       yMin: 0,
       yMax: 1,
       masses: [0.5],
-    })));
+    }), { headers: { ETag: '"definition-1"' } }));
 
     try {
-      await GetJointECDF(1, 1, 0, fetcher);
+      await GetJointECDF(1, 1, { fetcher });
       expect.fail('Expected GetJointECDF to reject.');
     } catch (error) {
       expect((error as Error).message).to.equal('Joint ECDF response must contain 4 cell masses.');

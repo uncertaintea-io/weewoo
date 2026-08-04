@@ -166,7 +166,7 @@ func isActiveGeneration(cfg config.Config, service *config.Service) (bool, error
 // records the current chunks as baseline data and returns baseline=true so the
 // caller can skip anomaly analysis for this window.
 func readReference(ctx context.Context, joints ecdf.JointStore, chunks ecdf.ChunkStore, alerts alerting.AnalysisRecorder, service *config.Service, indicatorID int, timestamps []time.Time) ([]byte, bool, error) {
-	joint, err := joints.ReadCurrent(ctx, service.Id, indicatorID)
+	joint, _, err := joints.ReadCurrent(ctx, service.Id, indicatorID)
 	if !errors.Is(err, sql.ErrNoRows) {
 		return joint, false, err
 	}

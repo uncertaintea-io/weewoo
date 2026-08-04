@@ -73,3 +73,12 @@ cat
 	require.NoError(t, err)
 	assert.Equal(t, input, output.Bytes())
 }
+
+func TestJECDFCommandNameBoundsMetricLabels(t *testing.T) {
+	assert.Equal(t, "build", jecdfCommandName([]string{"build", "-ulp", "3"}))
+	assert.Equal(t, "build", jecdfCommandName([]string{"-someoption", "build", "-ulp", "3"}))
+	assert.Equal(t, "query", jecdfCommandName([]string{"query", "1"}))
+	assert.Equal(t, "render", jecdfCommandName([]string{"render", "128", "128", "2"}))
+	assert.Equal(t, "unknown", jecdfCommandName(nil))
+	assert.Equal(t, "unknown", jecdfCommandName([]string{"unexpected"}))
+}

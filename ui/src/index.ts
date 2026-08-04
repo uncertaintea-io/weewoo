@@ -744,7 +744,7 @@ function renderServiceDetail(service: Service, history: ServiceChange[] = [], hi
     </section>
     <section class="detail-panel"><div class="panel-header"><h2>Configuration history</h2><span>Revision ${String(service.revision ?? 1)} · generation ${String(service.generation ?? 1)}</span></div>${historyUnavailable ? '<p class="muted-copy">Configuration history is temporarily unavailable.</p>' : renderServiceHistory(history)}</section>
   `, '200 OK');
-  detailVisualizationCleanup = renderJECDF('joint-ecdf', service.id);
+  detailVisualizationCleanup = renderJECDF('joint-ecdf', service.id, service.generation ?? 1);
   document.querySelector('#delete-service')?.addEventListener('click', () => { void deleteServiceFromDetail(service); });
   document.querySelector('#reset-baseline')?.addEventListener('click', () => { void resetBaselineFromDetail(service); });
   document.querySelector('#toggle-tracking')?.addEventListener('click', () => {

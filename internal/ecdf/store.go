@@ -24,5 +24,7 @@ type ChunkStore interface {
 // service and indicator.
 type JointStore interface {
 	Publish(ctx context.Context, serviceID, indicatorID int, intervalEnd time.Time, build func(io.Writer) error) (bytesWritten int64, published bool, err error)
-	ReadCurrent(ctx context.Context, serviceID, indicatorID int) ([]byte, error)
+
+	// ReadCurrent returns the latest published joint ECDF and its SHA256 checksum.
+	ReadCurrent(ctx context.Context, serviceID, indicatorID int) ([]byte, string, error)
 }

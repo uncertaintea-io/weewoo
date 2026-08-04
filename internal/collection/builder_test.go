@@ -55,8 +55,8 @@ func (s *blockedJointStore) Publish(ctx context.Context, _ int, _ int, _ time.Ti
 	return int64(body.Len()), true, nil
 }
 
-func (*blockedJointStore) ReadCurrent(context.Context, int, int) ([]byte, error) {
-	return nil, errors.New("not implemented")
+func (*blockedJointStore) ReadCurrent(context.Context, int, int) ([]byte, string, error) {
+	return nil, "", errors.New("not implemented")
 }
 
 func (unreadableServiceConfig) ReadService(int) (*config.Service, error) {
@@ -93,6 +93,12 @@ func (s *recordingJointStore) Publish(ctx context.Context, serviceID, indicatorI
 	return int64(body.Len()), true, nil
 }
 
+func (s *recordingJointStore) ReadCurrent(context.Context, int, int) ([]byte, string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]byte(nil), s.body...), "", nil
+}
+
 func TestStartECDFBuilderBuildsIntervalOnceAcrossReplicas(t *testing.T) {
 	setFakeJECDF(t, "#!/bin/sh\ncat >/dev/null\necho -n 'fake-ecdf-output'\n")
 	cfg := config.NewFakeConfig()
@@ -122,12 +128,6 @@ func TestStartECDFBuilderBuildsIntervalOnceAcrossReplicas(t *testing.T) {
 	defer joint.mu.Unlock()
 	assert.Equal(t, 1, joint.buildCount)
 	assert.Len(t, joint.intervals, 1)
-}
-
-func (s *recordingJointStore) ReadCurrent(context.Context, int, int) ([]byte, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return append([]byte(nil), s.body...), nil
 }
 
 func setFakeJECDF(t *testing.T, script string) {
