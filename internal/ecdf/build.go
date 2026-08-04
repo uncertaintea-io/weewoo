@@ -63,7 +63,7 @@ func buildError(prefix string, err error) error {
 func buildFromStream(ctx context.Context, chunks <-chan []byte, writer io.Writer) error {
 	return runJECDF(
 		ctx,
-		[]string{"build"},
+		[]string{"build", "-ulp", "3"},
 		func(ctx context.Context, stdin io.Writer) error {
 			if err := writeChunks(ctx, stdin, chunks); err != nil {
 				return fmt.Errorf("failed to write chunks to jecdf: %w", err)
