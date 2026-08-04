@@ -11,6 +11,18 @@ available through its [Releases page](https://github.com/uncertaintea-io/db/rele
 Download the tarball for your operating system and platform, extract the stand-alone `jecdf` binary,
 and copy it to the root directory of the respository.
 
+To force a diagnostic build for one service without publishing or changing the
+database, run:
+
+```shell
+go run ./cmd/jecdf-build -config config.yaml -service-id 1 -indicator-id 1 -output /tmp/jecdf-debug.bin
+```
+
+The command uses the service's active generation and the same eligible chunks
+as the scheduled publisher. It reports the generation and eligible chunk count;
+diagnostics from the `jecdf` process are printed directly to the terminal. Use
+`-jecdf /path/to/jecdf` when the binary is not at `./jecdf`.
+
 ## Alerts
 
 WeeWoo stores user-visible alert conditions, occurrences, review decisions, and
