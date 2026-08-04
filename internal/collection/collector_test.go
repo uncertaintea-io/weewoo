@@ -33,7 +33,7 @@ func TestCollectionSucceedsWhenAnalysisFails(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{
 			"status":"success",
-			"data":{"result":[{"values":[[1710000000,"1"]]}]}
+			"data":{"resultType":"matrix","result":[{"values":[[1710000060,"1"]]}]}
 		}`))
 	}))
 	t.Cleanup(prometheus.Close)
@@ -64,7 +64,7 @@ func TestCollectionFailureIdentifiesThePrometheusQuery(t *testing.T) {
 		return &http.Response{
 			StatusCode: http.StatusOK,
 			Header:     http.Header{"Content-Type": {"application/json"}},
-			Body:       io.NopCloser(strings.NewReader(`{"status":"success","data":{"result":[]}}`)),
+			Body:       io.NopCloser(strings.NewReader(`{"status":"success","data":{"resultType":"matrix","result":[]}}`)),
 		}, nil
 	})}
 	collector := &collector{client: client, chunkStore: ecdf.NewFakeChunkStore()}
@@ -82,9 +82,9 @@ func TestCollectionFailureIdentifiesTheLatencyQuery(t *testing.T) {
 	requests := 0
 	client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
 		requests++
-		body := `{"status":"success","data":{"result":[{"values":[[60,"1"]]}]}}`
+		body := `{"status":"success","data":{"resultType":"matrix","result":[{"values":[[60,"1"]]}]}}`
 		if requests == 2 {
-			body = `{"status":"success","data":{"result":[]}}`
+			body = `{"status":"success","data":{"resultType":"matrix","result":[]}}`
 		}
 		return &http.Response{
 			StatusCode: http.StatusOK,
@@ -103,28 +103,19 @@ func TestCollectionFailureIdentifiesTheLatencyQuery(t *testing.T) {
 	require.EqualError(t, err, `Prometheus latency query "histogram_quantile(0.99, latency_bucket)" failed: no data returned`)
 }
 
-func TestHistoricalImportBatchesAYearBelowPrometheusPointLimit(t *testing.T) {
-	const maxPoints = 10_000
-	var (
-		requestsMu sync.Mutex
-		requests   int
-	)
+func TestHistoricalImportQueriesEachTimeChunk(t *testing.T) {
+	start := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
+	var requested []collectionWindow
 	client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
-		start, err := strconv.ParseInt(request.URL.Query().Get("start"), 10, 64)
-		require.NoError(t, err)
-		end, err := strconv.ParseInt(request.URL.Query().Get("end"), 10, 64)
-		require.NoError(t, err)
-		points := ((end - start) / 15) + 1
-		require.LessOrEqual(t, points, int64(maxPoints))
-		requestsMu.Lock()
-		requests++
-		requestsMu.Unlock()
+		windowStart := prometheusRequestTime(t, request, "start")
+		windowEnd := prometheusRequestTime(t, request, "end")
+		requested = append(requested, collectionWindow{Start: windowStart, End: windowEnd})
 		return &http.Response{
 			StatusCode: http.StatusOK,
 			Header:     http.Header{"Content-Type": {"application/json"}},
 			Body: io.NopCloser(strings.NewReader(fmt.Sprintf(
-				`{"status":"success","data":{"result":[{"values":[[%d,"1"]]}]}}`,
-				end,
+				`{"status":"success","data":{"resultType":"matrix","result":[{"values":[[%d,"1"]]}]}}`,
+				windowEnd.Unix(),
 			))),
 		}, nil
 	})}
@@ -140,26 +131,30 @@ func TestHistoricalImportBatchesAYearBelowPrometheusPointLimit(t *testing.T) {
 		LatencyQuery:  "latency",
 		Interval:      time.Hour,
 	}
-	start := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
 
-	_, err := collector.Import(context.Background(), service, start, start.Add(365*24*time.Hour), nil)
+	summary, err := collector.Import(context.Background(), service, start, start.Add(3*time.Hour), nil)
 
 	require.NoError(t, err)
-	requestsMu.Lock()
-	defer requestsMu.Unlock()
-	require.Greater(t, requests, 2)
+	require.Equal(t, ImportSummary{TotalWindows: 3, ImportedWindows: 3}, summary)
+	require.Equal(t, []collectionWindow{
+		{Start: start, End: start.Add(time.Hour)},
+		{Start: start, End: start.Add(time.Hour)},
+		{Start: start.Add(time.Hour), End: start.Add(2 * time.Hour)},
+		{Start: start.Add(time.Hour), End: start.Add(2 * time.Hour)},
+		{Start: start.Add(2 * time.Hour), End: start.Add(3 * time.Hour)},
+		{Start: start.Add(2 * time.Hour), End: start.Add(3 * time.Hour)},
+	}, requested)
 }
 
-func TestHistoricalImportContinuesAfterBatchWithNoData(t *testing.T) {
+func TestHistoricalImportContinuesAfterWindowWithNoData(t *testing.T) {
 	start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	var requests int
 	client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		requests++
-		body := `{"status":"success","data":{"result":[]}}`
-		if request.URL.Query().Get("start") != strconv.FormatInt(start.Unix(), 10) {
-			batchStart, err := strconv.ParseInt(request.URL.Query().Get("start"), 10, 64)
-			require.NoError(t, err)
-			body = fmt.Sprintf(`{"status":"success","data":{"result":[{"values":[[%d,"1"]]}]}}`, batchStart+15)
+		body := `{"status":"success","data":{"resultType":"matrix","result":[]}}`
+		if prometheusRequestTime(t, request, "start") != start {
+			windowEnd := prometheusRequestTime(t, request, "end")
+			body = fmt.Sprintf(`{"status":"success","data":{"resultType":"matrix","result":[{"values":[[%d,"1"]]}]}}`, windowEnd.Unix())
 		}
 		return &http.Response{
 			StatusCode: http.StatusOK,
@@ -173,11 +168,11 @@ func TestHistoricalImportContinuesAfterBatchWithNoData(t *testing.T) {
 		LoadQuery: "load", LatencyQuery: "latency", Interval: time.Hour,
 	}
 
-	summary, err := collector.Import(context.Background(), service, start, start.Add(historicalBatchSpan+time.Hour), nil)
+	summary, err := collector.Import(context.Background(), service, start, start.Add(2*time.Hour), nil)
 
 	require.NoError(t, err)
-	require.Greater(t, requests, 1)
-	require.Equal(t, ImportSummary{TotalWindows: 43, ImportedWindows: 1, GapWindows: 42}, summary)
+	require.Equal(t, 3, requests)
+	require.Equal(t, ImportSummary{TotalWindows: 2, ImportedWindows: 1, GapWindows: 1}, summary)
 }
 
 type importRecordingChunkStore struct {
@@ -205,16 +200,14 @@ func (s *importRecordingChunkStore) WriteChunk(serviceID, indicatorID int, gener
 
 func TestHistoricalImportWritesOneTimeChunkPerServiceInterval(t *testing.T) {
 	start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	values := make([]string, 0, 8)
-	for timestamp := start; timestamp.Before(start.Add(2 * time.Hour)); timestamp = timestamp.Add(15 * time.Minute) {
-		values = append(values, fmt.Sprintf(`[%d,"1"]`, timestamp.Unix()))
-	}
-	body := fmt.Sprintf(`{"status":"success","data":{"result":[{"values":[%s]}]}}`, strings.Join(values, ","))
-	client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+	client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		windowEnd := prometheusRequestTime(t, request, "end")
 		return &http.Response{
 			StatusCode: http.StatusOK,
 			Header:     http.Header{"Content-Type": {"application/json"}},
-			Body:       io.NopCloser(strings.NewReader(body)),
+			Body: io.NopCloser(strings.NewReader(fmt.Sprintf(
+				`{"status":"success","data":{"resultType":"matrix","result":[{"values":[[%d,"1"]]}]}}`, windowEnd.Unix(),
+			))),
 		}, nil
 	})}
 	chunks := &importRecordingChunkStore{ChunkStore: ecdf.NewFakeChunkStore(), timestamps: make(map[int][]time.Time)}
@@ -228,20 +221,92 @@ func TestHistoricalImportWritesOneTimeChunkPerServiceInterval(t *testing.T) {
 
 	require.NoError(t, err)
 	require.Equal(t, []time.Time{start.Add(time.Hour), start.Add(2 * time.Hour)}, chunks.timestamps[LoadLatencyIndicator])
-	require.Len(t, chunks.timestamps[TimeOfDayIndicator], 8)
+	require.Equal(t, []time.Time{start.Add(time.Hour), start.Add(2 * time.Hour)}, chunks.timestamps[TimeOfDayIndicator])
 }
 
-func TestHistoricalImportUsesAnalysisBackpressureInsteadOfDroppingChunks(t *testing.T) {
+func TestHistoricalImportWritesHistogramIncreaseWithoutBucketTimestamps(t *testing.T) {
 	start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	body := fmt.Sprintf(
-		`{"status":"success","data":{"result":[{"values":[[%d,"1"]]}]}}`,
-		start.Unix(),
-	)
-	client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+	end := start.Add(time.Hour)
+	client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		require.NoError(t, request.ParseForm())
+		var body string
+		switch request.Form.Get("query") {
+		case "load":
+			body = fmt.Sprintf(
+				`{"status":"success","data":{"resultType":"matrix","result":[{"values":[[%d,"1"]]}]}}`,
+				end.Unix(),
+			)
+		case "latency":
+			body = fmt.Sprintf(
+				`{"status":"success","data":{"resultType":"matrix","result":[{"histograms":[[%d,{"count":"10","sum":"5","buckets":[[0,"0","1","10"]]}],[%d,{"count":"13","sum":"8","buckets":[[0,"0","1","13"]]}]]}]}}`,
+				start.Unix(), end.Unix(),
+			)
+		default:
+			t.Fatalf("unexpected Prometheus query %q", request.Form.Get("query"))
+		}
 		return &http.Response{
 			StatusCode: http.StatusOK,
 			Header:     http.Header{"Content-Type": {"application/json"}},
 			Body:       io.NopCloser(strings.NewReader(body)),
+		}, nil
+	})}
+	chunks := ecdf.NewFakeChunkStore()
+	collector := &collector{client: client, chunkStore: chunks}
+	service := &config.Service{
+		Id: 1, Name: "checkout", PrometheusURL: "http://prometheus.example",
+		LoadQuery: "load", LatencyQuery: "latency", Interval: time.Hour,
+	}
+
+	summary, err := collector.Import(context.Background(), service, start, end, nil)
+
+	require.NoError(t, err)
+	require.Equal(t, ImportSummary{TotalWindows: 1, ImportedWindows: 1}, summary)
+	chunk, err := chunks.ReadChunk(service.Id, LoadLatencyIndicator, end)
+	require.NoError(t, err)
+	_, _, latencies, err := ecdf.Decode(chunk)
+	require.NoError(t, err)
+	require.Equal(t, []ecdf.Sample{{Value: 1, Count: 3}}, latencies)
+}
+
+func TestHistoricalImportUsesPartialFinalWindowAsPrometheusStep(t *testing.T) {
+	start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	end := start.Add(90 * time.Minute)
+	var steps []string
+	client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		require.NoError(t, request.ParseForm())
+		steps = append(steps, request.Form.Get("step"))
+		windowEnd := prometheusRequestTime(t, request, "end")
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": {"application/json"}},
+			Body: io.NopCloser(strings.NewReader(fmt.Sprintf(
+				`{"status":"success","data":{"resultType":"matrix","result":[{"values":[[%d,"1"]]}]}}`, windowEnd.Unix(),
+			))),
+		}, nil
+	})}
+	collector := &collector{client: client, chunkStore: ecdf.NewFakeChunkStore()}
+	service := &config.Service{
+		Id: 1, Name: "checkout", PrometheusURL: "http://prometheus.example",
+		LoadQuery: "load", LatencyQuery: "latency", Interval: time.Hour,
+	}
+
+	summary, err := collector.Import(context.Background(), service, start, end, nil)
+
+	require.NoError(t, err)
+	require.Equal(t, ImportSummary{TotalWindows: 2, ImportedWindows: 2}, summary)
+	require.Equal(t, []string{"3600", "3600", "1800", "1800"}, steps)
+}
+
+func TestHistoricalImportUsesAnalysisBackpressureInsteadOfDroppingChunks(t *testing.T) {
+	start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		windowEnd := prometheusRequestTime(t, request, "end")
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": {"application/json"}},
+			Body: io.NopCloser(strings.NewReader(fmt.Sprintf(
+				`{"status":"success","data":{"resultType":"matrix","result":[{"values":[[%d,"1"]]}]}}`, windowEnd.Unix(),
+			))),
 		}, nil
 	})}
 	analysis := &backpressureAnalysisQueue{}
@@ -269,6 +334,14 @@ func (f roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) 
 	return f(request)
 }
 
+func prometheusRequestTime(t *testing.T, request *http.Request, parameter string) time.Time {
+	t.Helper()
+	require.NoError(t, request.ParseForm())
+	seconds, err := strconv.ParseFloat(request.Form.Get(parameter), 64)
+	require.NoError(t, err)
+	return time.Unix(int64(seconds), 0).UTC()
+}
+
 func (*pendingRecovery) Stop() {}
 
 func (*pendingRecovery) Register(*config.Service, historicalCollector) {}
@@ -292,17 +365,18 @@ func TestScheduledCollectionContinuesWhileRecoveryIsPending(t *testing.T) {
 		requestsMu sync.Mutex
 		requests   int
 	)
-	client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+	client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		requestsMu.Lock()
 		requests++
 		requestsMu.Unlock()
+		windowEnd := prometheusRequestTime(t, request, "end")
 		return &http.Response{
 			StatusCode: http.StatusOK,
 			Header:     http.Header{"Content-Type": []string{"application/json"}},
-			Body: io.NopCloser(strings.NewReader(`{
+			Body: io.NopCloser(strings.NewReader(fmt.Sprintf(`{
 				"status":"success",
-				"data":{"result":[{"values":[[1710000000,"1"]]}]}
-			}`)),
+				"data":{"resultType":"matrix","result":[{"values":[[%d,"1"]]}]}
+			}`, windowEnd.Unix()))),
 		}, nil
 	})}
 

@@ -13,6 +13,7 @@ import (
 	"github.com/uncertaintea-io/weewoo/internal/alerting"
 	"github.com/uncertaintea-io/weewoo/internal/collection"
 	"github.com/uncertaintea-io/weewoo/internal/config"
+	"github.com/uncertaintea-io/weewoo/internal/ecdf"
 )
 
 const prometheusTestTimeout = 15 * time.Second
@@ -398,30 +399,48 @@ func (a *serviceAPI) testConnection(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), prometheusTestTimeout)
 	defer cancel()
-	end := time.Now().UTC()
+	end := time.Now().UTC().Truncate(time.Minute)
 	start := end.Add(-5 * time.Minute)
-	loadValues, loadErr := collection.QueryPrometheusRange(ctx, a.httpClient, request.PrometheusURL, request.LoadQuery, start, end)
-	latencyValues, latencyErr := collection.QueryPrometheusRange(ctx, a.httpClient, request.PrometheusURL, request.LatencyQuery, start, end)
+	loadPoints, loadErr := collection.QueryPrometheusRangePoints(ctx, a.httpClient, request.PrometheusURL, request.LoadQuery, start, end, time.Minute)
+	latencySamples, latencyErr := collection.QueryPrometheusRangeSamples(ctx, a.httpClient, request.PrometheusURL, request.LatencyQuery, start, end, time.Minute)
+
 	type queryResult struct {
 		Valid   bool    `json:"valid"`
 		Samples int     `json:"samples"`
 		Latest  float64 `json:"latest,omitempty"`
 		Error   string  `json:"error,omitempty"`
 	}
-	resultFor := func(values []float64, err error) queryResult {
+
+	resultForPoints := func(points []collection.PrometheusPoint, err error) queryResult {
 		if err != nil {
 			return queryResult{Error: err.Error()}
 		}
-		return queryResult{Valid: true, Samples: len(values), Latest: values[len(values)-1]}
+		return queryResult{Valid: true, Samples: len(points), Latest: points[len(points)-1].Value}
 	}
+
+	resultForSamples := func(samples []ecdf.Sample, err error) queryResult {
+		if err != nil {
+			return queryResult{Error: err.Error()}
+		}
+		total := 0
+		for _, sample := range samples {
+			total += int(sample.Count)
+		}
+		result := queryResult{Valid: true, Samples: total}
+		if len(samples) > 0 {
+			result.Latest = samples[len(samples)-1].Value
+		}
+		return result
+	}
+
 	response := struct {
 		Message      string      `json:"message"`
 		LoadQuery    queryResult `json:"loadQuery"`
 		LatencyQuery queryResult `json:"latencyQuery"`
 	}{
 		Message:      "Connection and queries succeeded",
-		LoadQuery:    resultFor(loadValues, loadErr),
-		LatencyQuery: resultFor(latencyValues, latencyErr),
+		LoadQuery:    resultForPoints(loadPoints, loadErr),
+		LatencyQuery: resultForSamples(latencySamples, latencyErr),
 	}
 	if loadErr != nil || latencyErr != nil {
 		response.Message = "One or more queries failed validation"

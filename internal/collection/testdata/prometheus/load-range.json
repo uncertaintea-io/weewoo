@@ -1,0 +1,91 @@
+{
+  "query": "irate(histogram_count(sum by (app) (weewoo_http_request_duration_seconds{app=\"weewoo\"}))[30s:])",
+  "start": "2026-08-03T22:38:00Z",
+  "end": "2026-08-03T22:43:00Z",
+  "step_seconds": 60,
+  "status_code": 200,
+  "content_type": "application/json",
+  "response_body": {
+    "status": "success",
+    "data": {
+      "resultType": "matrix",
+      "result": [
+        {
+          "metric": {
+            "app": "weewoo"
+          },
+          "values": [
+            [
+              1785796680,
+              "1200.6"
+            ],
+            [
+              1785796740,
+              "1200"
+            ],
+            [
+              1785796800,
+              "1211.5333333333333"
+            ],
+            [
+              1785796860,
+              "1202.4666666666667"
+            ],
+            [
+              1785796920,
+              "1205.3333333333333"
+            ],
+            [
+              1785796980,
+              "1202.4"
+            ]
+          ]
+        }
+      ]
+    }
+  },
+  "want_samples": [
+    {
+      "Value": 1200,
+      "Count": 1
+    },
+    {
+      "Value": 1202.4,
+      "Count": 1
+    },
+    {
+      "Value": 1202.4666666666667,
+      "Count": 1
+    },
+    {
+      "Value": 1205.3333333333333,
+      "Count": 1
+    },
+    {
+      "Value": 1211.5333333333333,
+      "Count": 1
+    }
+  ],
+  "want_points": [
+    {
+      "Timestamp": "2026-08-03T18:39:00-04:00",
+      "Value": 1200
+    },
+    {
+      "Timestamp": "2026-08-03T18:40:00-04:00",
+      "Value": 1211.5333333333333
+    },
+    {
+      "Timestamp": "2026-08-03T18:41:00-04:00",
+      "Value": 1202.4666666666667
+    },
+    {
+      "Timestamp": "2026-08-03T18:42:00-04:00",
+      "Value": 1205.3333333333333
+    },
+    {
+      "Timestamp": "2026-08-03T18:43:00-04:00",
+      "Value": 1202.4
+    }
+  ]
+}

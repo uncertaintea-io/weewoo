@@ -23,7 +23,7 @@ func TestWriteTimeOfDayChunksPreservesSingletonPairAndObservationTimestamp(t *te
 	service := &config.Service{Id: 7, Generation: 2, Interval: 30 * time.Second}
 	timestamp := time.Date(2026, 7, 31, 12, 0, 15, 900, time.UTC)
 
-	observations, err := c.writeTimeOfDayChunks(service, []prometheusPoint{{Timestamp: timestamp, Value: 42}})
+	observations, err := c.writeTimeOfDayChunks(service, []PrometheusPoint{{Timestamp: timestamp, Value: 42}})
 	require.NoError(t, err)
 	require.Len(t, observations, 1)
 	storedAt := timestamp.Truncate(time.Second)

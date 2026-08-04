@@ -15,10 +15,8 @@ import (
 )
 
 const (
-	LoadLatencyIndicator  = 1
-	TimeOfDayIndicator    = 2
-	historicalBatchPoints = 10_000
-	historicalBatchSpan   = time.Duration(historicalBatchPoints-1) * 15 * time.Second
+	LoadLatencyIndicator = 1
+	TimeOfDayIndicator   = 2
 )
 
 type Collector interface {
@@ -160,55 +158,35 @@ func (c *collector) Schedule(service *config.Service) error {
 	})
 }
 
-// Import collects an explicit historical window for a service.
+// Import collects an explicit historical range for a service, one Time chunk at a time.
 func (c *collector) Import(ctx context.Context, service *config.Service, start, end time.Time, progress ImportProgressHandler) (ImportSummary, error) {
 	summary := ImportSummary{TotalWindows: countHistoricalWindows(start, end, service.Interval)}
 	if service.Interval <= 0 {
 		return summary, fmt.Errorf("invalid service interval")
 	}
 	processor := newWindowProcessor(time.Now)
-	windows := newHistoricalWindows(start, end, service.Interval)
-	for batchStart := start; batchStart.Before(end); {
-		if err := ctx.Err(); err != nil {
-			return summary, err
+	for windowStart := start; windowStart.Before(end); {
+		windowEnd := windowStart.Add(service.Interval)
+		if windowEnd.After(end) {
+			windowEnd = end
 		}
-		batchEnd := batchStart.Add(historicalBatchSpan)
-		if batchEnd.After(end) {
-			batchEnd = end
-		}
-		loadPoints, err := queryPrometheusRangePointsAtStep(ctx, c.client, service.PrometheusURL, service.LoadQuery, batchStart, batchEnd, service.Interval)
-		if err != nil && !errors.Is(err, ErrNoPrometheusData) {
-			return summary, err
-		}
-		latencyPoints, err := queryPrometheusRangePointsAtStep(ctx, c.client, service.PrometheusURL, service.LatencyQuery, batchStart, batchEnd, service.Interval)
-		if err != nil && !errors.Is(err, ErrNoPrometheusData) {
-			return summary, err
-		}
-		windows.add(batchStart, start, loadPoints, latencyPoints)
-		if err := windows.flushThrough(batchEnd, func(window collectionWindow, loads []prometheusPoint, latencies []float64) error {
-			result := processor.Process(ctx, windowAttempt{Window: window}, func(context.Context) error {
-				if len(loads) == 0 || len(latencies) == 0 {
-					return errWindowHasNoMetrics
-				}
-				return c.writeCollectedIndicators(ctx, service, window.End, loads, latencies, true)
-			}, historicalImportWindowPolicy{})
-			switch result.Outcome {
-			case windowCompleted:
-				summary.ImportedWindows++
-			case windowMonitoringGap:
-				summary.GapWindows++
-			case windowCancelled, windowFailed:
-				return result.Err
-			}
-			return nil
-		}); err != nil {
-			return summary, err
+		window := collectionWindow{Start: windowStart, End: windowEnd}
+		result := processor.Process(ctx, windowAttempt{Window: window}, func(ctx context.Context) error {
+			return c.collectSamples(ctx, service, window.Start, window.End, true)
+		}, historicalImportWindowPolicy{})
+		switch result.Outcome {
+		case windowCompleted:
+			summary.ImportedWindows++
+		case windowMonitoringGap:
+			summary.GapWindows++
+		case windowCancelled, windowFailed:
+			return summary, result.Err
 		}
 		if progress != nil {
-			percent := int(batchEnd.Sub(start) * 100 / end.Sub(start))
+			percent := int(windowEnd.Sub(start) * 100 / end.Sub(start))
 			progress(ImportProgress{Percent: percent, ImportSummary: summary})
 		}
-		batchStart = batchEnd
+		windowStart = windowEnd
 	}
 	return summary, nil
 }
@@ -225,95 +203,6 @@ func countHistoricalWindows(start, end time.Time, interval time.Duration) int {
 	return int(windows)
 }
 
-type historicalWindowValues struct {
-	loads     []prometheusPoint
-	latencies []float64
-}
-
-type historicalWindows struct {
-	start     time.Time
-	end       time.Time
-	interval  time.Duration
-	nextStart time.Time
-	nextFlush time.Time
-	values    map[time.Time]*historicalWindowValues
-}
-
-func newHistoricalWindows(start, end time.Time, interval time.Duration) *historicalWindows {
-	nextFlush := start.Add(interval)
-	if nextFlush.After(end) {
-		nextFlush = end
-	}
-	return &historicalWindows{
-		start: start, end: end, interval: interval, nextStart: start, nextFlush: nextFlush,
-		values: make(map[time.Time]*historicalWindowValues),
-	}
-}
-
-func (w *historicalWindows) add(batchStart, importStart time.Time, loads, latencies []prometheusPoint) {
-	for _, point := range loads {
-		if batchStart.After(importStart) && !point.Timestamp.After(batchStart) {
-			continue
-		}
-		if windowEnd, ok := w.windowEnd(point.Timestamp); ok {
-			values := w.valueFor(windowEnd)
-			values.loads = append(values.loads, point)
-		}
-	}
-	for _, point := range latencies {
-		if batchStart.After(importStart) && !point.Timestamp.After(batchStart) {
-			continue
-		}
-		if windowEnd, ok := w.windowEnd(point.Timestamp); ok {
-			values := w.valueFor(windowEnd)
-			values.latencies = append(values.latencies, point.Value)
-		}
-	}
-}
-
-func (w *historicalWindows) windowEnd(timestamp time.Time) (time.Time, bool) {
-	if timestamp.Before(w.start) || !timestamp.Before(w.end) {
-		return time.Time{}, false
-	}
-	index := timestamp.Sub(w.start) / w.interval
-	windowEnd := w.start.Add((index + 1) * w.interval)
-	if windowEnd.After(w.end) {
-		windowEnd = w.end
-	}
-	return windowEnd, true
-}
-
-func (w *historicalWindows) valueFor(windowEnd time.Time) *historicalWindowValues {
-	values := w.values[windowEnd]
-	if values == nil {
-		values = &historicalWindowValues{}
-		w.values[windowEnd] = values
-	}
-	return values
-}
-
-func (w *historicalWindows) flushThrough(through time.Time, write func(collectionWindow, []prometheusPoint, []float64) error) error {
-	for !w.nextFlush.After(through) {
-		values := w.values[w.nextFlush]
-		if values == nil {
-			values = &historicalWindowValues{}
-		}
-		if err := write(collectionWindow{Start: w.nextStart, End: w.nextFlush}, values.loads, values.latencies); err != nil {
-			return err
-		}
-		delete(w.values, w.nextFlush)
-		if w.nextFlush.Equal(w.end) {
-			break
-		}
-		w.nextStart = w.nextFlush
-		w.nextFlush = w.nextFlush.Add(w.interval)
-		if w.nextFlush.After(w.end) {
-			w.nextFlush = w.end
-		}
-	}
-	return nil
-}
-
 // this collects the samples from the prometheus server and writes them to the chunk store
 func (c *collector) collectHistorical(ctx context.Context, service *config.Service, start, end time.Time) error {
 	err := c.collectSamples(ctx, service, start, end, true)
@@ -325,28 +214,30 @@ func (c *collector) collectHistorical(ctx context.Context, service *config.Servi
 
 func (c *collector) collectSamples(ctx context.Context, service *config.Service, start, end time.Time, historicalOption ...bool) error {
 	historical := len(historicalOption) > 0 && historicalOption[0]
-	loadPoints, err := queryPrometheusRangePointsAtStep(ctx, c.client, service.PrometheusURL, service.LoadQuery, start, end, service.Interval)
+	step := service.Interval
+	if windowDuration := end.Sub(start); windowDuration < step {
+		step = windowDuration
+	}
+	loadPoints, err := QueryPrometheusRangePoints(ctx, c.client, service.PrometheusURL, service.LoadQuery, start, end, step)
 	if err != nil {
 		return prometheusQueryFailure("load", service.LoadQuery, err)
 	}
 	loadPoints = pointsInWindow(loadPoints, start, end)
-	latencyPoints, err := queryPrometheusRangePointsAtStep(ctx, c.client, service.PrometheusURL, service.LatencyQuery, start, end, service.Interval)
+	latencySamples, err := QueryPrometheusRangeSamples(ctx, c.client, service.PrometheusURL, service.LatencyQuery, start, end, step)
 	if err != nil {
 		return prometheusQueryFailure("latency", service.LatencyQuery, err)
 	}
-	latencyPoints = pointsInWindow(latencyPoints, start, end)
-	latencyValue := make([]float64, len(latencyPoints))
-	for i, point := range latencyPoints {
-		latencyValue[i] = point.Value
+	if len(loadPoints) == 0 || len(latencySamples) == 0 {
+		return errWindowHasNoMetrics
 	}
-	return c.writeCollectedIndicators(ctx, service, end, loadPoints, latencyValue, historical)
+	return c.writeCollectedIndicators(ctx, service, end, loadPoints, latencySamples, historical)
 }
 
 func prometheusQueryFailure(metric, query string, err error) error {
 	return fmt.Errorf("Prometheus %s query %q failed: %w", metric, query, err)
 }
 
-func pointsInWindow(points []prometheusPoint, start, end time.Time) []prometheusPoint {
+func pointsInWindow(points []PrometheusPoint, start, end time.Time) []PrometheusPoint {
 	filtered := points[:0]
 	for _, point := range points {
 		if point.Timestamp.After(start) && !point.Timestamp.After(end) {
@@ -356,13 +247,12 @@ func pointsInWindow(points []prometheusPoint, start, end time.Time) []prometheus
 	return filtered
 }
 
-func (c *collector) writeCollectedIndicators(ctx context.Context, service *config.Service, end time.Time, loadPoints []prometheusPoint, latencyValues []float64, historical bool) error {
+func (c *collector) writeCollectedIndicators(ctx context.Context, service *config.Service, end time.Time, loadPoints []PrometheusPoint, latencies []ecdf.Sample, historical bool) error {
 	loadValues := make([]float64, len(loadPoints))
 	for i, point := range loadPoints {
 		loadValues[i] = point.Value
 	}
 	loads := ecdf.CountSamples(loadValues)
-	latencies := ecdf.CountSamples(latencyValues)
 	if err := c.writeIndicatorChunk(service, LoadLatencyIndicator, end, loads, latencies); err != nil {
 		return err
 	}
@@ -409,7 +299,7 @@ func (c *collector) submitAnalysis(ctx context.Context, request AnalysisRequest)
 	return c.analyzer.Submit(request)
 }
 
-func (c *collector) writeTimeOfDayChunks(service *config.Service, points []prometheusPoint) ([]Observation, error) {
+func (c *collector) writeTimeOfDayChunks(service *config.Service, points []PrometheusPoint) ([]Observation, error) {
 	if service.Interval <= 0 {
 		return nil, fmt.Errorf("invalid service interval")
 	}
