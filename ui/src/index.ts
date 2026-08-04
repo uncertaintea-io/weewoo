@@ -704,14 +704,20 @@ function renderServiceDetail(service: Service, history: ServiceChange[] = [], hi
   const timeOfDay = service.timeOfDayModel ?? { state: 'learning' as const, coverage: 0, requiredDays: 5 };
   renderShell(`
     <section class="detail-header">
-      <div><a class="back-link" href="#services">← All services</a><p class="eyebrow">Service #${String(service.id)}</p><h2>${escapeHtml(service.name)}</h2>${renderServiceUrl(service.prometheusUrl)}</div>
-      <div class="detail-actions"><span class="status-pill status-pill--${escapeHtml(service.tracking.state)}">${escapeHtml(statusLabel(service.tracking.state))}</span><button id="toggle-tracking" class="secondary-button" type="button">${service.tracking.state === 'paused' ? 'Resume' : 'Pause'}</button><button id="reset-baseline" class="secondary-button" type="button">New service version</button><a class="secondary-button" href="#service/${String(service.id)}/edit">Edit</a><button id="delete-service" class="danger-button" type="button">Delete</button></div>
+      <div class="detail-identity"><a class="back-link" href="#services">← All services</a><h2>${escapeHtml(service.name)}</h2><p class="eyebrow">Service #${String(service.id)}</p>${renderServiceUrl(service.prometheusUrl)}</div>
+      <div class="detail-controls">
+        <span class="status-pill detail-status status-pill--${escapeHtml(service.tracking.state)}">${escapeHtml(statusLabel(service.tracking.state))}</span>
+        <div class="detail-actions"><button id="toggle-tracking" class="secondary-button" type="button">${service.tracking.state === 'paused' ? 'Resume' : 'Pause'}</button><button id="reset-baseline" class="secondary-button" type="button">New service version</button><a class="secondary-button" href="#service/${String(service.id)}/edit">Edit</a><button id="delete-service" class="danger-button" type="button">Delete</button></div>
+      </div>
     </section>
     <section class="detail-grid">
       <article class="detail-card"><span>Tracking state</span><strong>${escapeHtml(statusLabel(service.tracking.state))}</strong><p>${escapeHtml(service.tracking.error ?? `Database revision ${String(service.revision ?? 1)}; active revision ${String(service.tracking.activeRevision ?? 'pending')}.`)}</p></article>
       <article class="detail-card"><span>Last successful collection</span><strong>${escapeHtml(formatTimestamp(service.tracking.lastSuccess))}</strong><p>Every ${escapeHtml(formatInterval(service.intervalSeconds))}</p></article>
       <article class="detail-card"><span>Last collection error</span><strong>${escapeHtml(formatTimestamp(service.tracking.lastError))}</strong><p>${escapeHtml(service.tracking.error ?? 'No errors recorded')}</p></article>
+    </section>
+    <section class="detail-columns detail-overview-row">
       <article class="detail-card"><span>Load vs. UTC Time of Day</span><strong>${escapeHtml(timeOfDay.state === 'ready' ? 'Ready' : timeOfDay.state === 'degraded' ? 'Degraded' : 'Learning')}</strong><p>${String(Math.round(timeOfDay.coverage * 100))}% slot coverage · ${String(timeOfDay.requiredDays)} UTC days required · latest build ${escapeHtml(formatTimestamp(timeOfDay.latestBuild))}</p></article>
+      <article class="detail-panel"><div class="panel-header"><h2>Historical imports</h2><span>${String(service.imports.length)} jobs</span></div>${renderImports(service)}</article>
     </section>
     <section class="detail-panel jecdf-panel" aria-labelledby="joint-ecdf-heading">
       <div class="panel-header">
@@ -732,11 +738,10 @@ function renderServiceDetail(service: Service, history: ServiceChange[] = [], hi
         </aside>
       </div>
     </section>
-    <section class="detail-columns">
+    <section class="detail-columns detail-operations-row">
       <article class="detail-panel"><div class="panel-header"><h2>Collection activity</h2><span>Latest first</span></div>${renderActivity(service)}</article>
-      <article class="detail-panel"><div class="panel-header"><h2>Historical imports</h2><span>${String(service.imports.length)} jobs</span></div>${renderImports(service)}</article>
+      <section class="detail-panel query-detail"><div class="panel-header"><h2>Prometheus configuration</h2></div><dl class="query-grid">${renderQueryBox('Load signal', service.loadQuery)}${renderQueryBox('Latency signal', service.latencyQuery)}</dl></section>
     </section>
-    <section class="detail-panel query-detail"><div class="panel-header"><h2>Prometheus configuration</h2></div><dl class="query-grid">${renderQueryBox('Load signal', service.loadQuery)}${renderQueryBox('Latency signal', service.latencyQuery)}</dl></section>
     <section class="detail-panel"><div class="panel-header"><h2>Configuration history</h2><span>Revision ${String(service.revision ?? 1)} · generation ${String(service.generation ?? 1)}</span></div>${historyUnavailable ? '<p class="muted-copy">Configuration history is temporarily unavailable.</p>' : renderServiceHistory(history)}</section>
   `, '200 OK');
   detailVisualizationCleanup = renderJECDF('joint-ecdf', service.id);
