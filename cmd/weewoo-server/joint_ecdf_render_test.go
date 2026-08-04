@@ -66,6 +66,60 @@ func TestJointECDFRenderCoordinatorCoalescesConcurrentRequests(t *testing.T) {
 	assert.Equal(t, int32(1), calls.Load())
 }
 
+type observedDoneContext struct {
+	context.Context
+	observed chan struct{}
+}
+
+func (c *observedDoneContext) Done() <-chan struct{} {
+	select {
+	case c.observed <- struct{}{}:
+	default:
+	}
+	return c.Context.Done()
+}
+
+func TestJointECDFRenderCoordinatorSharedRenderSurvivesLeaderCancellation(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var calls atomic.Int32
+	coordinator := newJointECDFRenderCoordinator(
+		func(ctx context.Context, _ []byte, width, height int, _ ecdf.RenderOptions) (*ecdf.RenderResponse, error) {
+			calls.Add(1)
+			close(started)
+			select {
+			case <-release:
+				return successfulJointRender(width, height), nil
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		},
+		1, time.Second, 1024,
+	)
+
+	leaderCtx, cancelLeader := context.WithCancel(context.Background())
+	leaderResult := make(chan error, 1)
+	go func() {
+		_, err := coordinator.Render(leaderCtx, "same", []byte("definition"), 2, 2, 0)
+		leaderResult <- err
+	}()
+	<-started
+
+	followerCtx := &observedDoneContext{Context: context.Background(), observed: make(chan struct{}, 1)}
+	followerResult := make(chan error, 1)
+	go func() {
+		_, err := coordinator.Render(followerCtx, "same", []byte("definition"), 2, 2, 0)
+		followerResult <- err
+	}()
+	<-followerCtx.observed
+
+	cancelLeader()
+	assert.ErrorIs(t, <-leaderResult, context.Canceled)
+	close(release)
+	require.NoError(t, <-followerResult)
+	assert.Equal(t, int32(1), calls.Load())
+}
+
 func TestJointECDFRenderCoordinatorRejectsDistinctWorkAtCapacity(t *testing.T) {
 	started := make(chan struct{})
 	release := make(chan struct{})

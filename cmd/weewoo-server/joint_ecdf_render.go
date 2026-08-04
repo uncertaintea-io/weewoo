@@ -91,7 +91,10 @@ func (c *jointECDFRenderCoordinator) Render(
 			return nil, errJointECDFRenderBusy
 		}
 
-		renderCtx, cancel := context.WithTimeout(ctx, c.timeout)
+		// A render can be shared by callers with independent request lifetimes.
+		// Keep the bounded work alive when the singleflight leader disconnects;
+		// each caller still stops waiting on its own context below.
+		renderCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), c.timeout)
 		defer cancel()
 		response, err := func() (*ecdf.RenderResponse, error) {
 			jointECDFActiveRenders.Inc()
