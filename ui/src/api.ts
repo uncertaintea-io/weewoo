@@ -129,6 +129,23 @@ export interface AlertRecord {
   events: AlertEvent[];
 }
 
+export interface CDFSample {
+  value: number;
+  count: number;
+}
+
+export interface AlertOccurrenceCDF {
+  schemaVersion: number;
+  alertId: number;
+  occurrenceId: number;
+  serviceId: number;
+  indicatorId: number;
+  chunkTimestamp: string;
+  load: CDFSample[];
+  latency: CDFSample[];
+  cdf: { status: 'not_implemented'; description: string };
+}
+
 export interface JointECDFRender {
   width: number;
   height: number;
@@ -454,6 +471,34 @@ export async function ListAlerts(includeHistory = true, fetcher: Fetcher = fetch
   const body: unknown = await response.json();
   if (!Array.isArray(body)) throw new Error('Alerts response must be an array.');
   return body.map(parseAlert);
+}
+
+export async function GetAlertOccurrenceCDF(
+  occurrenceId: number,
+  fetcher: Fetcher = fetch,
+): Promise<AlertOccurrenceCDF> {
+  const response = await fetcher(`/api/alerts/occurrences/${String(occurrenceId)}/cdf`, {
+    headers: { Accept: 'application/json' },
+  });
+  if (!response.ok) throw await readServiceError(response);
+  const body: unknown = await response.json();
+  if (!isRecord(body) || !Array.isArray(body.load) || !Array.isArray(body.latency)
+    || typeof body.chunkTimestamp !== 'string' || !isRecord(body.cdf)
+    || typeof body.cdf.description !== 'string') {
+    throw new Error('Alert occurrence CDF response is invalid.');
+  }
+  const parseSamples = (samples: unknown[]): CDFSample[] => samples.map((sample) => {
+    if (!isRecord(sample) || typeof sample.value !== 'number' || typeof sample.count !== 'number') {
+      throw new Error('Alert occurrence CDF samples are invalid.');
+    }
+    return { value: sample.value, count: sample.count };
+  });
+  return {
+    schemaVersion: Number(body.schemaVersion), alertId: Number(body.alertId), occurrenceId: Number(body.occurrenceId),
+    serviceId: Number(body.serviceId), indicatorId: Number(body.indicatorId), chunkTimestamp: body.chunkTimestamp,
+    load: parseSamples(body.load), latency: parseSamples(body.latency),
+    cdf: { status: 'not_implemented', description: body.cdf.description },
+  };
 }
 
 export async function GetJointECDF(

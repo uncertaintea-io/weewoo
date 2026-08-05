@@ -23,6 +23,14 @@ type fakeAlertManager struct {
 	accepted       bool
 	reason         string
 	reviewErr      error
+	cdf            alerting.CDFDetails
+	cdfID          int64
+	cdfErr         error
+}
+
+func (f *fakeAlertManager) GetOccurrenceCDF(_ context.Context, id int64) (alerting.CDFDetails, error) {
+	f.cdfID = id
+	return f.cdf, f.cdfErr
 }
 
 func (f *fakeAlertManager) List(_ context.Context, history bool, limit int) ([]alerting.Alert, error) {
@@ -65,6 +73,28 @@ func TestAlertAPIReviewsOccurrence(t *testing.T) {
 	assert.Equal(t, int64(2), manager.revision)
 	assert.True(t, manager.accepted)
 	assert.Equal(t, "planned deployment", manager.reason)
+}
+
+func TestAlertAPIReturnsOccurrenceCDFDetails(t *testing.T) {
+	manager := &fakeAlertManager{cdf: alerting.CDFDetails{SchemaVersion: 1, OccurrenceID: 9}}
+	recorder := httptest.NewRecorder()
+
+	NewAlertAPIHandler(manager).ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/alerts/occurrences/9/cdf", nil))
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	assert.Equal(t, int64(9), manager.cdfID)
+	var response alerting.CDFDetails
+	require.NoError(t, json.NewDecoder(recorder.Body).Decode(&response))
+	assert.Equal(t, 1, response.SchemaVersion)
+}
+
+func TestAlertAPIRejectsCDFForNonAnomalyOccurrence(t *testing.T) {
+	manager := &fakeAlertManager{cdfErr: alerting.ErrCDFNotApplicable}
+	recorder := httptest.NewRecorder()
+
+	NewAlertAPIHandler(manager).ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/alerts/occurrences/9/cdf", nil))
+
+	assert.Equal(t, http.StatusUnprocessableEntity, recorder.Code)
 }
 
 func TestAlertAPIRejectsCrossOriginReview(t *testing.T) {

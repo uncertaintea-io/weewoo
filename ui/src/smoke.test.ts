@@ -1,6 +1,6 @@
 import { expect } from 'chai';
 import 'mocha';
-import { CreateService, GetServiceDetail, ListAlerts, ListAllServices, ResetServiceBaseline, ReviewAlertOccurrence, ServicesApiError } from './api';
+import { CreateService, GetAlertOccurrenceCDF, GetServiceDetail, ListAlerts, ListAllServices, ResetServiceBaseline, ReviewAlertOccurrence, ServicesApiError } from './api';
 import { datetimeLocalToUtcISOString, historicalRangeToUtc } from './datetime';
 import {
   LIVE_REFRESH_MILLISECONDS,
@@ -343,6 +343,28 @@ describe('Alerts API', () => {
     };
 
     await ReviewAlertOccurrence(12, 3, true, 'planned deployment', fetcher);
+  });
+
+  it('loads query-native observations for an anomaly occurrence', async () => {
+    const fetcher = (url: string | URL | Request): Promise<Response> => {
+      expect(url).to.equal('/api/alerts/occurrences/12/cdf');
+      return Promise.resolve(new Response(JSON.stringify({
+        schemaVersion: 1,
+        alertId: 9,
+        occurrenceId: 12,
+        serviceId: 7,
+        indicatorId: 1,
+        chunkTimestamp: '2026-07-24T10:00:00Z',
+        load: [{ value: 125.4, count: 1 }],
+        latency: [{ value: 0.18, count: 91 }],
+        cdf: { status: 'not_implemented', description: 'CDF rendering will be added later.' },
+      }), { status: 200 }));
+    };
+
+    const details = await GetAlertOccurrenceCDF(12, fetcher);
+
+    expect(details.load).to.deep.equal([{ value: 125.4, count: 1 }]);
+    expect(details.latency).to.deep.equal([{ value: 0.18, count: 91 }]);
   });
 
 });

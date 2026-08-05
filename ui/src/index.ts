@@ -1,5 +1,5 @@
 import './index.scss'
-import { CancelImport, CreateService, DeleteService, GetService, GetServiceDetail, ListAlerts, ListAllServices, ResetServiceBaseline, ReviewAlertOccurrence, ServicesApiError, SetServicePaused, TestService, UpdateService, type AlertOccurrence, type AlertRecord, type CreateServiceInput, type Service, type ServiceChange } from './api';
+import { CancelImport, CreateService, DeleteService, GetAlertOccurrenceCDF, GetService, GetServiceDetail, ListAlerts, ListAllServices, ResetServiceBaseline, ReviewAlertOccurrence, ServicesApiError, SetServicePaused, TestService, UpdateService, type AlertOccurrence, type AlertRecord, type CreateServiceInput, type Service, type ServiceChange } from './api';
 import { historicalRangeToUtc } from './datetime';
 import { renderJECDF } from './jecdf';
 import { liveRefreshDelay } from './live-refresh';
@@ -179,6 +179,7 @@ function renderEvidence(evidence: Record<string, unknown>): string {
 
 function renderOccurrence(occurrence: AlertOccurrence): string {
   const reviewable = occurrence.chunkTimestamp !== undefined;
+  const hasCDFDetails = occurrence.kind === 'anomaly';
   const accepted = occurrence.reviewOverride === true;
   return `
     <article class="occurrence-row">
@@ -187,7 +188,7 @@ function renderOccurrence(occurrence: AlertOccurrence): string {
         <span class="review-state${accepted ? ' is-accepted' : ''}">${escapeHtml(reviewLabel(occurrence))}</span>
       </header>
       ${renderEvidence(occurrence.evidence)}
-      ${occurrence.technicalDetails === '' ? '' : `<details><summary>Technical details</summary><pre>${escapeHtml(occurrence.technicalDetails)}</pre></details>`}
+      ${occurrence.technicalDetails === '' ? '' : `<details class="occurrence-more-details"${hasCDFDetails ? ` data-cdf-occurrence-id="${String(occurrence.id)}"` : ''}><summary>More details</summary><pre>${escapeHtml(occurrence.technicalDetails)}</pre>${hasCDFDetails ? `<div class="occurrence-cdf-result" data-occurrence-id="${String(occurrence.id)}" hidden></div>` : ''}</details>`}
       ${occurrence.reviewReason === undefined || occurrence.reviewReason === '' ? '' : `<p class="review-reason">Review note: ${escapeHtml(occurrence.reviewReason)}</p>`}
       ${reviewable ? `
         <div class="occurrence-actions">
@@ -281,6 +282,11 @@ function renderAlerts(alerts: AlertRecord[]): void {
     const alertId = details.closest<HTMLElement>('.alert-card')?.dataset.alertId;
     details.open = alertId !== undefined && expandedAlertIds.has(alertId);
   });
+  document.querySelectorAll<HTMLDetailsElement>('.occurrence-more-details[data-cdf-occurrence-id]').forEach((details) => {
+    details.addEventListener('toggle', () => {
+      if (details.open) void loadOccurrenceCDFForDetails(details);
+    });
+  });
   document.querySelectorAll<HTMLButtonElement>('.review-occurrence').forEach((button) => {
     button.addEventListener('click', () => { void reviewOccurrence(button); });
   });
@@ -290,6 +296,34 @@ function renderAlerts(alerts: AlertRecord[]): void {
       void acceptServiceAnomalies(button, group.serviceName, group.targets);
     });
   });
+}
+
+async function loadOccurrenceCDFForDetails(details: HTMLDetailsElement): Promise<void> {
+  const result = details.querySelector<HTMLElement>('.occurrence-cdf-result[data-occurrence-id]');
+  if (result === null || result.dataset.loaded === 'true' || result.dataset.loading === 'true') return;
+  const occurrenceId = Number(result.dataset.occurrenceId);
+  result.dataset.loading = 'true';
+  await loadOccurrenceCDF(occurrenceId, result);
+}
+
+async function loadOccurrenceCDF(occurrenceId: number, result: HTMLElement): Promise<void> {
+  result.hidden = false;
+  result.textContent = 'Loading CDF details…';
+  try {
+    const details = await GetAlertOccurrenceCDF(occurrenceId);
+    const loadCount = details.load.reduce((total, sample) => total + sample.count, 0);
+    const latencyCount = details.latency.reduce((total, sample) => total + sample.count, 0);
+    result.innerHTML = `<p>${escapeHtml(details.cdf.description)}</p><dl class="evidence-grid">
+      <div><dt>Time chunk</dt><dd>${escapeHtml(formatTimestamp(details.chunkTimestamp))}</dd></div>
+      <div><dt>Load observations</dt><dd>${String(loadCount)}</dd></div>
+      <div><dt>Latency observations</dt><dd>${String(latencyCount)}</dd></div>
+    </dl>`;
+    result.dataset.loaded = 'true';
+  } catch (error) {
+    result.textContent = error instanceof Error ? error.message : 'Unable to load CDF details.';
+  } finally {
+    delete result.dataset.loading;
+  }
 }
 
 async function acceptServiceAnomalies(button: HTMLButtonElement, serviceName: string, targets: AlertReviewTarget[]): Promise<void> {

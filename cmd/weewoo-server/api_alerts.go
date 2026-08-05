@@ -18,6 +18,7 @@ type alertAPI struct {
 
 type alertReaderReviewer interface {
 	List(context.Context, bool, int) ([]alerting.Alert, error)
+	GetOccurrenceCDF(context.Context, int64) (alerting.CDFDetails, error)
 	ReviewOccurrence(context.Context, int64, int64, bool, string) (alerting.ReviewResult, error)
 }
 
@@ -57,7 +58,37 @@ func (a *alertAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		a.review(w, r, parts[1])
 		return
 	}
+	if len(parts) == 3 && parts[0] == "occurrences" && parts[2] == "cdf" {
+		a.cdf(w, r, parts[1])
+		return
+	}
 	http.NotFound(w, r)
+}
+
+func (a *alertAPI) cdf(w http.ResponseWriter, r *http.Request, idText string) {
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w, http.MethodGet)
+		return
+	}
+	id, err := strconv.ParseInt(idText, 10, 64)
+	if err != nil || id <= 0 {
+		http.Error(w, "invalid occurrence ID", http.StatusBadRequest)
+		return
+	}
+	result, err := a.manager.GetOccurrenceCDF(r.Context(), id)
+	if errors.Is(err, alerting.ErrOccurrenceNotFound) {
+		http.Error(w, "alert occurrence not found", http.StatusNotFound)
+		return
+	}
+	if errors.Is(err, alerting.ErrCDFNotApplicable) {
+		http.Error(w, "CDF details are only available for anomaly occurrences", http.StatusUnprocessableEntity)
+		return
+	}
+	if err != nil {
+		http.Error(w, "failed to read occurrence CDF details", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
 }
 
 func (a *alertAPI) review(w http.ResponseWriter, r *http.Request, idText string) {

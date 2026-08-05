@@ -47,6 +47,17 @@ Raw upstream errors are never rendered directly without sanitization.
 Alertmanager labels contain the stable WeeWoo alert ID; annotations contain the
 same title, description, impact, and suggested action as the UI.
 
+An anomaly Occurrence exposes `GET /api/alerts/occurrences/{id}/cdf`. The UI
+requests it only when the user opens that Occurrence's **More details**
+disclosure. This disclosure shows the existing technical information for every
+kind of Alert, but each anomaly Occurrence additionally requests its CDF data
+once per rendered page. Opening **More details** for a non-anomaly Occurrence
+does not request CDF data.
+The response decodes the already-persisted time chunk and preserves the load
+and latency values and counts in their query-native units. CDF rendering is a
+temporary `not_implemented` placeholder; non-anomaly Occurrences do not expose
+the action and are rejected by the endpoint.
+
 ## Reviews and ECDF eligibility
 
 Automated Verdict and Review are independent:

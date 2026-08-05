@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/uncertaintea-io/weewoo/internal/config"
+	"github.com/uncertaintea-io/weewoo/internal/ecdf"
 )
 
 const (
@@ -840,6 +841,57 @@ func (m *Manager) List(ctx context.Context, includeResolved bool, limit int) ([]
 		alerts[index].Events = events
 	}
 	return alerts, nil
+}
+
+// GetOccurrenceCDF returns the stored query results needed by a future CDF
+// renderer. The CDF itself is deliberately a placeholder for now.
+func (m *Manager) GetOccurrenceCDF(ctx context.Context, occurrenceID int64) (CDFDetails, error) {
+	var result CDFDetails
+	var kind string
+	var serviceID, indicatorID sql.NullInt64
+	var chunkTimestamp sql.NullTime
+	err := m.db.QueryRowContext(ctx, `
+		SELECT o.alert_id, o.id, o.service_id, o.indicator_id, o.chunk_timestamp, o.kind
+		FROM alert_occurrence AS o
+		WHERE o.id=$1
+	`, occurrenceID).Scan(&result.AlertID, &result.OccurrenceID, &serviceID,
+		&indicatorID, &chunkTimestamp, &kind)
+	if errors.Is(err, sql.ErrNoRows) {
+		return CDFDetails{}, ErrOccurrenceNotFound
+	}
+	if err != nil {
+		return CDFDetails{}, fmt.Errorf("read occurrence CDF details: %w", err)
+	}
+	if kind != KindAnomaly {
+		return CDFDetails{}, ErrCDFNotApplicable
+	}
+	if !serviceID.Valid || !indicatorID.Valid || !chunkTimestamp.Valid {
+		return CDFDetails{}, fmt.Errorf("anomaly occurrence %d has no time chunk identity", occurrenceID)
+	}
+	result.ServiceID = int(serviceID.Int64)
+	result.IndicatorID = int(indicatorID.Int64)
+	result.ChunkTimestamp = chunkTimestamp.Time
+	chunk, err := ecdf.NewDatabaseChunkStore(m.db).ReadChunk(result.ServiceID, result.IndicatorID, result.ChunkTimestamp)
+	if err != nil {
+		return CDFDetails{}, fmt.Errorf("read occurrence time chunk: %w", err)
+	}
+	_, loads, latencies, err := ecdf.Decode(chunk)
+	if err != nil {
+		return CDFDetails{}, fmt.Errorf("decode occurrence time chunk: %w", err)
+	}
+	result.SchemaVersion = 1
+	result.Load = cdfSamples(loads)
+	result.Latency = cdfSamples(latencies)
+	result.CDF = CDFStatus{Status: "not_implemented", Description: "CDF rendering will be added in a future change."}
+	return result, nil
+}
+
+func cdfSamples(samples []ecdf.Sample) []CDFSample {
+	result := make([]CDFSample, len(samples))
+	for index, sample := range samples {
+		result[index] = CDFSample{Value: sample.Value, Count: sample.Count}
+	}
+	return result
 }
 
 func (m *Manager) listOccurrences(ctx context.Context, alertID int64) ([]Occurrence, error) {
