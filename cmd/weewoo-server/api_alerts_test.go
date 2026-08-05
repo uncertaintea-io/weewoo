@@ -76,7 +76,11 @@ func TestAlertAPIReviewsOccurrence(t *testing.T) {
 }
 
 func TestAlertAPIReturnsOccurrenceCDFDetails(t *testing.T) {
-	manager := &fakeAlertManager{cdf: alerting.CDFDetails{SchemaVersion: 1, OccurrenceID: 9}}
+	manager := &fakeAlertManager{cdf: alerting.CDFDetails{
+		SchemaVersion: 1, OccurrenceID: 9, ServiceGeneration: 3,
+		X: []alerting.CDFSample{{Value: 12, Count: 2}},
+		Y: []alerting.CDFSample{{Value: 34, Count: 5}},
+	}}
 	recorder := httptest.NewRecorder()
 
 	NewAlertAPIHandler(manager).ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/alerts/occurrences/9/cdf", nil))
@@ -86,6 +90,9 @@ func TestAlertAPIReturnsOccurrenceCDFDetails(t *testing.T) {
 	var response alerting.CDFDetails
 	require.NoError(t, json.NewDecoder(recorder.Body).Decode(&response))
 	assert.Equal(t, 1, response.SchemaVersion)
+	assert.Equal(t, int64(3), response.ServiceGeneration)
+	assert.Equal(t, []alerting.CDFSample{{Value: 12, Count: 2}}, response.X)
+	assert.Equal(t, []alerting.CDFSample{{Value: 34, Count: 5}}, response.Y)
 }
 
 func TestAlertAPIRejectsCDFForNonAnomalyOccurrence(t *testing.T) {

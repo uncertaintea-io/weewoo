@@ -311,12 +311,12 @@ async function loadOccurrenceCDF(occurrenceId: number, result: HTMLElement): Pro
   result.textContent = 'Loading CDF details…';
   try {
     const details = await GetAlertOccurrenceCDF(occurrenceId);
-    const loadCount = details.load.reduce((total, sample) => total + sample.count, 0);
-    const latencyCount = details.latency.reduce((total, sample) => total + sample.count, 0);
+    const xCount = details.x.reduce((total, sample) => total + sample.count, 0);
+    const yCount = details.y.reduce((total, sample) => total + sample.count, 0);
     result.innerHTML = `<p>${escapeHtml(details.cdf.description)}</p><dl class="evidence-grid">
       <div><dt>Time chunk</dt><dd>${escapeHtml(formatTimestamp(details.chunkTimestamp))}</dd></div>
-      <div><dt>Load observations</dt><dd>${String(loadCount)}</dd></div>
-      <div><dt>Latency observations</dt><dd>${String(latencyCount)}</dd></div>
+      <div><dt>X observations</dt><dd>${String(xCount)}</dd></div>
+      <div><dt>Y observations</dt><dd>${String(yCount)}</dd></div>
     </dl>`;
     result.dataset.loaded = 'true';
   } catch (error) {

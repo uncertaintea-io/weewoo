@@ -869,19 +869,23 @@ func (m *Manager) GetOccurrenceCDF(ctx context.Context, occurrenceID int64) (CDF
 		return CDFDetails{}, fmt.Errorf("anomaly occurrence %d has no time chunk identity", occurrenceID)
 	}
 	result.ServiceID = int(serviceID.Int64)
+	// The occurrence schema does not persist a service generation yet. Keep the
+	// API contract in place with the initial generation until that data is
+	// available from storage.
+	result.ServiceGeneration = 1
 	result.IndicatorID = int(indicatorID.Int64)
 	result.ChunkTimestamp = chunkTimestamp.Time
 	chunk, err := ecdf.NewDatabaseChunkStore(m.db).ReadChunk(result.ServiceID, result.IndicatorID, result.ChunkTimestamp)
 	if err != nil {
 		return CDFDetails{}, fmt.Errorf("read occurrence time chunk: %w", err)
 	}
-	_, loads, latencies, err := ecdf.Decode(chunk)
+	_, x, y, err := ecdf.Decode(chunk)
 	if err != nil {
 		return CDFDetails{}, fmt.Errorf("decode occurrence time chunk: %w", err)
 	}
 	result.SchemaVersion = 1
-	result.Load = cdfSamples(loads)
-	result.Latency = cdfSamples(latencies)
+	result.X = cdfSamples(x)
+	result.Y = cdfSamples(y)
 	result.CDF = CDFStatus{Status: "not_implemented", Description: "CDF rendering will be added in a future change."}
 	return result, nil
 }

@@ -353,18 +353,20 @@ describe('Alerts API', () => {
         alertId: 9,
         occurrenceId: 12,
         serviceId: 7,
+        serviceGeneration: 3,
         indicatorId: 1,
         chunkTimestamp: '2026-07-24T10:00:00Z',
-        load: [{ value: 125.4, count: 1 }],
-        latency: [{ value: 0.18, count: 91 }],
+        x: [{ value: 125.4, count: 1 }],
+        y: [{ value: 0.18, count: 91 }],
         cdf: { status: 'not_implemented', description: 'CDF rendering will be added later.' },
       }), { status: 200 }));
     };
 
     const details = await GetAlertOccurrenceCDF(12, fetcher);
 
-    expect(details.load).to.deep.equal([{ value: 125.4, count: 1 }]);
-    expect(details.latency).to.deep.equal([{ value: 0.18, count: 91 }]);
+    expect(details.x).to.deep.equal([{ value: 125.4, count: 1 }]);
+    expect(details.y).to.deep.equal([{ value: 0.18, count: 91 }]);
+    expect(details.serviceGeneration).to.equal(3);
   });
 
 });

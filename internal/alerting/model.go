@@ -125,15 +125,16 @@ type ReviewResult struct {
 // CDFDetails is the data collected for a future occurrence-level CDF plot.
 // Values and counts are preserved exactly as returned by the service queries.
 type CDFDetails struct {
-	SchemaVersion  int         `json:"schemaVersion"`
-	AlertID        int64       `json:"alertId"`
-	OccurrenceID   int64       `json:"occurrenceId"`
-	ServiceID      int         `json:"serviceId"`
-	IndicatorID    int         `json:"indicatorId"`
-	ChunkTimestamp time.Time   `json:"chunkTimestamp"`
-	Load           []CDFSample `json:"load"`
-	Latency        []CDFSample `json:"latency"`
-	CDF            CDFStatus   `json:"cdf"`
+	SchemaVersion     int         `json:"schemaVersion"`
+	AlertID           int64       `json:"alertId"`
+	OccurrenceID      int64       `json:"occurrenceId"`
+	ServiceID         int         `json:"serviceId"`
+	ServiceGeneration int64       `json:"serviceGeneration"`
+	IndicatorID       int         `json:"indicatorId"`
+	ChunkTimestamp    time.Time   `json:"chunkTimestamp"`
+	X                 []CDFSample `json:"x"`
+	Y                 []CDFSample `json:"y"`
+	CDF               CDFStatus   `json:"cdf"`
 }
 
 type CDFSample struct {

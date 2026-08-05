@@ -139,10 +139,11 @@ export interface AlertOccurrenceCDF {
   alertId: number;
   occurrenceId: number;
   serviceId: number;
+  serviceGeneration: number;
   indicatorId: number;
   chunkTimestamp: string;
-  load: CDFSample[];
-  latency: CDFSample[];
+  x: CDFSample[];
+  y: CDFSample[];
   cdf: { status: 'not_implemented'; description: string };
 }
 
@@ -482,8 +483,9 @@ export async function GetAlertOccurrenceCDF(
   });
   if (!response.ok) throw await readServiceError(response);
   const body: unknown = await response.json();
-  if (!isRecord(body) || !Array.isArray(body.load) || !Array.isArray(body.latency)
+  if (!isRecord(body) || !Array.isArray(body.x) || !Array.isArray(body.y)
     || typeof body.chunkTimestamp !== 'string' || !isRecord(body.cdf)
+    || typeof body.serviceGeneration !== 'number'
     || typeof body.cdf.description !== 'string') {
     throw new Error('Alert occurrence CDF response is invalid.');
   }
@@ -495,8 +497,9 @@ export async function GetAlertOccurrenceCDF(
   });
   return {
     schemaVersion: Number(body.schemaVersion), alertId: Number(body.alertId), occurrenceId: Number(body.occurrenceId),
-    serviceId: Number(body.serviceId), indicatorId: Number(body.indicatorId), chunkTimestamp: body.chunkTimestamp,
-    load: parseSamples(body.load), latency: parseSamples(body.latency),
+    serviceId: Number(body.serviceId), serviceGeneration: body.serviceGeneration,
+    indicatorId: Number(body.indicatorId), chunkTimestamp: body.chunkTimestamp,
+    x: parseSamples(body.x), y: parseSamples(body.y),
     cdf: { status: 'not_implemented', description: body.cdf.description },
   };
 }
