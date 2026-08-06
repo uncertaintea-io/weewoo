@@ -24,8 +24,8 @@ func (unavailableJointStore) Publish(context.Context, int, int, time.Time, func(
 	return 0, false, errors.New("unavailable")
 }
 
-func (unavailableJointStore) ReadCurrent(context.Context, int, int) ([]byte, error) {
-	return nil, errors.New("unavailable")
+func (unavailableJointStore) ReadCurrent(context.Context, int, int) ([]byte, string, error) {
+	return nil, "", errors.New("unavailable")
 }
 
 func TestCollectionSucceedsWhenAnalysisFails(t *testing.T) {

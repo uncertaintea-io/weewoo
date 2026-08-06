@@ -25,7 +25,7 @@ func (s *panicThenFailJointStore) Publish(context.Context, int, int, time.Time, 
 	return 0, false, errors.New("unexpected publish")
 }
 
-func (s *panicThenFailJointStore) ReadCurrent(context.Context, int, int) ([]byte, error) {
+func (s *panicThenFailJointStore) ReadCurrent(context.Context, int, int) ([]byte, string, error) {
 	s.mu.Lock()
 	s.calls++
 	call := s.calls
@@ -34,7 +34,7 @@ func (s *panicThenFailJointStore) ReadCurrent(context.Context, int, int) ([]byte
 		panic("broken analyzer dependency")
 	}
 	s.secondOnce.Do(func() { close(s.secondCall) })
-	return nil, errors.New("unavailable")
+	return nil, "", errors.New("unavailable")
 }
 
 func validAnalysisRequest() AnalysisRequest {
@@ -98,20 +98,20 @@ func (*orderedJointStore) Publish(context.Context, int, int, time.Time, func(io.
 	return 0, false, errors.New("unexpected publish")
 }
 
-func (s *orderedJointStore) ReadCurrent(ctx context.Context, serviceID, _ int) ([]byte, error) {
+func (s *orderedJointStore) ReadCurrent(ctx context.Context, serviceID, _ int) ([]byte, string, error) {
 	select {
 	case s.calls <- serviceID:
 	case <-ctx.Done():
-		return nil, ctx.Err()
+		return nil, "", ctx.Err()
 	}
 	if serviceID == 1 {
 		select {
 		case <-s.release:
 		case <-ctx.Done():
-			return nil, ctx.Err()
+			return nil, "", ctx.Err()
 		}
 	}
-	return nil, errors.New("analysis probe complete")
+	return nil, "", errors.New("analysis probe complete")
 }
 
 func TestAnalysisWorkerPrioritizesLiveWorkOverHistoricalBacklog(t *testing.T) {
@@ -166,10 +166,10 @@ func (s *blockingJointStore) Publish(context.Context, int, int, time.Time, func(
 	return 0, false, errors.New("unexpected publish")
 }
 
-func (s *blockingJointStore) ReadCurrent(ctx context.Context, _ int, _ int) ([]byte, error) {
+func (s *blockingJointStore) ReadCurrent(ctx context.Context, _ int, _ int) ([]byte, string, error) {
 	s.once.Do(func() { close(s.started) })
 	<-ctx.Done()
-	return nil, ctx.Err()
+	return nil, "", ctx.Err()
 }
 
 func TestAnalysisWorkerBoundsQueueAndStopsActiveWork(t *testing.T) {

@@ -121,7 +121,7 @@ func (s *databaseJointStore) Publish(ctx context.Context, serviceID, indicatorID
 	return int64(body.Len()), true, nil
 }
 
-func (s *databaseJointStore) ReadCurrent(ctx context.Context, serviceID, indicatorID int) ([]byte, error) {
+func (s *databaseJointStore) ReadCurrent(ctx context.Context, serviceID, indicatorID int) ([]byte, string, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT body, bytes, sha256
 		FROM ecdf
@@ -130,7 +130,7 @@ func (s *databaseJointStore) ReadCurrent(ctx context.Context, serviceID, indicat
 		LIMIT $3
 	`, serviceID, indicatorID, retainedJointECDFVersions)
 	if err != nil {
-		return nil, fmt.Errorf("read current ECDF: %w", err)
+		return nil, "", fmt.Errorf("read current ECDF: %w", err)
 	}
 	defer rows.Close()
 	for rows.Next() {
@@ -138,18 +138,33 @@ func (s *databaseJointStore) ReadCurrent(ctx context.Context, serviceID, indicat
 		var size int64
 		var expectedHash string
 		if err := rows.Scan(&body, &size, &expectedHash); err != nil {
-			return nil, fmt.Errorf("scan ECDF version: %w", err)
+			return nil, "", fmt.Errorf("scan ECDF version: %w", err)
 		}
 		if int64(len(body)) != size {
+			slog.Warn(
+				"skipping ECDF version because body length does not match stored size",
+				"service_id", serviceID,
+				"indicator_id", indicatorID,
+				"expected_size", size,
+				"actual_size", len(body),
+			)
 			continue
 		}
 		sum := sha256.Sum256(body)
-		if hex.EncodeToString(sum[:]) == expectedHash {
-			return body, nil
+		if actualHash := hex.EncodeToString(sum[:]); actualHash != expectedHash {
+			slog.Warn(
+				"skipping ECDF version because body does not match stored checksum",
+				"service_id", serviceID,
+				"indicator_id", indicatorID,
+				"expected_hash", expectedHash,
+				"actual_hash", actualHash,
+			)
+			continue
 		}
+		return body, expectedHash, nil
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate ECDF versions: %w", err)
+		return nil, "", fmt.Errorf("iterate ECDF versions: %w", err)
 	}
-	return nil, fmt.Errorf("read current ECDF: %w", sql.ErrNoRows)
+	return nil, "", fmt.Errorf("read current ECDF: %w", sql.ErrNoRows)
 }

@@ -3,7 +3,9 @@ package ecdf
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"io"
 	"time"
 )
@@ -51,15 +53,16 @@ func (js *fakeJointStore) Publish(ctx context.Context, serviceID, indicatorID in
 	return 0, false, nil
 }
 
-func (js *fakeJointStore) ReadCurrent(ctx context.Context, serviceID, indicatorID int) ([]byte, error) {
+func (js *fakeJointStore) ReadCurrent(ctx context.Context, serviceID, indicatorID int) ([]byte, string, error) {
 	if js.current != nil {
 		if m := js.current[serviceID]; m != nil {
 			if current := m[indicatorID]; current != nil {
-				return current.Bytes, nil
+				sum := sha256.Sum256(current.Bytes)
+				return current.Bytes, hex.EncodeToString(sum[:]), nil
 			}
 		}
 	}
-	return nil, sql.ErrNoRows
+	return nil, "", sql.ErrNoRows
 }
 
 func BuildFakeJointECDF(currentJointECDF []byte) func(io.Writer) error {

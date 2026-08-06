@@ -140,6 +140,16 @@ export interface JointECDFRender {
   masses: number[];
 }
 
+export interface JointECDFRequestOptions {
+  renderOptions?: number;
+  ifNoneMatch?: string;
+  fetcher?: Fetcher;
+}
+
+export type JointECDFFetchResult =
+  | { modified: false; etag: string }
+  | { modified: true; etag: string; render: JointECDFRender };
+
 export const JECDF_RENDER_OPTION_LOG_X = 1;
 export const JECDF_RENDER_OPTION_LOG_Y = 2;
 
@@ -449,18 +459,26 @@ export async function ListAlerts(includeHistory = true, fetcher: Fetcher = fetch
 export async function GetJointECDF(
   serviceID: number,
   indicatorID: number,
-  options = 0,
-  fetcher: Fetcher = fetch,
-): Promise<JointECDFRender> {
+  request: JointECDFRequestOptions = {},
+): Promise<JointECDFFetchResult> {
+  const options = request.renderOptions ?? 0;
   const optionsQuery = options === 0
     ? ''
     : `&options=${encodeURIComponent(String(options))}`;
-  const response = await fetcher(
+  const headers = new Headers({ Accept: 'application/json' });
+  if (request.ifNoneMatch !== undefined) headers.set('If-None-Match', request.ifNoneMatch);
+  const response = await (request.fetcher ?? fetch)(
     `/api/jecdf?serviceId=${encodeURIComponent(String(serviceID))}&indicatorId=${encodeURIComponent(String(indicatorID))}${optionsQuery}`,
-    { headers: { Accept: 'application/json' } },
+    { headers },
   );
+  const etag = response.headers.get('ETag') ?? request.ifNoneMatch;
+  if (response.status === 304) {
+    if (etag === undefined) throw new Error('Joint ECDF 304 response must include an ETag.');
+    return { modified: false, etag };
+  }
   if (!response.ok) throw await readServiceError(response);
-  return parseJointECDFRender(await response.json());
+  if (etag === undefined) throw new Error('Joint ECDF response must include an ETag.');
+  return { modified: true, etag, render: parseJointECDFRender(await response.json()) };
 }
 
 export async function ReviewAlertOccurrence(

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -26,11 +27,19 @@ func testJointStore() ecdf.JointStore {
 	return store
 }
 
+func testJointHandler(render jointECDFRenderer) *jointECDFAPI {
+	return &jointECDFAPI{
+		store: testJointStore(),
+		render: newJointECDFRenderCoordinator(
+			render, jointECDFRenderConcurrency, jointECDFRenderTimeout, jointECDFRenderCacheBytes,
+		),
+	}
+}
+
 func TestJointECDFAPIReadsAndRendersCurrentECDF(t *testing.T) {
 	var renderBody []byte
-	handler := &jointECDFAPI{
-		store: testJointStore(),
-		render: func(_ context.Context, body []byte, width, height int, options ecdf.RenderOptions) (*ecdf.RenderResponse, error) {
+	handler := testJointHandler(
+		func(_ context.Context, body []byte, width, height int, options ecdf.RenderOptions) (*ecdf.RenderResponse, error) {
 			renderBody = body
 			assert.Equal(t, jointECDFRenderWidth, width)
 			assert.Equal(t, jointECDFRenderHeight, height)
@@ -41,12 +50,14 @@ func TestJointECDFAPIReadsAndRendersCurrentECDF(t *testing.T) {
 				Masses: []float64{0.25},
 			}, nil
 		},
-	}
+	)
 	recorder := httptest.NewRecorder()
 	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, okPath, nil))
 
 	require.Equal(t, http.StatusOK, recorder.Code)
 	assert.Equal(t, "application/json", recorder.Header().Get("Content-Type"))
+	assert.NotEmpty(t, recorder.Header().Get("ETag"))
+	assert.Equal(t, "private, no-cache", recorder.Header().Get("Cache-Control"))
 	assert.Equal(t, fakeJointECDF, string(renderBody))
 	assert.JSONEq(t, `{
 		"width":128, "height":128,
@@ -88,16 +99,90 @@ func TestJointECDFAPIValidatesRequest(t *testing.T) {
 
 func TestJointECDFAPIReportsRenderFailure(t *testing.T) {
 	recorder := httptest.NewRecorder()
-	handler := &jointECDFAPI{
-		store: testJointStore(),
-		render: func(context.Context, []byte, int, int, ecdf.RenderOptions) (*ecdf.RenderResponse, error) {
+	handler := testJointHandler(
+		func(context.Context, []byte, int, int, ecdf.RenderOptions) (*ecdf.RenderResponse, error) {
 			return nil, errors.New("render failed")
 		},
-	}
+	)
 	handler.ServeHTTP(
 		recorder,
 		httptest.NewRequest(http.MethodGet, okPath, nil),
 	)
 	assert.Equal(t, http.StatusInternalServerError, recorder.Code)
 	assert.Equal(t, "failed to render joint ECDF\n", recorder.Body.String())
+}
+
+func TestJointECDFAPIRejectsRenderWhenAtCapacity(t *testing.T) {
+	handler := testJointHandler(
+		func(_ context.Context, _ []byte, width, height int, _ ecdf.RenderOptions) (*ecdf.RenderResponse, error) {
+			return successfulJointRender(width, height), nil
+		},
+	)
+	for range cap(handler.render.slots) {
+		handler.render.slots <- struct{}{}
+	}
+
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, okPath, nil))
+
+	assert.Equal(t, http.StatusServiceUnavailable, recorder.Code)
+	assert.Equal(t, "1", recorder.Header().Get("Retry-After"))
+	assert.Equal(t, "joint ECDF renderer is busy\n", recorder.Body.String())
+}
+
+func TestJointECDFAPIReportsRenderTimeout(t *testing.T) {
+	handler := testJointHandler(
+		func(ctx context.Context, _ []byte, _, _ int, _ ecdf.RenderOptions) (*ecdf.RenderResponse, error) {
+			<-ctx.Done()
+			return nil, ctx.Err()
+		},
+	)
+	handler.render.timeout = time.Millisecond
+
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, okPath, nil))
+
+	assert.Equal(t, http.StatusGatewayTimeout, recorder.Code)
+	assert.Equal(t, "joint ECDF render timed out\n", recorder.Body.String())
+}
+
+func TestJointECDFAPIReturnsNotModifiedWithoutRendering(t *testing.T) {
+	var calls atomic.Int32
+	handler := testJointHandler(
+		func(_ context.Context, _ []byte, width, height int, _ ecdf.RenderOptions) (*ecdf.RenderResponse, error) {
+			calls.Add(1)
+			return &ecdf.RenderResponse{Width: width, Height: height, Masses: []float64{}}, nil
+		},
+	)
+
+	first := httptest.NewRecorder()
+	handler.ServeHTTP(first, httptest.NewRequest(http.MethodGet, okPath, nil))
+	require.Equal(t, http.StatusOK, first.Code)
+	require.Equal(t, int32(1), calls.Load())
+	etag := first.Header().Get("ETag")
+	require.NotEmpty(t, etag)
+
+	request := httptest.NewRequest(http.MethodGet, okPath, nil)
+	request.Header.Set("If-None-Match", `"other", W/`+etag)
+	notModified := httptest.NewRecorder()
+	handler.ServeHTTP(notModified, request)
+
+	assert.Equal(t, http.StatusNotModified, notModified.Code)
+	assert.Empty(t, notModified.Body.String())
+	assert.Equal(t, etag, notModified.Header().Get("ETag"))
+	assert.Equal(t, "private, no-cache", notModified.Header().Get("Cache-Control"))
+	assert.Equal(t, int32(1), calls.Load())
+}
+
+func TestJointECDFRenderETagIncludesRepresentationInputs(t *testing.T) {
+	base := jointECDFRenderETag("definition", 128, 128, 0)
+	assert.Equal(t, base, jointECDFRenderETag("definition", 128, 128, 0))
+	assert.NotEqual(t, base, jointECDFRenderETag("changed", 128, 128, 0))
+	assert.NotEqual(t, base, jointECDFRenderETag("definition", 64, 128, 0))
+	assert.NotEqual(t, base, jointECDFRenderETag("definition", 128, 128, ecdf.RenderOptionLogY))
+}
+
+func TestJointECDFRenderTimeoutFitsServerWriteTimeout(t *testing.T) {
+	assert.Equal(t, 15*time.Second, jointECDFRenderTimeout)
+	assert.Less(t, jointECDFRenderTimeout, appServerWriteTimeout)
 }
