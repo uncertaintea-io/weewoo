@@ -4,7 +4,7 @@ import { historicalRangeToUtc } from './datetime';
 import { renderJECDF } from './jecdf';
 import { liveRefreshDelay } from './live-refresh';
 import { searchValueForRender } from './navigation';
-import { alertCardClasses, escapeHtml, groupAlertsByStatus, renderServiceUrl, reviewableAnomalousOccurrencesByService, type AlertReviewTarget } from './rendering';
+import { alertCardClasses, collectionUptime, escapeHtml, groupAlertsByStatus, renderServiceUrl, reviewableAnomalousOccurrencesByService, type AlertReviewTarget } from './rendering';
 
 const app = document.querySelector<HTMLDivElement>('#app');
 let liveRefreshTimer: number | undefined;
@@ -483,7 +483,7 @@ function renderServices(services: Service[]): void {
 
       <dl class="metric-grid">
         ${renderMetricBox('Current status', statusLabel(service.tracking.state), service.tracking.error ?? 'Live scheduler status', service.tracking.state === 'healthy' ? 'ok' : '')}
-        ${renderMetricBox('Uptime', 'Not reported', 'No health-check source configured yet')}
+        ${renderMetricBox('Collecting for', collectionUptime(service.tracking.startedAt), service.tracking.startedAt === undefined ? 'Collection has not started yet' : `Since ${formatTimestamp(service.tracking.startedAt)}`)}
         ${renderMetricBox('Collection interval', formatInterval(service.intervalSeconds), 'How often new metrics are collected')}
         ${renderMetricBox('Last collection', formatTimestamp(service.tracking.lastSuccess), service.tracking.lastError === undefined ? 'No collection errors recorded' : `Last error: ${formatTimestamp(service.tracking.lastError)}`)}
       </dl>
@@ -701,7 +701,7 @@ function renderServiceHistory(history: ServiceChange[]): string {
 }
 
 function renderServiceDetail(service: Service, history: ServiceChange[] = [], historyUnavailable = false): void {
-  const timeOfDay = service.timeOfDayModel ?? { state: 'learning' as const, coverage: 0, requiredDays: 5 };
+  const timeOfDay = service.timeOfDayModel ?? { state: 'learning' as const, coverage: 0, progress: 0, requiredDays: 5 };
   renderShell(`
     <section class="detail-header">
       <div class="detail-identity"><a class="back-link" href="#services">← All services</a><h2>${escapeHtml(service.name)}</h2><p class="eyebrow">Service #${String(service.id)}</p>${renderServiceUrl(service.prometheusUrl)}</div>
@@ -716,7 +716,7 @@ function renderServiceDetail(service: Service, history: ServiceChange[] = [], hi
       <article class="detail-card"><span>Last collection error</span><strong>${escapeHtml(formatTimestamp(service.tracking.lastError))}</strong><p>${escapeHtml(service.tracking.error ?? 'No errors recorded')}</p></article>
     </section>
     <section class="detail-columns detail-overview-row">
-      <article class="detail-card"><span>Load vs. UTC Time of Day</span><strong>${escapeHtml(timeOfDay.state === 'ready' ? 'Ready' : timeOfDay.state === 'degraded' ? 'Degraded' : 'Learning')}</strong><p>${String(Math.round(timeOfDay.coverage * 100))}% slot coverage · ${String(timeOfDay.requiredDays)} UTC days required · latest build ${escapeHtml(formatTimestamp(timeOfDay.latestBuild))}</p></article>
+      <article class="detail-card"><span>Load vs. UTC Time of Day</span><strong>${escapeHtml(timeOfDay.state === 'ready' ? 'Ready' : timeOfDay.state === 'degraded' ? 'Degraded' : 'Learning')}</strong><p>${String(Math.round(timeOfDay.progress * 100))}% learning progress · ${String(Math.round(timeOfDay.coverage * 100))}% trained slot coverage · ${String(timeOfDay.requiredDays)} UTC days required · latest build ${escapeHtml(formatTimestamp(timeOfDay.latestBuild))}</p></article>
       <article class="detail-panel"><div class="panel-header"><h2>Historical imports</h2><span>${String(service.imports.length)} jobs</span></div>${renderImports(service)}</article>
     </section>
     <section class="detail-panel jecdf-panel" aria-labelledby="joint-ecdf-heading">

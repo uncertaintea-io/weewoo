@@ -8,7 +8,7 @@ import {
   liveRefreshDelay,
 } from './live-refresh';
 import { searchValueForRender } from './navigation';
-import { alertCardClasses, groupAlertsByStatus, renderServiceUrl, reviewableAnomalousOccurrencesByService } from './rendering';
+import { alertCardClasses, collectionUptime, groupAlertsByStatus, renderServiceUrl, reviewableAnomalousOccurrencesByService } from './rendering';
 
 describe('datetimeLocalToUtcISOString', () => {
 
@@ -82,6 +82,18 @@ describe('renderServiceUrl', () => {
     expect(renderServiceUrl('javascript:alert(1)')).to.equal(
       '<span class="service-url">javascript:alert(1)</span>',
     );
+  });
+
+});
+
+describe('collectionUptime', () => {
+
+  it('reports elapsed collection time from the tracking start', () => {
+    expect(collectionUptime('2026-08-06T12:00:00Z', new Date('2026-08-06T14:03:00Z'))).to.equal('2h 3m');
+  });
+
+  it('only reports unavailable before collection has started', () => {
+    expect(collectionUptime(undefined, new Date('2026-08-06T14:03:00Z'))).to.equal('Unavailable');
   });
 
 });

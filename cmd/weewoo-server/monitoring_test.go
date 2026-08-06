@@ -120,3 +120,15 @@ func TestRecoveredHistoryDoesNotOverwriteHealthyLiveMonitoring(t *testing.T) {
 	require.NotEmpty(t, status.Activity)
 	assert.Equal(t, "collection_backlog_recovered", status.Activity[0].Type)
 }
+
+func TestTrackingMonitorReportsWhenCollectionStarted(t *testing.T) {
+	monitor := newTrackingMonitor()
+	startedAt := time.Date(2026, time.August, 6, 12, 0, 0, 0, time.UTC)
+	monitor.handleCollectorEvent(collection.CollectorEvent{ServiceID: 7, Kind: "tracking_started", At: startedAt})
+	monitor.handleCollectorEvent(collection.CollectorEvent{ServiceID: 7, Kind: "collection_succeeded", At: startedAt.Add(time.Minute)})
+
+	status := monitor.status(7)
+
+	require.NotNil(t, status.StartedAt)
+	assert.Equal(t, startedAt, *status.StartedAt)
+}

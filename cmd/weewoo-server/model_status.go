@@ -21,7 +21,7 @@ func (r *databaseModelStatusReader) ModelStatus(ctx context.Context, service *co
 	if err != nil {
 		return modelStatus{}, fmt.Errorf("read model readiness: %w", err)
 	}
-	status := modelStatus{State: "learning", Coverage: readiness.Coverage, Required: readiness.Required}
+	status := modelStatus{State: "learning", Coverage: readiness.Coverage, Progress: readiness.Progress, Required: readiness.Required}
 	if readiness.Ready {
 		status.State = "ready"
 	}

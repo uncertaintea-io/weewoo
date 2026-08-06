@@ -20,6 +20,7 @@ type activityEntry struct {
 
 type trackingStatus struct {
 	State          string          `json:"state"`
+	StartedAt      *time.Time      `json:"startedAt,omitempty"`
 	ActiveRevision int64           `json:"activeRevision,omitempty"`
 	LastSuccess    *time.Time      `json:"lastSuccess,omitempty"`
 	LastError      *time.Time      `json:"lastError,omitempty"`
@@ -69,6 +70,9 @@ func (m *trackingMonitor) record(serviceID int, state, kind, message string, at 
 	}
 	if state != "" {
 		status.State = state
+	}
+	if kind == "tracking_started" && status.StartedAt == nil {
+		status.StartedAt = &at
 	}
 	if kind == "collection_succeeded" {
 		status.LastSuccess = &at

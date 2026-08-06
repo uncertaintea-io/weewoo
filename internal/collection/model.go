@@ -21,6 +21,7 @@ var indicatorIDs = []int{LoadLatencyIndicator, TimeOfDayIndicator}
 type ModelReadiness struct {
 	Ready    bool
 	Coverage float64
+	Progress float64
 	Required int
 	Eligible int
 }
@@ -42,7 +43,7 @@ func ReadModelReadiness(ctx context.Context, cfg config.Config, store ecdf.Chunk
 			return ModelReadiness{}, err
 		}
 		coverage := min(float64(eligible)/float64(required), 1)
-		return ModelReadiness{Ready: eligible >= required, Coverage: coverage, Required: required, Eligible: eligible}, nil
+		return ModelReadiness{Ready: eligible >= required, Coverage: coverage, Progress: coverage, Required: required, Eligible: eligible}, nil
 	case TimeOfDayIndicator:
 		return readBucketReadiness(ctx, store, service, indicatorID, timeOfDayBaselineDays, timeOfDayRequiredCoverage)
 	default:
@@ -93,11 +94,14 @@ func readBucketReadiness(ctx context.Context, store ecdf.ChunkStore, service *co
 		return ModelReadiness{}, decodeErr
 	}
 	qualified := 0
+	progressUnits := 0
 	for _, dates := range datesByBucket {
 		if len(dates) >= requiredDates {
 			qualified++
 		}
+		progressUnits += min(len(dates), requiredDates)
 	}
 	coverage := float64(qualified) / float64(totalBuckets)
-	return ModelReadiness{Ready: coverage >= requiredCoverage, Coverage: coverage, Required: requiredDates, Eligible: qualified}, nil
+	progress := float64(progressUnits) / float64(totalBuckets*requiredDates)
+	return ModelReadiness{Ready: coverage >= requiredCoverage, Coverage: coverage, Progress: progress, Required: requiredDates, Eligible: qualified}, nil
 }
