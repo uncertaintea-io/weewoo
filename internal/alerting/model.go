@@ -23,6 +23,7 @@ const (
 var ErrReviewConflict = errors.New("alert occurrence review changed")
 var ErrOccurrenceNotFound = errors.New("alert occurrence not found")
 var ErrCDFNotApplicable = errors.New("CDF details are only available for anomaly occurrences")
+var ErrCDFReferenceGone = errors.New("the matching reference distribution is no longer retained")
 
 // AnalysisOutcome is the complete durable result of analyzing one time chunk.
 // Recording a live outcome updates the Verdict and matching alert condition
@@ -122,29 +123,23 @@ type ReviewResult struct {
 	AlertResolved bool      `json:"alertResolved"`
 }
 
-// CDFDetails is the data collected for a future occurrence-level CDF plot.
-// Values and counts are preserved exactly as returned by the service queries.
+// CDFDetails contains the conditional reference distribution, observations,
+// and KS-test result for an anomaly Occurrence.
 type CDFDetails struct {
-	SchemaVersion     int         `json:"schemaVersion"`
-	AlertID           int64       `json:"alertId"`
-	OccurrenceID      int64       `json:"occurrenceId"`
-	ServiceID         int         `json:"serviceId"`
-	ServiceGeneration int64       `json:"serviceGeneration"`
-	IndicatorID       int         `json:"indicatorId"`
-	ChunkTimestamp    time.Time   `json:"chunkTimestamp"`
-	X                 []CDFSample `json:"x"`
-	Y                 []CDFSample `json:"y"`
-	CDF               CDFStatus   `json:"cdf"`
+	Query   CDFQuery    `json:"query"`
+	Samples []CDFSample `json:"samples"`
+	PValue  float64     `json:"pValue"`
+}
+
+type CDFQuery struct {
+	Input float64   `json:"input"`
+	Xs    []float64 `json:"xs"`
+	Ps    []float64 `json:"ps"`
 }
 
 type CDFSample struct {
 	Value float64 `json:"value"`
 	Count uint64  `json:"count"`
-}
-
-type CDFStatus struct {
-	Status      string `json:"status"`
-	Description string `json:"description"`
 }
 
 // Recorder is the small interface used by collection and analysis.

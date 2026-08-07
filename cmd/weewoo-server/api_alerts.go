@@ -84,6 +84,10 @@ func (a *alertAPI) cdf(w http.ResponseWriter, r *http.Request, idText string) {
 		http.Error(w, "CDF details are only available for anomaly occurrences", http.StatusUnprocessableEntity)
 		return
 	}
+	if errors.Is(err, alerting.ErrCDFReferenceGone) {
+		http.Error(w, "the matching reference distribution is no longer retained", http.StatusGone)
+		return
+	}
 	if err != nil {
 		http.Error(w, "failed to read occurrence CDF details", http.StatusInternalServerError)
 		return

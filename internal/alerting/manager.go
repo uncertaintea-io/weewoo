@@ -7,7 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -19,6 +21,8 @@ import (
 const (
 	defaultCriticalConsecutive = 3
 	defaultAlertRetention      = 90 * 24 * time.Hour
+	loadTimeOfDayIndicatorID   = 2
+	occurrenceCDFWindow        = 5 * time.Minute
 )
 
 type Manager struct {
@@ -843,19 +847,17 @@ func (m *Manager) List(ctx context.Context, includeResolved bool, limit int) ([]
 	return alerts, nil
 }
 
-// GetOccurrenceCDF returns the stored query results needed by a future CDF
-// renderer. The CDF itself is deliberately a placeholder for now.
+// GetOccurrenceCDF returns an aggregate view of the conditional reference CDF
+// and dependent-variable samples used by an anomaly Occurrence.
 func (m *Manager) GetOccurrenceCDF(ctx context.Context, occurrenceID int64) (CDFDetails, error) {
-	var result CDFDetails
 	var kind string
 	var serviceID, indicatorID sql.NullInt64
 	var chunkTimestamp sql.NullTime
 	err := m.db.QueryRowContext(ctx, `
-		SELECT o.alert_id, o.id, o.service_id, o.indicator_id, o.chunk_timestamp, o.kind
+		SELECT o.service_id, o.indicator_id, o.chunk_timestamp, o.kind
 		FROM alert_occurrence AS o
 		WHERE o.id=$1
-	`, occurrenceID).Scan(&result.AlertID, &result.OccurrenceID, &serviceID,
-		&indicatorID, &chunkTimestamp, &kind)
+	`, occurrenceID).Scan(&serviceID, &indicatorID, &chunkTimestamp, &kind)
 	if errors.Is(err, sql.ErrNoRows) {
 		return CDFDetails{}, ErrOccurrenceNotFound
 	}
@@ -868,34 +870,154 @@ func (m *Manager) GetOccurrenceCDF(ctx context.Context, occurrenceID int64) (CDF
 	if !serviceID.Valid || !indicatorID.Valid || !chunkTimestamp.Valid {
 		return CDFDetails{}, fmt.Errorf("anomaly occurrence %d has no time chunk identity", occurrenceID)
 	}
-	result.ServiceID = int(serviceID.Int64)
-	// The occurrence schema does not persist a service generation yet. Keep the
-	// API contract in place with the initial generation until that data is
-	// available from storage.
-	result.ServiceGeneration = 1
-	result.IndicatorID = int(indicatorID.Int64)
-	result.ChunkTimestamp = chunkTimestamp.Time
-	chunk, err := ecdf.NewDatabaseChunkStore(m.db).ReadChunk(result.ServiceID, result.IndicatorID, result.ChunkTimestamp)
+
+	service := int(serviceID.Int64)
+	indicator := int(indicatorID.Int64)
+	primary := chunkTimestamp.Time
+	var generation, activeGeneration int64
+	var pValue sql.NullFloat64
+	err = m.db.QueryRowContext(ctx, `
+		SELECT tc.generation, v.pvalue, s.generation
+		FROM time_chunk AS tc
+		JOIN verdict AS v
+		  ON v.service_id=tc.service_id AND v.indicator_id=tc.indicator_id
+		 AND v."timestamp"=tc."timestamp" AND v.generation=tc.generation
+		JOIN service AS s ON s.id=tc.service_id
+		WHERE tc.service_id=$1 AND tc.indicator_id=$2
+		  AND tc."timestamp"=$3::timestamptz(0)
+	`, service, indicator, primary).Scan(&generation, &pValue, &activeGeneration)
 	if err != nil {
-		return CDFDetails{}, fmt.Errorf("read occurrence time chunk: %w", err)
+		return CDFDetails{}, fmt.Errorf("read occurrence time chunk verdict: %w", err)
 	}
-	_, x, y, err := ecdf.Decode(chunk)
+	if !pValue.Valid {
+		return CDFDetails{}, fmt.Errorf("anomaly occurrence %d has no KS-test p-value", occurrenceID)
+	}
+	if generation != activeGeneration {
+		return CDFDetails{}, ErrCDFReferenceGone
+	}
+
+	xSamples, ySamples, err := m.readOccurrenceCDFSamples(ctx, service, indicator, generation, primary)
 	if err != nil {
-		return CDFDetails{}, fmt.Errorf("decode occurrence time chunk: %w", err)
+		return CDFDetails{}, err
 	}
-	result.SchemaVersion = 1
-	result.X = cdfSamples(x)
-	result.Y = cdfSamples(y)
-	result.CDF = CDFStatus{Status: "not_implemented", Description: "CDF rendering will be added in a future change."}
-	return result, nil
+	input, err := weightedCDFInput(xSamples)
+	if err != nil {
+		return CDFDetails{}, fmt.Errorf("calculate occurrence CDF query input: %w", err)
+	}
+	samples, err := aggregateCDFSamples(ySamples)
+	if err != nil {
+		return CDFDetails{}, fmt.Errorf("aggregate occurrence CDF samples: %w", err)
+	}
+
+	joint, err := ecdf.NewDatabaseJointStore(m.db).ReadCurrent(ctx, service, indicator)
+	if errors.Is(err, sql.ErrNoRows) {
+		return CDFDetails{}, ErrCDFReferenceGone
+	}
+	if err != nil {
+		return CDFDetails{}, fmt.Errorf("read occurrence joint ECDF: %w", err)
+	}
+	// A generation reset deletes every published ECDF for the service. Recheck
+	// after the read so a concurrent reset cannot pair an old chunk with a newly
+	// published reference from another generation.
+	if err := m.db.QueryRowContext(ctx, `SELECT generation FROM service WHERE id=$1`, service).Scan(&activeGeneration); err != nil {
+		return CDFDetails{}, fmt.Errorf("re-read service generation: %w", err)
+	}
+	if generation != activeGeneration {
+		return CDFDetails{}, ErrCDFReferenceGone
+	}
+	xs, ps, err := ecdf.Query(ctx, joint, input)
+	if err != nil {
+		return CDFDetails{}, fmt.Errorf("query occurrence joint ECDF: %w", err)
+	}
+	if len(xs) == 0 {
+		return CDFDetails{}, fmt.Errorf("query occurrence joint ECDF returned no points")
+	}
+	return CDFDetails{
+		Query:   CDFQuery{Input: input, Xs: xs, Ps: ps},
+		Samples: samples,
+		PValue:  pValue.Float64,
+	}, nil
 }
 
-func cdfSamples(samples []ecdf.Sample) []CDFSample {
-	result := make([]CDFSample, len(samples))
-	for index, sample := range samples {
-		result[index] = CDFSample{Value: sample.Value, Count: sample.Count}
+func (m *Manager) readOccurrenceCDFSamples(ctx context.Context, serviceID, indicatorID int, generation int64, primary time.Time) ([][]ecdf.Sample, [][]ecdf.Sample, error) {
+	start := primary
+	if indicatorID == loadTimeOfDayIndicatorID {
+		start = primary.Add(-occurrenceCDFWindow)
 	}
-	return result
+	rows, err := m.db.QueryContext(ctx, `
+		SELECT chunk
+		FROM time_chunk
+		WHERE service_id=$1 AND indicator_id=$2 AND generation=$3
+		  AND "timestamp">=$4::timestamptz(0) AND "timestamp"<=$5::timestamptz(0)
+		ORDER BY "timestamp"
+	`, serviceID, indicatorID, generation, start, primary)
+	if err != nil {
+		return nil, nil, fmt.Errorf("read occurrence time chunks: %w", err)
+	}
+	defer rows.Close()
+	var xs, ys [][]ecdf.Sample
+	for rows.Next() {
+		var chunk []byte
+		if err := rows.Scan(&chunk); err != nil {
+			return nil, nil, fmt.Errorf("scan occurrence time chunk: %w", err)
+		}
+		_, x, y, err := ecdf.Decode(chunk)
+		if err != nil {
+			return nil, nil, fmt.Errorf("decode occurrence time chunk: %w", err)
+		}
+		xs = append(xs, x)
+		ys = append(ys, y)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, nil, fmt.Errorf("iterate occurrence time chunks: %w", err)
+	}
+	if len(xs) == 0 {
+		return nil, nil, fmt.Errorf("occurrence time chunks are unavailable")
+	}
+	return xs, ys, nil
+}
+
+func weightedCDFInput(groups [][]ecdf.Sample) (float64, error) {
+	var total, weight float64
+	for _, samples := range groups {
+		for _, sample := range samples {
+			if sample.Count == 0 || math.IsNaN(sample.Value) || math.IsInf(sample.Value, 0) {
+				return 0, fmt.Errorf("invalid independent-variable sample")
+			}
+			count := float64(sample.Count)
+			total = math.FMA(sample.Value, count, total)
+			weight += count
+		}
+	}
+	if weight == 0 || math.IsInf(total, 0) || math.IsNaN(total) {
+		return 0, fmt.Errorf("no finite independent-variable observations")
+	}
+	return total / weight, nil
+}
+
+func aggregateCDFSamples(groups [][]ecdf.Sample) ([]CDFSample, error) {
+	counts := make(map[float64]uint64)
+	for _, samples := range groups {
+		for _, sample := range samples {
+			if sample.Count == 0 || math.IsNaN(sample.Value) || math.IsInf(sample.Value, 0) {
+				return nil, fmt.Errorf("invalid dependent-variable sample")
+			}
+			if ^uint64(0)-counts[sample.Value] < sample.Count {
+				return nil, fmt.Errorf("dependent-variable sample count overflows uint64")
+			}
+			counts[sample.Value] += sample.Count
+		}
+	}
+	values := make([]float64, 0, len(counts))
+	for value := range counts {
+		values = append(values, value)
+	}
+	sort.Float64s(values)
+	result := make([]CDFSample, len(values))
+	for index, value := range values {
+		result[index] = CDFSample{Value: value, Count: counts[value]}
+	}
+	return result, nil
 }
 
 func (m *Manager) listOccurrences(ctx context.Context, alertID int64) ([]Occurrence, error) {

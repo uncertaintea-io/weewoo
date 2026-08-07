@@ -53,10 +53,16 @@ disclosure. This disclosure shows the existing technical information for every
 kind of Alert, but each anomaly Occurrence additionally requests its CDF data
 once per rendered page. Opening **More details** for a non-anomaly Occurrence
 does not request CDF data.
-The response decodes the already-persisted time chunk and preserves the load
-and latency values and counts in their query-native units. CDF rendering is a
-temporary `not_implemented` placeholder; non-anomaly Occurrences do not expose
-the action and are rejected by the endpoint.
+The response returns the weighted independent-variable input, the raw `xs` and
+`ps` emitted by `jecdf query`, the aggregated dependent-variable samples from
+the analyzed time chunks, and the persisted KS-test p-value. Load vs. Latency
+uses its one chunk; Load vs. UTC Time of Day reconstructs the trailing
+five-minute analysis window. Because the exact ECDF version used by analysis is
+not persisted, the endpoint uses the latest reference only while the
+Occurrence's chunk generation remains active. After a generation reset it
+returns `410 Gone`; the UI explains that the matching reference is no longer
+retained. Non-anomaly Occurrences do not expose the action and are rejected by
+the endpoint.
 
 ## Reviews and ECDF eligibility
 

@@ -311,16 +311,21 @@ async function loadOccurrenceCDF(occurrenceId: number, result: HTMLElement): Pro
   result.textContent = 'Loading CDF details…';
   try {
     const details = await GetAlertOccurrenceCDF(occurrenceId);
-    const xCount = details.x.reduce((total, sample) => total + sample.count, 0);
-    const yCount = details.y.reduce((total, sample) => total + sample.count, 0);
-    result.innerHTML = `<p>${escapeHtml(details.cdf.description)}</p><dl class="evidence-grid">
-      <div><dt>Time chunk</dt><dd>${escapeHtml(formatTimestamp(details.chunkTimestamp))}</dd></div>
-      <div><dt>X observations</dt><dd>${String(xCount)}</dd></div>
-      <div><dt>Y observations</dt><dd>${String(yCount)}</dd></div>
+    const sampleCount = details.samples.reduce((total, sample) => total + sample.count, 0);
+    result.innerHTML = `<dl class="evidence-grid">
+      <div><dt>Query input</dt><dd>${String(details.query.input)}</dd></div>
+      <div><dt>Reference points</dt><dd>${String(details.query.xs.length)}</dd></div>
+      <div><dt>Samples</dt><dd>${String(sampleCount)}</dd></div>
+      <div><dt>KS p-value</dt><dd>${String(details.pValue)}</dd></div>
     </dl>`;
     result.dataset.loaded = 'true';
   } catch (error) {
-    result.textContent = error instanceof Error ? error.message : 'Unable to load CDF details.';
+    if (error instanceof ServicesApiError && error.status === 410) {
+      result.textContent = 'The reference distribution used for this alert is no longer retained.';
+      result.dataset.loaded = 'true';
+    } else {
+      result.textContent = error instanceof Error ? error.message : 'Unable to load CDF details.';
+    }
   } finally {
     delete result.dataset.loading;
   }

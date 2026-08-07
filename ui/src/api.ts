@@ -129,22 +129,19 @@ export interface AlertRecord {
   events: AlertEvent[];
 }
 
-export interface CDFSample {
+export interface Sample {
   value: number;
   count: number;
 }
 
 export interface AlertOccurrenceCDF {
-  schemaVersion: number;
-  alertId: number;
-  occurrenceId: number;
-  serviceId: number;
-  serviceGeneration: number;
-  indicatorId: number;
-  chunkTimestamp: string;
-  x: CDFSample[];
-  y: CDFSample[];
-  cdf: { status: 'not_implemented'; description: string };
+  query: {
+    input: number;
+    xs: number[];
+    ps: number[];
+  };
+  samples: Sample[];
+  pValue: number;
 }
 
 export interface JointECDFRender {
@@ -483,24 +480,24 @@ export async function GetAlertOccurrenceCDF(
   });
   if (!response.ok) throw await readServiceError(response);
   const body: unknown = await response.json();
-  if (!isRecord(body) || !Array.isArray(body.x) || !Array.isArray(body.y)
-    || typeof body.chunkTimestamp !== 'string' || !isRecord(body.cdf)
-    || typeof body.serviceGeneration !== 'number'
-    || typeof body.cdf.description !== 'string') {
+  if (!isRecord(body) || !isRecord(body.query)
+    || typeof body.query.input !== 'number'
+    || !Array.isArray(body.query.xs) || !body.query.xs.every((point) => typeof point === 'number')
+    || !Array.isArray(body.query.ps) || !body.query.ps.every((point) => typeof point === 'number')
+    || body.query.xs.length !== body.query.ps.length
+    || !Array.isArray(body.samples) || typeof body.pValue !== 'number') {
     throw new Error('Alert occurrence CDF response is invalid.');
   }
-  const parseSamples = (samples: unknown[]): CDFSample[] => samples.map((sample) => {
+  const parseSamples = (samples: unknown[]): Sample[] => samples.map((sample) => {
     if (!isRecord(sample) || typeof sample.value !== 'number' || typeof sample.count !== 'number') {
       throw new Error('Alert occurrence CDF samples are invalid.');
     }
     return { value: sample.value, count: sample.count };
   });
   return {
-    schemaVersion: Number(body.schemaVersion), alertId: Number(body.alertId), occurrenceId: Number(body.occurrenceId),
-    serviceId: Number(body.serviceId), serviceGeneration: body.serviceGeneration,
-    indicatorId: Number(body.indicatorId), chunkTimestamp: body.chunkTimestamp,
-    x: parseSamples(body.x), y: parseSamples(body.y),
-    cdf: { status: 'not_implemented', description: body.cdf.description },
+    query: { input: body.query.input, xs: body.query.xs, ps: body.query.ps },
+    samples: parseSamples(body.samples),
+    pValue: body.pValue,
   };
 }
 

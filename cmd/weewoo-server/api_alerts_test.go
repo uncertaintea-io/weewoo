@@ -77,9 +77,9 @@ func TestAlertAPIReviewsOccurrence(t *testing.T) {
 
 func TestAlertAPIReturnsOccurrenceCDFDetails(t *testing.T) {
 	manager := &fakeAlertManager{cdf: alerting.CDFDetails{
-		SchemaVersion: 1, OccurrenceID: 9, ServiceGeneration: 3,
-		X: []alerting.CDFSample{{Value: 12, Count: 2}},
-		Y: []alerting.CDFSample{{Value: 34, Count: 5}},
+		Query:   alerting.CDFQuery{Input: 12, Xs: []float64{30, 40}, Ps: []float64{0.25, 0.75}},
+		Samples: []alerting.CDFSample{{Value: 34, Count: 5}},
+		PValue:  0.001,
 	}}
 	recorder := httptest.NewRecorder()
 
@@ -89,10 +89,11 @@ func TestAlertAPIReturnsOccurrenceCDFDetails(t *testing.T) {
 	assert.Equal(t, int64(9), manager.cdfID)
 	var response alerting.CDFDetails
 	require.NoError(t, json.NewDecoder(recorder.Body).Decode(&response))
-	assert.Equal(t, 1, response.SchemaVersion)
-	assert.Equal(t, int64(3), response.ServiceGeneration)
-	assert.Equal(t, []alerting.CDFSample{{Value: 12, Count: 2}}, response.X)
-	assert.Equal(t, []alerting.CDFSample{{Value: 34, Count: 5}}, response.Y)
+	assert.Equal(t, 12.0, response.Query.Input)
+	assert.Equal(t, []float64{30, 40}, response.Query.Xs)
+	assert.Equal(t, []float64{0.25, 0.75}, response.Query.Ps)
+	assert.Equal(t, []alerting.CDFSample{{Value: 34, Count: 5}}, response.Samples)
+	assert.Equal(t, 0.001, response.PValue)
 }
 
 func TestAlertAPIRejectsCDFForNonAnomalyOccurrence(t *testing.T) {
@@ -102,6 +103,16 @@ func TestAlertAPIRejectsCDFForNonAnomalyOccurrence(t *testing.T) {
 	NewAlertAPIHandler(manager).ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/alerts/occurrences/9/cdf", nil))
 
 	assert.Equal(t, http.StatusUnprocessableEntity, recorder.Code)
+}
+
+func TestAlertAPIReportsExpiredCDFReference(t *testing.T) {
+	manager := &fakeAlertManager{cdfErr: alerting.ErrCDFReferenceGone}
+	recorder := httptest.NewRecorder()
+
+	NewAlertAPIHandler(manager).ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/alerts/occurrences/9/cdf", nil))
+
+	assert.Equal(t, http.StatusGone, recorder.Code)
+	assert.Equal(t, "the matching reference distribution is no longer retained\n", recorder.Body.String())
 }
 
 func TestAlertAPIRejectsCrossOriginReview(t *testing.T) {

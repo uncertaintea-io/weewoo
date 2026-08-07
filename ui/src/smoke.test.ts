@@ -349,24 +349,17 @@ describe('Alerts API', () => {
     const fetcher = (url: string | URL | Request): Promise<Response> => {
       expect(url).to.equal('/api/alerts/occurrences/12/cdf');
       return Promise.resolve(new Response(JSON.stringify({
-        schemaVersion: 1,
-        alertId: 9,
-        occurrenceId: 12,
-        serviceId: 7,
-        serviceGeneration: 3,
-        indicatorId: 1,
-        chunkTimestamp: '2026-07-24T10:00:00Z',
-        x: [{ value: 125.4, count: 1 }],
-        y: [{ value: 0.18, count: 91 }],
-        cdf: { status: 'not_implemented', description: 'CDF rendering will be added later.' },
+        query: { input: 125.4, xs: [0.1, 0.2], ps: [0.25, 0.75] },
+        samples: [{ value: 0.18, count: 91 }],
+        pValue: 0.001,
       }), { status: 200 }));
     };
 
     const details = await GetAlertOccurrenceCDF(12, fetcher);
 
-    expect(details.x).to.deep.equal([{ value: 125.4, count: 1 }]);
-    expect(details.y).to.deep.equal([{ value: 0.18, count: 91 }]);
-    expect(details.serviceGeneration).to.equal(3);
+    expect(details.query).to.deep.equal({ input: 125.4, xs: [0.1, 0.2], ps: [0.25, 0.75] });
+    expect(details.samples).to.deep.equal([{ value: 0.18, count: 91 }]);
+    expect(details.pValue).to.equal(0.001);
   });
 
 });

@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"github.com/uncertaintea-io/weewoo/internal/ecdf"
 )
 
 func TestSeverityForCount(t *testing.T) {
@@ -37,4 +39,28 @@ func TestCollectionDescriptionExplainsRetry(t *testing.T) {
 func TestSanitizeErrorAcceptsNil(t *testing.T) {
 	assert.Empty(t, sanitizeError(nil))
 	assert.Equal(t, "safe", sanitizeError(errors.New("safe")))
+}
+
+func TestWeightedCDFInputAggregatesChunksAndCounts(t *testing.T) {
+	input, err := weightedCDFInput([][]ecdf.Sample{
+		{{Value: 1, Count: 2}, {Value: 4, Count: 1}},
+		{{Value: 7, Count: 3}},
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, 4.5, input)
+}
+
+func TestAggregateCDFSamplesMergesEqualValuesAcrossChunks(t *testing.T) {
+	samples, err := aggregateCDFSamples([][]ecdf.Sample{
+		{{Value: 2, Count: 3}, {Value: 1, Count: 2}},
+		{{Value: 2, Count: 4}, {Value: 3, Count: 1}},
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, []CDFSample{
+		{Value: 1, Count: 2},
+		{Value: 2, Count: 7},
+		{Value: 3, Count: 1},
+	}, samples)
 }
