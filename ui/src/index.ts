@@ -1,5 +1,6 @@
 import './index.scss'
-import { CancelImport, CreateService, DeleteService, GetAlertEvidence, GetService, GetServiceDetail, ListAlerts, ListAllServices, ResetServiceBaseline, ReviewAlertOccurrence, ServicesApiError, SetServicePaused, TestService, UpdateService, type AlertOccurrence, type AlertRecord, type CreateServiceInput, type Service, type ServiceChange } from './api';
+import { CancelImport, CreateService, DeleteService, GetAlertCDFComparison, GetAlertEvidence, GetService, GetServiceDetail, ListAlerts, ListAllServices, ResetServiceBaseline, ReviewAlertOccurrence, ServicesApiError, SetServicePaused, TestService, UpdateService, type AlertCDFComparison, type AlertOccurrence, type AlertRecord, type CreateServiceInput, type Service, type ServiceChange } from './api';
+import { renderAlertPDFComparison } from './alert-pdf';
 import { historicalRangeToUtc } from './datetime';
 import { renderJECDF } from './jecdf';
 import { liveRefreshDelay } from './live-refresh';
@@ -84,7 +85,7 @@ function renderShell(content: string, apiResponse = 'Ready', page: PageMeta = {}
         </div>
         <nav class="sidebar-nav">
           <a class="${window.location.hash === '#services' || window.location.hash === '' || window.location.hash.startsWith('#service') ? 'is-active' : ''}" href="#services">Services</a>
-          <a class="${window.location.hash === '#alerts' ? 'is-active' : ''}" href="#alerts">Alerts</a>
+          <a class="${window.location.hash.startsWith('#alert') ? 'is-active' : ''}" href="#alerts">Alerts</a>
           <a href="#incidents">Incidents</a>
           <a href="#integrations">Integrations</a>
           <a class="${window.location.hash === '#settings' ? 'is-active' : ''}" href="#settings">Settings</a>
@@ -99,7 +100,7 @@ function renderShell(content: string, apiResponse = 'Ready', page: PageMeta = {}
         <header class="top-bar">
           <label class="search-box">
             <span aria-hidden="true"></span>
-            <input type="search" placeholder="Search services" />
+            <input type="search" name="search" placeholder="Search services" />
           </label>
           <div class="top-actions">
             <div class="last-updated">
@@ -177,8 +178,8 @@ function renderEvidence(evidence: Record<string, unknown>): string {
   `).join('')}</dl>`;
 }
 
-function renderOccurrence(occurrence: AlertOccurrence): string {
-  const reviewable = occurrence.chunkTimestamp !== undefined;
+function renderOccurrence(occurrence: AlertOccurrence, allowReview = true): string {
+  const reviewable = allowReview && occurrence.chunkTimestamp !== undefined;
   const hasEvidence = occurrence.kind === 'anomaly';
   const accepted = occurrence.reviewOverride === true;
   return `
@@ -213,7 +214,7 @@ function renderAlertCard(alert: AlertRecord): string {
             <span class="severity-pill severity-pill--${escapeHtml(alert.severity)}">${escapeHtml(alert.severity)}</span>
             <span class="alert-status">${escapeHtml(alert.status)}</span>
           </div>
-          <h2>${escapeHtml(alert.title)}</h2>
+          <h2><a href="#alert/${String(alert.id)}">${escapeHtml(alert.title)}</a></h2>
           <p>${escapeHtml(alert.serviceName)} · Last observed ${escapeHtml(formatTimestamp(alert.lastOccurredAt))}</p>
         </div>
         <strong class="occurrence-total">${String(alert.occurrenceCount)}<small>occurrence${alert.occurrenceCount === 1 ? '' : 's'}</small></strong>
@@ -228,12 +229,81 @@ function renderAlertCard(alert: AlertRecord): string {
         ${alert.alertmanagerError === undefined ? '' : `<small>${escapeHtml(alert.alertmanagerError)}</small>`}
       </div>
       ${alert.resolutionReason === undefined || alert.resolutionReason === '' ? '' : `<p class="resolution-copy">Resolved: ${escapeHtml(alert.resolutionReason.replaceAll('_', ' '))}</p>`}
+      <div class="alert-card-actions"><a class="secondary-button" href="#alert/${String(alert.id)}">View alert details</a></div>
       <details class="occurrence-disclosure">
         <summary>View ${String(alert.occurrences.length)} occurrence${alert.occurrences.length === 1 ? '' : 's'} and evidence</summary>
-        <div class="occurrence-list">${alert.occurrences.map(renderOccurrence).join('')}</div>
+        <div class="occurrence-list">${alert.occurrences.map((occurrence) => renderOccurrence(occurrence)).join('')}</div>
       </details>
     </article>
   `;
+}
+
+function renderAlertDetail(alert: AlertRecord, comparison: AlertCDFComparison): void {
+  renderShell(`
+    <section class="detail-header alert-detail-header">
+      <div class="detail-identity">
+        <a class="back-link" href="#alerts">← All alerts</a>
+        <h2>${escapeHtml(alert.title)}</h2>
+        <p class="eyebrow">${escapeHtml(alert.serviceName)} · Alert #${String(alert.id)}</p>
+      </div>
+      <div class="alert-labels">
+        <span class="severity-pill severity-pill--${escapeHtml(alert.severity)}">${escapeHtml(alert.severity)}</span>
+        <span class="alert-status">${escapeHtml(alert.status)}</span>
+      </div>
+    </section>
+    <section class="detail-grid" aria-label="Alert statistics">
+      <article class="detail-card alert-stat-card"><span>P-value</span><strong>${String(comparison.pValue)}</strong><p>Hard-coded for this proof of concept.</p></article>
+      <article class="detail-card"><span>Occurrences</span><strong>${String(alert.occurrenceCount)}</strong><p>${String(alert.consecutiveCount)} consecutive Bad chunk${alert.consecutiveCount === 1 ? '' : 's'}.</p></article>
+      <article class="detail-card"><span>Last observed</span><strong>${escapeHtml(formatTimestamp(alert.lastOccurredAt))}</strong><p>${escapeHtml(alertmanagerLabel(alert.alertmanagerState))}</p></article>
+    </section>
+    <section class="detail-panel alert-pdf-panel" aria-labelledby="alert-pdf-heading">
+      <div class="panel-header">
+        <div><h2 id="alert-pdf-heading">Expected and actual latency PDFs</h2><p>Derived from monotonic interpolation of the expected CDF and observed ECDF.</p></div>
+        <button id="alert-pdf-reset" class="secondary-button alert-pdf-reset" type="button" hidden>Reset view</button>
+      </div>
+      <div class="alert-pdf-content">
+        <div class="alert-pdf-plot">
+          <canvas id="alert-pdf" aria-label="Expected and actual latency probability density functions. Drag horizontally to zoom.">Expected and actual latency probability density functions.</canvas>
+          <p class="alert-pdf-instruction">Drag horizontally across the plot to focus on a latency range.</p>
+        </div>
+        <aside class="alert-pdf-key" aria-label="Plot series">
+          <div class="pdf-legend-row"><span class="pdf-swatch pdf-swatch--expected" aria-hidden="true"></span><div><strong>Expected PDF</strong><p>Reference CDF from last-query.json</p></div></div>
+          <div class="pdf-legend-row"><span class="pdf-swatch pdf-swatch--actual" aria-hidden="true"></span><div><strong>Actual PDF</strong><p>ECDF built from weighted samples in last-analysis.json</p></div></div>
+        </aside>
+      </div>
+    </section>
+    <section class="detail-columns alert-detail-copy">
+      <article class="detail-panel"><div class="panel-header"><h2>Impact</h2></div><p>${escapeHtml(alert.impact)}</p></article>
+      <article class="detail-panel"><div class="panel-header"><h2>Suggested action</h2></div><p>${escapeHtml(alert.suggestedAction)}</p></article>
+    </section>
+    <section class="detail-panel alert-occurrences-panel">
+      <div class="panel-header"><h2>Occurrences and evidence</h2><span>${String(alert.occurrences.length)} retained</span></div>
+      <div class="occurrence-list">${alert.occurrences.map((occurrence) => renderOccurrence(occurrence, false)).join('')}</div>
+    </section>
+  `, '200 OK', {
+    eyebrow: 'WeeWoo Alert Detail',
+    title: alert.title,
+    description: alert.description,
+    endpoint: '/api/alerts + local distribution fixtures',
+  });
+  document.querySelector('#service-count')?.replaceChildren(`${String(alert.occurrenceCount)} occurrence${alert.occurrenceCount === 1 ? '' : 's'}`);
+  detailVisualizationCleanup = renderAlertPDFComparison('alert-pdf', comparison);
+}
+
+async function loadAlertDetail(id: number): Promise<void> {
+  detailVisualizationCleanup?.();
+  detailVisualizationCleanup = undefined;
+  renderShell('<section class="alert-panel" aria-busy="true"><div class="skeleton-list"><div class="skeleton-row"></div><div class="skeleton-row"></div></div></section>', 'Loading', {
+    eyebrow: 'WeeWoo Alert Detail', title: 'Loading alert', description: 'Loading alert evidence and distribution fixtures.', endpoint: '/api/alerts',
+  });
+  try {
+    const [alerts, comparison] = await Promise.all([ListAlerts(true), GetAlertCDFComparison()]);
+    const alert = alerts.find((candidate) => candidate.id === id);
+    if (alert === undefined) throw new Error(`Alert #${String(id)} was not found.`);
+    if (currentRoute() === `alert/${String(id)}`) renderAlertDetail(alert, comparison);
+  } catch (error) {
+    if (currentRoute() === `alert/${String(id)}`) renderError(error);
+  }
 }
 
 function renderAlerts(alerts: AlertRecord[]): void {
@@ -889,6 +959,8 @@ async function refreshRoute(route: string): Promise<void> {
     await loadServices(false);
     return;
   }
+  const alertMatch = /^alert\/(\d+)$/.exec(route);
+  if (alertMatch !== null) { await loadAlertDetail(Number(alertMatch[1])); return; }
   const detailMatch = /^service\/(\d+)$/.exec(route);
   if (detailMatch !== null) await loadServiceDetail(Number(detailMatch[1]), false);
 }
@@ -924,6 +996,8 @@ async function boot(): Promise<void> {
     if (currentRoute() === route) scheduleLiveRefresh(route);
     return;
   }
+  const alertMatch = /^alert\/(\d+)$/.exec(route);
+  if (alertMatch !== null) { await loadAlertDetail(Number(alertMatch[1])); return; }
   const detailMatch = /^service\/(\d+)$/.exec(route);
   if (detailMatch !== null) {
     await loadServiceDetail(Number(detailMatch[1]));

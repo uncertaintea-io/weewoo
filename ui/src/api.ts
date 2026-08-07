@@ -146,6 +146,17 @@ export interface AlertEvidence {
   pValue: number;
 }
 
+export interface CDFPoint {
+  x: number;
+  probability: number;
+}
+
+export interface AlertCDFComparison {
+  expected: CDFPoint[];
+  actual: CDFPoint[];
+  pValue: number;
+}
+
 export interface JointECDFRender {
   width: number;
   height: number;
@@ -503,6 +514,54 @@ export async function GetAlertEvidence(
     samples: parseSamples(body.samples),
     pValue: body.pValue,
   };
+}
+
+/**
+ * Proof-of-concept data source for the alert detail plot. The two static fixture
+ * requests deliberately resemble an API boundary so a real endpoint can replace
+ * this function without coupling the view to the fixture formats.
+ */
+export async function GetAlertCDFComparison(fetcher: Fetcher = fetch): Promise<AlertCDFComparison> {
+  const [queryResponse, analysisResponse] = await Promise.all([
+    fetcher('/fixtures/last-query.json', { headers: { Accept: 'application/json' } }),
+    fetcher('/fixtures/last-analysis.json', { headers: { Accept: 'application/json' } }),
+  ]);
+  if (!queryResponse.ok) throw await readServiceError(queryResponse);
+  if (!analysisResponse.ok) throw await readServiceError(analysisResponse);
+
+  const query: unknown = await queryResponse.json();
+  const analysis: unknown = await analysisResponse.json();
+  if (!isRecord(query) || !Array.isArray(query.xs) || !Array.isArray(query.ps) || query.xs.length !== query.ps.length) {
+    throw new Error('Expected CDF fixture must contain equally sized xs and ps arrays.');
+  }
+  const queryXs = query.xs;
+  const queryProbabilities = query.ps;
+  const expected = queryXs.map((x, index) => ({
+    x: readNumber(x, `xs[${String(index)}]`),
+    probability: readNumber(queryProbabilities[index], `ps[${String(index)}]`),
+  }));
+
+  if (!isRecord(analysis) || !Array.isArray(analysis.latency_sample)) {
+    throw new Error('Analysis fixture must contain a latency_sample array.');
+  }
+  const samples = analysis.latency_sample.map((sample, index) => {
+    if (!isRecord(sample)) throw new Error(`latency_sample[${String(index)}] must be an object.`);
+    const count = readNumber(sample.Count, `latency_sample[${String(index)}].Count`);
+    if (count < 0) throw new Error(`latency_sample[${String(index)}].Count must not be negative.`);
+    return {
+      x: readNumber(sample.Value, `latency_sample[${String(index)}].Value`),
+      count,
+    };
+  }).sort((left, right) => left.x - right.x);
+  const total = samples.reduce((sum, sample) => sum + sample.count, 0);
+  if (total <= 0) throw new Error('Analysis fixture must contain at least one observation.');
+  let cumulative = 0;
+  const actual = samples.map((sample) => {
+    cumulative += sample.count;
+    return { x: sample.x, probability: cumulative / total };
+  });
+
+  return { expected, actual, pValue: 0 };
 }
 
 export async function GetJointECDF(

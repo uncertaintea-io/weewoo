@@ -1,6 +1,39 @@
 import { expect } from 'chai';
 import 'mocha';
-import { GetJointECDF } from './api';
+import { GetAlertCDFComparison, GetJointECDF } from './api';
+
+describe('Alert CDF proof-of-concept API', () => {
+
+  it('combines the expected CDF and weighted analysis samples', async () => {
+    const fetcher = (url: string | URL | Request): Promise<Response> => {
+      if (url === '/fixtures/last-query.json') {
+        return Promise.resolve(new Response(JSON.stringify({ xs: [1, 2], ps: [0.25, 1] })));
+      }
+      expect(url).to.equal('/fixtures/last-analysis.json');
+      return Promise.resolve(new Response(JSON.stringify({
+        latency_sample: [
+          { Value: 2, Count: 3 },
+          { Value: 1, Count: 1 },
+        ],
+      })));
+    };
+
+    const comparison = await GetAlertCDFComparison(fetcher);
+
+    expect(comparison).to.deep.equal({
+      expected: [
+        { x: 1, probability: 0.25 },
+        { x: 2, probability: 1 },
+      ],
+      actual: [
+        { x: 1, probability: 0.25 },
+        { x: 2, probability: 1 },
+      ],
+      pValue: 0,
+    });
+  });
+
+});
 
 describe('Joint ECDF API', () => {
 

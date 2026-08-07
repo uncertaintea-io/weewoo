@@ -12,6 +12,8 @@
   --success: #4bd6a0;
   --warning: #f1b95b;
   --error: #ff6f91;
+  --alert-pdf-actual: #c47a44;
+  --alert-pdf-expected: #2563eb;
   --radius: 8px;
   --shadow: 0 12px 32px rgba(0, 0, 0, 0.28);
   --field: rgba(18, 18, 18, 0.82);
@@ -340,6 +342,12 @@ textarea {
 
 .delivery-state--failed {
   color: var(--error);
+}
+
+.alert-card-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 16px;
 }
 
 .occurrence-disclosure {
@@ -1497,6 +1505,106 @@ h1 {
   margin-bottom: 18px;
 }
 
+.alert-pdf-panel {
+  margin-bottom: 18px;
+}
+
+.alert-pdf-panel .panel-header > div p {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.alert-pdf-content {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(210px, 280px);
+  gap: clamp(20px, 4vw, 48px);
+  align-items: center;
+  padding: 24px;
+}
+
+.alert-pdf-plot {
+  min-width: 0;
+}
+
+.alert-pdf-plot canvas {
+  display: block;
+  width: 100%;
+  height: clamp(320px, 40vw, 500px);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--field) 58%, transparent);
+  cursor: crosshair;
+  touch-action: none;
+  user-select: none;
+}
+
+.alert-pdf-plot canvas.is-selecting {
+  cursor: col-resize;
+}
+
+.alert-pdf-instruction {
+  margin: 10px 0 0;
+  color: var(--muted);
+  font-size: 0.76rem;
+  text-align: center;
+}
+
+.alert-pdf-reset[hidden] {
+  display: none;
+}
+
+.alert-pdf-key {
+  display: grid;
+  gap: 22px;
+  align-content: center;
+}
+
+.pdf-legend-row {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+}
+
+.pdf-legend-row strong,
+.pdf-legend-row p {
+  display: block;
+  margin: 0;
+}
+
+.pdf-legend-row p {
+  margin-top: 5px;
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.5;
+}
+
+.pdf-swatch {
+  height: 3px;
+  margin-top: 8px;
+  border-radius: 999px;
+}
+
+.pdf-swatch--expected {
+  background: var(--alert-pdf-expected);
+}
+
+.pdf-swatch--actual {
+  background: var(--alert-pdf-actual);
+}
+
+.alert-detail-copy .detail-panel > p {
+  margin: 0;
+  padding: 20px;
+  color: var(--secondary);
+  line-height: 1.6;
+}
+
+.alert-occurrences-panel .occurrence-list {
+  margin: 0;
+  padding: 18px;
+}
+
 .jecdf-panel .panel-header > div p {
   margin: 4px 0 0;
   color: var(--muted);
@@ -1786,6 +1894,15 @@ h1 {
     padding: 16px;
   }
 
+  .alert-pdf-content {
+    grid-template-columns: 1fr;
+    padding: 16px;
+  }
+
+  .alert-pdf-plot canvas {
+    height: 360px;
+  }
+
   .jecdf-key {
     max-width: none;
   }
@@ -1843,7 +1960,8 @@ h1 {
 
   .detail-grid,
   .detail-columns,
-  .jecdf-content {
+  .jecdf-content,
+  .alert-pdf-content {
     grid-template-columns: 1fr;
   }
 
