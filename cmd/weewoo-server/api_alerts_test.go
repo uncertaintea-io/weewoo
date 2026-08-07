@@ -93,7 +93,7 @@ func TestAlertAPIReturnsOccurrenceEvidence(t *testing.T) {
 	assert.Equal(t, 12.0, response.Query.Input)
 	assert.Equal(t, []float64{30, 40}, response.Query.Xs)
 	assert.Equal(t, []float64{0.25, 0.75}, response.Query.Ps)
-	assert.Equal(t, []alerting.AlertEvidenceSample{{Value: 34, Count: 5}}, response.Samples)
+	assert.Equal(t, []ecdf.Sample{{Value: 34, Count: 5}}, response.Samples)
 	assert.Equal(t, 0.001, response.PValue)
 }
 

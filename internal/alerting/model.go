@@ -139,11 +139,6 @@ type AlertQueryResult struct {
 	Ps    []float64 `json:"ps"`
 }
 
-type AlertEvidenceSample struct {
-	Value float64 `json:"value"`
-	Count uint64  `json:"count"`
-}
-
 // Recorder is the small interface used by collection and analysis.
 type Recorder interface {
 	RecordAnalysis(context.Context, AnalysisOutcome) error

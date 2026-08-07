@@ -58,7 +58,7 @@ func TestAggregateSamplesAcrossChunks(t *testing.T) {
 	})
 
 	require.NoError(t, err)
-	assert.Equal(t, []AlertEvidenceSample{
+	assert.Equal(t, []ecdf.Sample{
 		{Value: 1, Count: 2},
 		{Value: 2, Count: 7},
 		{Value: 3, Count: 1},
