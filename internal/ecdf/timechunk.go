@@ -11,8 +11,8 @@ import (
 )
 
 type Sample struct {
-	Value float64
-	Count uint64
+	Value float64 `json:"value"`
+	Count uint64  `json:"count"`
 }
 
 type TimeChunk struct {

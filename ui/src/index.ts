@@ -1,5 +1,5 @@
 import './index.scss'
-import { CancelImport, CreateService, DeleteService, GetAlertOccurrenceCDF, GetService, GetServiceDetail, ListAlerts, ListAllServices, ResetServiceBaseline, ReviewAlertOccurrence, ServicesApiError, SetServicePaused, TestService, UpdateService, type AlertOccurrence, type AlertRecord, type CreateServiceInput, type Service, type ServiceChange } from './api';
+import { CancelImport, CreateService, DeleteService, GetAlertEvidence, GetService, GetServiceDetail, ListAlerts, ListAllServices, ResetServiceBaseline, ReviewAlertOccurrence, ServicesApiError, SetServicePaused, TestService, UpdateService, type AlertOccurrence, type AlertRecord, type CreateServiceInput, type Service, type ServiceChange } from './api';
 import { historicalRangeToUtc } from './datetime';
 import { renderJECDF } from './jecdf';
 import { liveRefreshDelay } from './live-refresh';
@@ -179,7 +179,7 @@ function renderEvidence(evidence: Record<string, unknown>): string {
 
 function renderOccurrence(occurrence: AlertOccurrence): string {
   const reviewable = occurrence.chunkTimestamp !== undefined;
-  const hasCDFDetails = occurrence.kind === 'anomaly';
+  const hasEvidence = occurrence.kind === 'anomaly';
   const accepted = occurrence.reviewOverride === true;
   return `
     <article class="occurrence-row">
@@ -188,7 +188,7 @@ function renderOccurrence(occurrence: AlertOccurrence): string {
         <span class="review-state${accepted ? ' is-accepted' : ''}">${escapeHtml(reviewLabel(occurrence))}</span>
       </header>
       ${renderEvidence(occurrence.evidence)}
-      ${occurrence.technicalDetails === '' ? '' : `<details class="occurrence-more-details"${hasCDFDetails ? ` data-cdf-occurrence-id="${String(occurrence.id)}"` : ''}><summary>More details</summary><pre>${escapeHtml(occurrence.technicalDetails)}</pre>${hasCDFDetails ? `<div class="occurrence-cdf-result" data-occurrence-id="${String(occurrence.id)}" hidden></div>` : ''}</details>`}
+      ${occurrence.technicalDetails === '' ? '' : `<details class="occurrence-more-details"${hasEvidence ? ` data-evidence-occurrence-id="${String(occurrence.id)}"` : ''}><summary>More details</summary><pre>${escapeHtml(occurrence.technicalDetails)}</pre>${hasEvidence ? `<div class="occurrence-evidence-result" data-occurrence-id="${String(occurrence.id)}" hidden></div>` : ''}</details>`}
       ${occurrence.reviewReason === undefined || occurrence.reviewReason === '' ? '' : `<p class="review-reason">Review note: ${escapeHtml(occurrence.reviewReason)}</p>`}
       ${reviewable ? `
         <div class="occurrence-actions">
@@ -282,9 +282,9 @@ function renderAlerts(alerts: AlertRecord[]): void {
     const alertId = details.closest<HTMLElement>('.alert-card')?.dataset.alertId;
     details.open = alertId !== undefined && expandedAlertIds.has(alertId);
   });
-  document.querySelectorAll<HTMLDetailsElement>('.occurrence-more-details[data-cdf-occurrence-id]').forEach((details) => {
+  document.querySelectorAll<HTMLDetailsElement>('.occurrence-more-details[data-evidence-occurrence-id]').forEach((details) => {
     details.addEventListener('toggle', () => {
-      if (details.open) void loadOccurrenceCDFForDetails(details);
+      if (details.open) void loadOccurrenceEvidenceForDetails(details);
     });
   });
   document.querySelectorAll<HTMLButtonElement>('.review-occurrence').forEach((button) => {
@@ -298,25 +298,25 @@ function renderAlerts(alerts: AlertRecord[]): void {
   });
 }
 
-async function loadOccurrenceCDFForDetails(details: HTMLDetailsElement): Promise<void> {
-  const result = details.querySelector<HTMLElement>('.occurrence-cdf-result[data-occurrence-id]');
+async function loadOccurrenceEvidenceForDetails(details: HTMLDetailsElement): Promise<void> {
+  const result = details.querySelector<HTMLElement>('.occurrence-evidence-result[data-occurrence-id]');
   if (result === null || result.dataset.loaded === 'true' || result.dataset.loading === 'true') return;
   const occurrenceId = Number(result.dataset.occurrenceId);
   result.dataset.loading = 'true';
-  await loadOccurrenceCDF(occurrenceId, result);
+  await loadOccurrenceEvidence(occurrenceId, result);
 }
 
-async function loadOccurrenceCDF(occurrenceId: number, result: HTMLElement): Promise<void> {
+async function loadOccurrenceEvidence(occurrenceId: number, result: HTMLElement): Promise<void> {
   result.hidden = false;
-  result.textContent = 'Loading CDF details…';
+  result.textContent = 'Loading Alert Evidence…';
   try {
-    const details = await GetAlertOccurrenceCDF(occurrenceId);
-    const sampleCount = details.samples.reduce((total, sample) => total + sample.count, 0);
+    const evidence = await GetAlertEvidence(occurrenceId);
+    const sampleCount = evidence.samples.reduce((total, sample) => total + sample.count, 0);
     result.innerHTML = `<dl class="evidence-grid">
-      <div><dt>Query input</dt><dd>${String(details.query.input)}</dd></div>
-      <div><dt>Reference points</dt><dd>${String(details.query.xs.length)}</dd></div>
+      <div><dt>Query input</dt><dd>${String(evidence.query.input)}</dd></div>
+      <div><dt>Reference points</dt><dd>${String(evidence.query.xs.length)}</dd></div>
       <div><dt>Samples</dt><dd>${String(sampleCount)}</dd></div>
-      <div><dt>KS p-value</dt><dd>${String(details.pValue)}</dd></div>
+      <div><dt>KS p-value</dt><dd>${String(evidence.pValue)}</dd></div>
     </dl>`;
     result.dataset.loaded = 'true';
   } catch (error) {
@@ -324,7 +324,7 @@ async function loadOccurrenceCDF(occurrenceId: number, result: HTMLElement): Pro
       result.textContent = 'The reference distribution used for this alert is no longer retained.';
       result.dataset.loaded = 'true';
     } else {
-      result.textContent = error instanceof Error ? error.message : 'Unable to load CDF details.';
+      result.textContent = error instanceof Error ? error.message : 'Unable to load Alert Evidence.';
     }
   } finally {
     delete result.dataset.loading;

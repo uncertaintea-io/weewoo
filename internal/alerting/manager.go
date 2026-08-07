@@ -1,6 +1,7 @@
 package alerting
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -9,7 +10,7 @@ import (
 	"log/slog"
 	"math"
 	"regexp"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -22,7 +23,7 @@ const (
 	defaultCriticalConsecutive = 3
 	defaultAlertRetention      = 90 * 24 * time.Hour
 	loadTimeOfDayIndicatorID   = 2
-	occurrenceCDFWindow        = 5 * time.Minute
+	alertEvidenceWindow        = 5 * time.Minute
 )
 
 type Manager struct {
@@ -847,9 +848,8 @@ func (m *Manager) List(ctx context.Context, includeResolved bool, limit int) ([]
 	return alerts, nil
 }
 
-// GetOccurrenceCDF returns an aggregate view of the conditional reference CDF
-// and dependent-variable samples used by an anomaly Occurrence.
-func (m *Manager) GetOccurrenceCDF(ctx context.Context, occurrenceID int64) (CDFDetails, error) {
+// GetEvidence returns the reference distribution, observations, and test result that explain an anomaly Occurrence.
+func (m *Manager) GetEvidence(ctx context.Context, occurrenceID int64) (AlertEvidence, error) {
 	var kind string
 	var serviceID, indicatorID sql.NullInt64
 	var chunkTimestamp sql.NullTime
@@ -859,16 +859,16 @@ func (m *Manager) GetOccurrenceCDF(ctx context.Context, occurrenceID int64) (CDF
 		WHERE o.id=$1
 	`, occurrenceID).Scan(&serviceID, &indicatorID, &chunkTimestamp, &kind)
 	if errors.Is(err, sql.ErrNoRows) {
-		return CDFDetails{}, ErrOccurrenceNotFound
+		return AlertEvidence{}, ErrOccurrenceNotFound
 	}
 	if err != nil {
-		return CDFDetails{}, fmt.Errorf("read occurrence CDF details: %w", err)
+		return AlertEvidence{}, fmt.Errorf("read Alert Evidence: %w", err)
 	}
 	if kind != KindAnomaly {
-		return CDFDetails{}, ErrCDFNotApplicable
+		return AlertEvidence{}, ErrEvidenceNotApplicable
 	}
 	if !serviceID.Valid || !indicatorID.Valid || !chunkTimestamp.Valid {
-		return CDFDetails{}, fmt.Errorf("anomaly occurrence %d has no time chunk identity", occurrenceID)
+		return AlertEvidence{}, fmt.Errorf("anomaly occurrence %d has no time chunk identity", occurrenceID)
 	}
 
 	service := int(serviceID.Int64)
@@ -887,62 +887,62 @@ func (m *Manager) GetOccurrenceCDF(ctx context.Context, occurrenceID int64) (CDF
 		  AND tc."timestamp"=$3::timestamptz(0)
 	`, service, indicator, primary).Scan(&generation, &pValue, &activeGeneration)
 	if err != nil {
-		return CDFDetails{}, fmt.Errorf("read occurrence time chunk verdict: %w", err)
+		return AlertEvidence{}, fmt.Errorf("read occurrence time chunk verdict: %w", err)
 	}
 	if !pValue.Valid {
-		return CDFDetails{}, fmt.Errorf("anomaly occurrence %d has no KS-test p-value", occurrenceID)
+		return AlertEvidence{}, fmt.Errorf("anomaly occurrence %d has no KS-test p-value", occurrenceID)
 	}
 	if generation != activeGeneration {
-		return CDFDetails{}, ErrCDFReferenceGone
+		return AlertEvidence{}, ErrEvidenceReferenceGone
 	}
 
-	xSamples, ySamples, err := m.readOccurrenceCDFSamples(ctx, service, indicator, generation, primary)
+	xSamples, ySamples, err := m.readEvidenceSamples(ctx, service, indicator, generation, primary)
 	if err != nil {
-		return CDFDetails{}, err
+		return AlertEvidence{}, err
 	}
-	input, err := weightedCDFInput(xSamples)
+	input, err := weightedAverage(xSamples)
 	if err != nil {
-		return CDFDetails{}, fmt.Errorf("calculate occurrence CDF query input: %w", err)
+		return AlertEvidence{}, fmt.Errorf("calculate Alert Evidence query input: %w", err)
 	}
-	samples, err := aggregateCDFSamples(ySamples)
+	samples, err := aggregateSamples(ySamples)
 	if err != nil {
-		return CDFDetails{}, fmt.Errorf("aggregate occurrence CDF samples: %w", err)
+		return AlertEvidence{}, fmt.Errorf("aggregate Alert Evidence samples: %w", err)
 	}
 
 	joint, err := ecdf.NewDatabaseJointStore(m.db).ReadCurrent(ctx, service, indicator)
 	if errors.Is(err, sql.ErrNoRows) {
-		return CDFDetails{}, ErrCDFReferenceGone
+		return AlertEvidence{}, ErrEvidenceReferenceGone
 	}
 	if err != nil {
-		return CDFDetails{}, fmt.Errorf("read occurrence joint ECDF: %w", err)
+		return AlertEvidence{}, fmt.Errorf("read occurrence joint ECDF: %w", err)
 	}
 	// A generation reset deletes every published ECDF for the service. Recheck
 	// after the read so a concurrent reset cannot pair an old chunk with a newly
 	// published reference from another generation.
 	if err := m.db.QueryRowContext(ctx, `SELECT generation FROM service WHERE id=$1`, service).Scan(&activeGeneration); err != nil {
-		return CDFDetails{}, fmt.Errorf("re-read service generation: %w", err)
+		return AlertEvidence{}, fmt.Errorf("re-read service generation: %w", err)
 	}
 	if generation != activeGeneration {
-		return CDFDetails{}, ErrCDFReferenceGone
+		return AlertEvidence{}, ErrEvidenceReferenceGone
 	}
 	xs, ps, err := ecdf.Query(ctx, joint, input)
 	if err != nil {
-		return CDFDetails{}, fmt.Errorf("query occurrence joint ECDF: %w", err)
+		return AlertEvidence{}, fmt.Errorf("query occurrence joint ECDF: %w", err)
 	}
 	if len(xs) == 0 {
-		return CDFDetails{}, fmt.Errorf("query occurrence joint ECDF returned no points")
+		return AlertEvidence{}, fmt.Errorf("query occurrence joint ECDF returned no points")
 	}
-	return CDFDetails{
-		Query:   CDFQuery{Input: input, Xs: xs, Ps: ps},
+	return AlertEvidence{
+		Query:   AlertQueryResult{Input: input, Xs: xs, Ps: ps},
 		Samples: samples,
 		PValue:  pValue.Float64,
 	}, nil
 }
 
-func (m *Manager) readOccurrenceCDFSamples(ctx context.Context, serviceID, indicatorID int, generation int64, primary time.Time) ([][]ecdf.Sample, [][]ecdf.Sample, error) {
+func (m *Manager) readEvidenceSamples(ctx context.Context, serviceID, indicatorID int, generation int64, primary time.Time) ([][]ecdf.Sample, [][]ecdf.Sample, error) {
 	start := primary
 	if indicatorID == loadTimeOfDayIndicatorID {
-		start = primary.Add(-occurrenceCDFWindow)
+		start = primary.Add(-alertEvidenceWindow)
 	}
 	rows, err := m.db.QueryContext(ctx, `
 		SELECT chunk
@@ -977,7 +977,7 @@ func (m *Manager) readOccurrenceCDFSamples(ctx context.Context, serviceID, indic
 	return xs, ys, nil
 }
 
-func weightedCDFInput(groups [][]ecdf.Sample) (float64, error) {
+func weightedAverage(groups [][]ecdf.Sample) (float64, error) {
 	var total, weight float64
 	for _, samples := range groups {
 		for _, sample := range samples {
@@ -995,27 +995,32 @@ func weightedCDFInput(groups [][]ecdf.Sample) (float64, error) {
 	return total / weight, nil
 }
 
-func aggregateCDFSamples(groups [][]ecdf.Sample) ([]CDFSample, error) {
-	counts := make(map[float64]uint64)
-	for _, samples := range groups {
+func aggregateSamples(groups [][]ecdf.Sample) ([]ecdf.Sample, error) {
+	switch len(groups) {
+	case 0:
+		return []ecdf.Sample{}, nil
+	case 1:
+		return groups[0], nil
+	}
+
+	// Start with the first group, in sorted order, and merge the remaining groups into it.
+	result := slices.Clone(groups[0])
+	sortFunc := func(a, b ecdf.Sample) int {
+		return cmp.Compare(a.Value, b.Value)
+	}
+	slices.SortFunc(result, sortFunc)
+	for _, samples := range groups[1:] {
 		for _, sample := range samples {
-			if sample.Count == 0 || math.IsNaN(sample.Value) || math.IsInf(sample.Value, 0) {
-				return nil, fmt.Errorf("invalid dependent-variable sample")
+			i, found := slices.BinarySearchFunc(result, sample, sortFunc)
+			if found {
+				if ^uint64(0)-result[i].Count < sample.Count {
+					return nil, fmt.Errorf("dependent-variable sample count overflows uint64")
+				}
+				result[i].Count += sample.Count
+				continue
 			}
-			if ^uint64(0)-counts[sample.Value] < sample.Count {
-				return nil, fmt.Errorf("dependent-variable sample count overflows uint64")
-			}
-			counts[sample.Value] += sample.Count
+			result = slices.Insert(result, i, sample)
 		}
-	}
-	values := make([]float64, 0, len(counts))
-	for value := range counts {
-		values = append(values, value)
-	}
-	sort.Float64s(values)
-	result := make([]CDFSample, len(values))
-	for index, value := range values {
-		result[index] = CDFSample{Value: value, Count: counts[value]}
 	}
 	return result, nil
 }

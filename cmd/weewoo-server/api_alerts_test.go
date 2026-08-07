@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/uncertaintea-io/weewoo/internal/alerting"
+	"github.com/uncertaintea-io/weewoo/internal/ecdf"
 )
 
 type fakeAlertManager struct {
@@ -23,14 +24,14 @@ type fakeAlertManager struct {
 	accepted       bool
 	reason         string
 	reviewErr      error
-	cdf            alerting.CDFDetails
-	cdfID          int64
-	cdfErr         error
+	evidence       alerting.AlertEvidence
+	evidenceID     int64
+	evidenceErr    error
 }
 
-func (f *fakeAlertManager) GetOccurrenceCDF(_ context.Context, id int64) (alerting.CDFDetails, error) {
-	f.cdfID = id
-	return f.cdf, f.cdfErr
+func (f *fakeAlertManager) GetEvidence(_ context.Context, id int64) (alerting.AlertEvidence, error) {
+	f.evidenceID = id
+	return f.evidence, f.evidenceErr
 }
 
 func (f *fakeAlertManager) List(_ context.Context, history bool, limit int) ([]alerting.Alert, error) {
@@ -75,41 +76,41 @@ func TestAlertAPIReviewsOccurrence(t *testing.T) {
 	assert.Equal(t, "planned deployment", manager.reason)
 }
 
-func TestAlertAPIReturnsOccurrenceCDFDetails(t *testing.T) {
-	manager := &fakeAlertManager{cdf: alerting.CDFDetails{
-		Query:   alerting.CDFQuery{Input: 12, Xs: []float64{30, 40}, Ps: []float64{0.25, 0.75}},
-		Samples: []alerting.CDFSample{{Value: 34, Count: 5}},
+func TestAlertAPIReturnsOccurrenceEvidence(t *testing.T) {
+	manager := &fakeAlertManager{evidence: alerting.AlertEvidence{
+		Query:   alerting.AlertQueryResult{Input: 12, Xs: []float64{30, 40}, Ps: []float64{0.25, 0.75}},
+		Samples: []ecdf.Sample{{Value: 34, Count: 5}},
 		PValue:  0.001,
 	}}
 	recorder := httptest.NewRecorder()
 
-	NewAlertAPIHandler(manager).ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/alerts/occurrences/9/cdf", nil))
+	NewAlertAPIHandler(manager).ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/alerts/occurrences/9/evidence", nil))
 
 	require.Equal(t, http.StatusOK, recorder.Code)
-	assert.Equal(t, int64(9), manager.cdfID)
-	var response alerting.CDFDetails
+	assert.Equal(t, int64(9), manager.evidenceID)
+	var response alerting.AlertEvidence
 	require.NoError(t, json.NewDecoder(recorder.Body).Decode(&response))
 	assert.Equal(t, 12.0, response.Query.Input)
 	assert.Equal(t, []float64{30, 40}, response.Query.Xs)
 	assert.Equal(t, []float64{0.25, 0.75}, response.Query.Ps)
-	assert.Equal(t, []alerting.CDFSample{{Value: 34, Count: 5}}, response.Samples)
+	assert.Equal(t, []alerting.AlertEvidenceSample{{Value: 34, Count: 5}}, response.Samples)
 	assert.Equal(t, 0.001, response.PValue)
 }
 
-func TestAlertAPIRejectsCDFForNonAnomalyOccurrence(t *testing.T) {
-	manager := &fakeAlertManager{cdfErr: alerting.ErrCDFNotApplicable}
+func TestAlertAPIRejectsEvidenceForNonAnomalyOccurrence(t *testing.T) {
+	manager := &fakeAlertManager{evidenceErr: alerting.ErrEvidenceNotApplicable}
 	recorder := httptest.NewRecorder()
 
-	NewAlertAPIHandler(manager).ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/alerts/occurrences/9/cdf", nil))
+	NewAlertAPIHandler(manager).ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/alerts/occurrences/9/evidence", nil))
 
 	assert.Equal(t, http.StatusUnprocessableEntity, recorder.Code)
 }
 
-func TestAlertAPIReportsExpiredCDFReference(t *testing.T) {
-	manager := &fakeAlertManager{cdfErr: alerting.ErrCDFReferenceGone}
+func TestAlertAPIReportsExpiredEvidenceReference(t *testing.T) {
+	manager := &fakeAlertManager{evidenceErr: alerting.ErrEvidenceReferenceGone}
 	recorder := httptest.NewRecorder()
 
-	NewAlertAPIHandler(manager).ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/alerts/occurrences/9/cdf", nil))
+	NewAlertAPIHandler(manager).ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/alerts/occurrences/9/evidence", nil))
 
 	assert.Equal(t, http.StatusGone, recorder.Code)
 	assert.Equal(t, "the matching reference distribution is no longer retained\n", recorder.Body.String())

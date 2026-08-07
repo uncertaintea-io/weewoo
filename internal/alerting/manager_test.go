@@ -41,8 +41,8 @@ func TestSanitizeErrorAcceptsNil(t *testing.T) {
 	assert.Equal(t, "safe", sanitizeError(errors.New("safe")))
 }
 
-func TestWeightedCDFInputAggregatesChunksAndCounts(t *testing.T) {
-	input, err := weightedCDFInput([][]ecdf.Sample{
+func TestWeightedInputAcrossChunks(t *testing.T) {
+	input, err := weightedAverage([][]ecdf.Sample{
 		{{Value: 1, Count: 2}, {Value: 4, Count: 1}},
 		{{Value: 7, Count: 3}},
 	})
@@ -51,14 +51,14 @@ func TestWeightedCDFInputAggregatesChunksAndCounts(t *testing.T) {
 	assert.Equal(t, 4.5, input)
 }
 
-func TestAggregateCDFSamplesMergesEqualValuesAcrossChunks(t *testing.T) {
-	samples, err := aggregateCDFSamples([][]ecdf.Sample{
+func TestAggregateSamplesAcrossChunks(t *testing.T) {
+	samples, err := aggregateSamples([][]ecdf.Sample{
 		{{Value: 2, Count: 3}, {Value: 1, Count: 2}},
 		{{Value: 2, Count: 4}, {Value: 3, Count: 1}},
 	})
 
 	require.NoError(t, err)
-	assert.Equal(t, []CDFSample{
+	assert.Equal(t, []AlertEvidenceSample{
 		{Value: 1, Count: 2},
 		{Value: 2, Count: 7},
 		{Value: 3, Count: 1},

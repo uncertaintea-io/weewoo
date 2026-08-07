@@ -1,6 +1,6 @@
 import { expect } from 'chai';
 import 'mocha';
-import { CreateService, GetAlertOccurrenceCDF, GetServiceDetail, ListAlerts, ListAllServices, ResetServiceBaseline, ReviewAlertOccurrence, ServicesApiError } from './api';
+import { CreateService, GetAlertEvidence, GetServiceDetail, ListAlerts, ListAllServices, ResetServiceBaseline, ReviewAlertOccurrence, ServicesApiError } from './api';
 import { datetimeLocalToUtcISOString, historicalRangeToUtc } from './datetime';
 import {
   LIVE_REFRESH_MILLISECONDS,
@@ -345,9 +345,9 @@ describe('Alerts API', () => {
     await ReviewAlertOccurrence(12, 3, true, 'planned deployment', fetcher);
   });
 
-  it('loads query-native observations for an anomaly occurrence', async () => {
+  it('loads Alert Evidence for an anomaly occurrence', async () => {
     const fetcher = (url: string | URL | Request): Promise<Response> => {
-      expect(url).to.equal('/api/alerts/occurrences/12/cdf');
+      expect(url).to.equal('/api/alerts/occurrences/12/evidence');
       return Promise.resolve(new Response(JSON.stringify({
         query: { input: 125.4, xs: [0.1, 0.2], ps: [0.25, 0.75] },
         samples: [{ value: 0.18, count: 91 }],
@@ -355,11 +355,11 @@ describe('Alerts API', () => {
       }), { status: 200 }));
     };
 
-    const details = await GetAlertOccurrenceCDF(12, fetcher);
+    const evidence = await GetAlertEvidence(12, fetcher);
 
-    expect(details.query).to.deep.equal({ input: 125.4, xs: [0.1, 0.2], ps: [0.25, 0.75] });
-    expect(details.samples).to.deep.equal([{ value: 0.18, count: 91 }]);
-    expect(details.pValue).to.equal(0.001);
+    expect(evidence.query).to.deep.equal({ input: 125.4, xs: [0.1, 0.2], ps: [0.25, 0.75] });
+    expect(evidence.samples).to.deep.equal([{ value: 0.18, count: 91 }]);
+    expect(evidence.pValue).to.equal(0.001);
   });
 
 });

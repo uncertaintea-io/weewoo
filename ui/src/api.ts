@@ -134,7 +134,7 @@ export interface Sample {
   count: number;
 }
 
-export interface AlertOccurrenceCDF {
+export interface AlertEvidence {
   query: {
     input: number;
     xs: number[];
@@ -471,11 +471,11 @@ export async function ListAlerts(includeHistory = true, fetcher: Fetcher = fetch
   return body.map(parseAlert);
 }
 
-export async function GetAlertOccurrenceCDF(
+export async function GetAlertEvidence(
   occurrenceId: number,
   fetcher: Fetcher = fetch,
-): Promise<AlertOccurrenceCDF> {
-  const response = await fetcher(`/api/alerts/occurrences/${String(occurrenceId)}/cdf`, {
+): Promise<AlertEvidence> {
+  const response = await fetcher(`/api/alerts/occurrences/${String(occurrenceId)}/evidence`, {
     headers: { Accept: 'application/json' },
   });
   if (!response.ok) throw await readServiceError(response);
@@ -486,11 +486,11 @@ export async function GetAlertOccurrenceCDF(
     || !Array.isArray(body.query.ps) || !body.query.ps.every((point) => typeof point === 'number')
     || body.query.xs.length !== body.query.ps.length
     || !Array.isArray(body.samples) || typeof body.pValue !== 'number') {
-    throw new Error('Alert occurrence CDF response is invalid.');
+    throw new Error('alert evidence response is invalid.');
   }
   const parseSamples = (samples: unknown[]): Sample[] => samples.map((sample) => {
     if (!isRecord(sample) || typeof sample.value !== 'number' || typeof sample.count !== 'number') {
-      throw new Error('Alert occurrence CDF samples are invalid.');
+      throw new Error('alert evidence samples are invalid.');
     }
     return { value: sample.value, count: sample.count };
   });
