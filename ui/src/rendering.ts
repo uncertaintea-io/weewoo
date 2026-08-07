@@ -58,6 +58,35 @@ export function groupAlertsByStatus<T extends { status: string }>(alerts: T[]): 
   };
 }
 
+export interface AlertEvidenceEntry {
+  label: string;
+  value: unknown;
+}
+
+export function orderedAlertEvidence(
+  evidence: Record<string, unknown>,
+  observedPValue?: number,
+): AlertEvidenceEntry[] {
+  const entries: AlertEvidenceEntry[] = [];
+  const appendEvidence = (key: string, label: string): void => {
+    if (Object.hasOwn(evidence, key) && evidence[key] !== undefined) {
+      entries.push({ label, value: evidence[key] });
+    }
+  };
+
+  appendEvidence('indicator', 'Indicator');
+  appendEvidence('load', 'Load');
+  const observed = observedPValue ?? evidence.pValue;
+  if (observed !== undefined) entries.push({ label: 'Observed p-value', value: observed });
+  appendEvidence('threshold', 'Alerting threshold');
+
+  const handledKeys = new Set(['historical', 'indicator', 'load', 'pValue', 'threshold']);
+  Object.entries(evidence).forEach(([key, value]) => {
+    if (!handledKeys.has(key)) entries.push({ label: key, value });
+  });
+  return entries;
+}
+
 export interface AlertReviewTarget {
   id: number;
   revision: number;

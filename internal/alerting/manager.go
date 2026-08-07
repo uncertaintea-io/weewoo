@@ -909,7 +909,7 @@ func (m *Manager) GetEvidence(ctx context.Context, occurrenceID int64) (AlertEvi
 		return AlertEvidence{}, fmt.Errorf("aggregate Alert Evidence samples: %w", err)
 	}
 
-	joint, err := ecdf.NewDatabaseJointStore(m.db).ReadCurrent(ctx, service, indicator)
+	joint, _, err := ecdf.NewDatabaseJointStore(m.db).ReadCurrent(ctx, service, indicator)
 	if errors.Is(err, sql.ErrNoRows) {
 		return AlertEvidence{}, ErrEvidenceReferenceGone
 	}

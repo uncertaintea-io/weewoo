@@ -2,7 +2,7 @@ import { type AlertCDFComparison, type CDFPoint } from './api';
 import { interpolateMonotonic, type Func } from './func';
 
 const MARGIN = { top: 24, right: 24, bottom: 62, left: 54 };
-const SAMPLES_PER_SEGMENT = 12;
+const SAMPLES_PER_CSS_PIXEL = 2;
 const MINIMUM_SELECTION_WIDTH = 8;
 
 interface PlotArea {
@@ -63,23 +63,47 @@ function cssColor(canvas: HTMLCanvasElement, name: string, fallback: string): st
   return getComputedStyle(canvas).getPropertyValue(name).trim() || fallback;
 }
 
-function sampleSegments(segments: PDFSegment[]): { x: number; density: number }[] {
-  return segments.flatMap((segment) => {
-    const samples = new Array<{ x: number; density: number }>(SAMPLES_PER_SEGMENT + 1);
-    for (let index = 0; index <= SAMPLES_PER_SEGMENT; index += 1) {
-      const ratio = index / SAMPLES_PER_SEGMENT;
-      const x = segment.x1 + (segment.x2 - segment.x1) * ratio;
-      samples[index] = { x, density: Math.max(0, segment.pdf.eval(x)) };
+export function samplePDFSegments(
+  segments: PDFSegment[],
+  minimum: number,
+  maximum: number,
+  intervalCount: number,
+): { x: number; density: number }[] {
+  if (minimum <= 0 || maximum <= minimum) {
+    throw new RangeError('PDF sampling requires positive, increasing bounds.');
+  }
+  if (!Number.isFinite(intervalCount) || intervalCount < 1) {
+    throw new RangeError('PDF sampling requires at least one interval.');
+  }
+
+  const intervals = Math.floor(intervalCount);
+  const samples = new Array<{ x: number; density: number }>(intervals + 1);
+  const logRange = Math.log(maximum / minimum);
+  let segmentIndex = 0;
+
+  for (let index = 0; index <= intervals; index += 1) {
+    const x = index === 0
+      ? minimum
+      : index === intervals
+        ? maximum
+        : minimum * Math.exp((index / intervals) * logRange);
+    while (segmentIndex < segments.length && x > segments[segmentIndex].x2) segmentIndex += 1;
+    let density = 0;
+    if (segmentIndex < segments.length) {
+      const segment = segments[segmentIndex];
+      if (x >= segment.x1) density = Math.max(0, segment.pdf.eval(x));
     }
-    return samples;
-  });
+    samples[index] = { x, density };
+  }
+
+  return samples;
 }
 
 class AlertPDFPlot {
   private readonly context: CanvasRenderingContext2D;
   private readonly resizeObserver: ResizeObserver | null;
-  private readonly expected: { x: number; density: number }[];
-  private readonly actual: { x: number; density: number }[];
+  private readonly expectedSegments: PDFSegment[];
+  private readonly actualSegments: PDFSegment[];
   private readonly fullMinimum: number;
   private readonly fullMaximum: number;
   private viewMinimum: number;
@@ -95,9 +119,11 @@ class AlertPDFPlot {
     const context = canvas.getContext('2d');
     if (context === null) throw new Error('Unable to create the alert PDF canvas context.');
     this.context = context;
-    this.expected = sampleSegments(interpolatePDF(comparison.expected));
-    this.actual = sampleSegments(interpolatePDF(comparison.actual));
-    const positiveX = [...this.expected, ...this.actual].map((point) => point.x).filter((x) => x > 0);
+    this.expectedSegments = interpolatePDF(comparison.expected);
+    this.actualSegments = interpolatePDF(comparison.actual);
+    const positiveX = [...this.expectedSegments, ...this.actualSegments]
+      .flatMap((segment) => [segment.x1, segment.x2])
+      .filter((x) => x > 0);
     this.fullMinimum = Math.min(...positiveX);
     this.fullMaximum = Math.max(...positiveX);
     this.viewMinimum = this.fullMinimum;
@@ -146,19 +172,25 @@ class AlertPDFPlot {
       height: Math.max(cssHeight - MARGIN.top - MARGIN.bottom, 1),
     };
     this.plotArea = area;
-    const allPoints = [...this.expected, ...this.actual];
     const minimum = this.viewMinimum;
     const maximum = this.viewMaximum;
-    const visiblePoints = allPoints.filter((point) => point.x >= minimum && point.x <= maximum);
-    const maximumDensity = Math.max(0, ...visiblePoints.map((point) => point.density));
-    if (!Number.isFinite(minimum) || !Number.isFinite(maximum) || !Number.isFinite(maximumDensity)) return;
+    if (!Number.isFinite(minimum) || !Number.isFinite(maximum)) return;
+    const intervals = Math.max(1, Math.ceil(area.width * SAMPLES_PER_CSS_PIXEL));
+    const expected = samplePDFSegments(this.expectedSegments, minimum, maximum, intervals);
+    const actual = samplePDFSegments(this.actualSegments, minimum, maximum, intervals);
+    const maximumDensity = Math.max(
+      0,
+      ...expected.map((point) => point.density),
+      ...actual.map((point) => point.density),
+    );
+    if (!Number.isFinite(maximumDensity)) return;
 
     this.drawAxes(area, minimum, maximum);
     // The actual area is the backdrop; the expected line is drawn above it.
     const actualColor = cssColor(this.canvas, '--alert-pdf-actual', '#c47a44');
     const expectedColor = cssColor(this.canvas, '--alert-pdf-expected', '#2563eb');
-    this.drawSeries(this.actual, area, minimum, maximum, maximumDensity, 'transparent', actualColor);
-    this.drawSeries(this.expected, area, minimum, maximum, maximumDensity, expectedColor, '');
+    this.drawSeries(actual, area, minimum, maximum, maximumDensity, 'transparent', actualColor);
+    this.drawSeries(expected, area, minimum, maximum, maximumDensity, expectedColor, '');
     this.drawDragSelection(area);
   };
 

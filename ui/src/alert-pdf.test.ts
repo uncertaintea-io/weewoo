@@ -1,6 +1,6 @@
 import { expect } from 'chai';
 import 'mocha';
-import { interpolatePDF, logarithmicRangeForSelection } from './alert-pdf';
+import { interpolatePDF, logarithmicRangeForSelection, samplePDFSegments } from './alert-pdf';
 
 describe('alert PDF interpolation', () => {
 
@@ -33,6 +33,27 @@ describe('alert PDF x-axis selection', () => {
 
     expect(minimum).to.equal(1);
     expect(maximum).to.be.closeTo(100, 0.000001);
+  });
+
+});
+
+describe('alert PDF viewport sampling', () => {
+
+  it('resamples derivative functions across the requested logarithmic view', () => {
+    const pdf = { eval: (x: number) => x, deriv: () => pdf };
+    const segments = [{ x1: 1, x2: 100, pdf }];
+
+    const full = samplePDFSegments(segments, 1, 100, 4);
+    const zoomed = samplePDFSegments(segments, 10, 20, 4);
+
+    const expectedFullX = [1, Math.sqrt(10), 10, Math.sqrt(1000), 100];
+    full.forEach((point, index) => {
+      expect(point.x).to.be.closeTo(expectedFullX[index], 0.000001);
+    });
+    expect(zoomed[0]?.x).to.equal(10);
+    expect(zoomed[2]?.x).to.be.closeTo(Math.sqrt(200), 0.000001);
+    expect(zoomed[4]?.x).to.be.closeTo(20, 0.000001);
+    expect(zoomed.map((point) => point.density)).to.deep.equal(zoomed.map((point) => point.x));
   });
 
 });

@@ -8,7 +8,14 @@ import {
   liveRefreshDelay,
 } from './live-refresh';
 import { searchValueForRender } from './navigation';
-import { alertCardClasses, collectionUptime, groupAlertsByStatus, renderServiceUrl, reviewableAnomalousOccurrencesByService } from './rendering';
+import { 
+  alertCardClasses,
+  collectionUptime,
+  groupAlertsByStatus,
+  orderedAlertEvidence,
+  renderServiceUrl,
+  reviewableAnomalousOccurrencesByService,
+} from './rendering';
 
 describe('datetimeLocalToUtcISOString', () => {
 
@@ -83,6 +90,18 @@ describe('renderServiceUrl', () => {
       '<span class="service-url">javascript:alert(1)</span>',
     );
   });
+});
+
+describe('alertCardClasses', () => {
+
+  it('marks resolved alerts independently of their previous severity', () => {
+    expect(alertCardClasses('critical', 'resolved')).to.equal(
+      'alert-card alert-card--critical alert-card--resolved',
+    );
+    expect(alertCardClasses('warning', 'resolved')).to.equal(
+      'alert-card alert-card--warning alert-card--resolved',
+    );
+  });
 
 });
 
@@ -102,19 +121,6 @@ describe('collectionUptime', () => {
 
 });
 
-describe('alertCardClasses', () => {
-
-  it('marks resolved alerts independently of their previous severity', () => {
-    expect(alertCardClasses('critical', 'resolved')).to.equal(
-      'alert-card alert-card--critical alert-card--resolved',
-    );
-    expect(alertCardClasses('warning', 'resolved')).to.equal(
-      'alert-card alert-card--warning alert-card--resolved',
-    );
-  });
-
-});
-
 describe('groupAlertsByStatus', () => {
 
   it('separates active alerts from resolved history', () => {
@@ -128,6 +134,27 @@ describe('groupAlertsByStatus', () => {
 
     expect(grouped.active.map((alert) => alert.id)).to.deep.equal([2]);
     expect(grouped.resolved.map((alert) => alert.id)).to.deep.equal([1, 3]);
+  });
+
+});
+
+describe('orderedAlertEvidence', () => {
+
+  it('orders useful anomaly evidence and removes duplicate and historical fields', () => {
+    const entries = orderedAlertEvidence({
+      historical: true,
+      indicator: 2,
+      load: 14,
+      pValue: 0,
+      threshold: 0.01,
+    }, 0);
+
+    expect(entries).to.deep.equal([
+      { label: 'Indicator', value: 2 },
+      { label: 'Load', value: 14 },
+      { label: 'Observed p-value', value: 0 },
+      { label: 'Alerting threshold', value: 0.01 },
+    ]);
   });
 
 });

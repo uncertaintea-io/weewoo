@@ -5,7 +5,7 @@ import { historicalRangeToUtc } from './datetime';
 import { renderJECDF } from './jecdf';
 import { liveRefreshDelay } from './live-refresh';
 import { searchValueForRender } from './navigation';
-import { alertCardClasses, collectionUptime, escapeHtml, groupAlertsByStatus, renderServiceUrl, reviewableAnomalousOccurrencesByService, type AlertReviewTarget } from './rendering';
+import { alertCardClasses, collectionUptime, escapeHtml, groupAlertsByStatus, orderedAlertEvidence, renderServiceUrl, reviewableAnomalousOccurrencesByService, type AlertReviewTarget } from './rendering';
 
 const app = document.querySelector<HTMLDivElement>('#app');
 let liveRefreshTimer: number | undefined;
@@ -170,15 +170,15 @@ function reviewLabel(occurrence: AlertOccurrence): string {
   return 'No manual override';
 }
 
-function renderEvidence(evidence: Record<string, unknown>): string {
-  const entries = Object.entries(evidence);
+function renderEvidence(evidence: Record<string, unknown>, observedPValue?: number): string {
+  const entries = orderedAlertEvidence(evidence, observedPValue);
   if (entries.length === 0) return '';
-  return `<dl class="evidence-grid">${entries.map(([key, value]) => `
-    <div><dt>${escapeHtml(key)}</dt><dd>${escapeHtml(String(value))}</dd></div>
+  return `<dl class="evidence-grid">${entries.map(({ label, value }) => `
+    <div><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(String(value))}</dd></div>
   `).join('')}</dl>`;
 }
 
-function renderOccurrence(occurrence: AlertOccurrence, allowReview = true): string {
+function renderOccurrence(occurrence: AlertOccurrence, allowReview = true, observedPValue?: number): string {
   const reviewable = allowReview && occurrence.chunkTimestamp !== undefined;
   const hasEvidence = occurrence.kind === 'anomaly';
   const accepted = occurrence.reviewOverride === true;
@@ -188,7 +188,7 @@ function renderOccurrence(occurrence: AlertOccurrence, allowReview = true): stri
         <div><strong>${escapeHtml(occurrence.summary)}</strong><time>${escapeHtml(formatTimestamp(occurrence.occurredAt))}</time></div>
         <span class="review-state${accepted ? ' is-accepted' : ''}">${escapeHtml(reviewLabel(occurrence))}</span>
       </header>
-      ${renderEvidence(occurrence.evidence)}
+      ${renderEvidence(occurrence.evidence, observedPValue)}
       ${occurrence.technicalDetails === '' ? '' : `<details class="occurrence-more-details"${hasEvidence ? ` data-evidence-occurrence-id="${String(occurrence.id)}"` : ''}><summary>More details</summary><pre>${escapeHtml(occurrence.technicalDetails)}</pre>${hasEvidence ? `<div class="occurrence-evidence-result" data-occurrence-id="${String(occurrence.id)}" hidden></div>` : ''}</details>`}
       ${occurrence.reviewReason === undefined || occurrence.reviewReason === '' ? '' : `<p class="review-reason">Review note: ${escapeHtml(occurrence.reviewReason)}</p>`}
       ${reviewable ? `
@@ -251,10 +251,13 @@ function renderAlertDetail(alert: AlertRecord, comparison: AlertCDFComparison): 
         <span class="alert-status">${escapeHtml(alert.status)}</span>
       </div>
     </section>
-    <section class="detail-grid" aria-label="Alert statistics">
-      <article class="detail-card alert-stat-card"><span>P-value</span><strong>${String(comparison.pValue)}</strong><p>Hard-coded for this proof of concept.</p></article>
+    <section class="detail-grid alert-detail-stats" aria-label="Alert statistics">
       <article class="detail-card"><span>Occurrences</span><strong>${String(alert.occurrenceCount)}</strong><p>${String(alert.consecutiveCount)} consecutive Bad chunk${alert.consecutiveCount === 1 ? '' : 's'}.</p></article>
       <article class="detail-card"><span>Last observed</span><strong>${escapeHtml(formatTimestamp(alert.lastOccurredAt))}</strong><p>${escapeHtml(alertmanagerLabel(alert.alertmanagerState))}</p></article>
+    </section>
+    <section class="detail-columns alert-detail-copy">
+      <article class="detail-panel"><div class="panel-header"><h2>Impact</h2></div><p>${escapeHtml(alert.impact)}</p></article>
+      <article class="detail-panel"><div class="panel-header"><h2>Suggested action</h2></div><p>${escapeHtml(alert.suggestedAction)}</p></article>
     </section>
     <section class="detail-panel alert-pdf-panel" aria-labelledby="alert-pdf-heading">
       <div class="panel-header">
@@ -272,13 +275,9 @@ function renderAlertDetail(alert: AlertRecord, comparison: AlertCDFComparison): 
         </aside>
       </div>
     </section>
-    <section class="detail-columns alert-detail-copy">
-      <article class="detail-panel"><div class="panel-header"><h2>Impact</h2></div><p>${escapeHtml(alert.impact)}</p></article>
-      <article class="detail-panel"><div class="panel-header"><h2>Suggested action</h2></div><p>${escapeHtml(alert.suggestedAction)}</p></article>
-    </section>
     <section class="detail-panel alert-occurrences-panel">
       <div class="panel-header"><h2>Occurrences and evidence</h2><span>${String(alert.occurrences.length)} retained</span></div>
-      <div class="occurrence-list">${alert.occurrences.map((occurrence) => renderOccurrence(occurrence, false)).join('')}</div>
+      <div class="occurrence-list">${alert.occurrences.map((occurrence) => renderOccurrence(occurrence, false, comparison.pValue)).join('')}</div>
     </section>
   `, '200 OK', {
     eyebrow: 'WeeWoo Alert Detail',
