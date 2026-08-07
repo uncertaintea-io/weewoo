@@ -232,7 +232,7 @@ printf '\002\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\077
 		LoadLatencyIndicator,
 		timestamp,
 		[]ecdf.Sample{{Value: 0.5, Count: 10}},
-		[]ecdf.Sample{{Value: 10, Count: 10}},
+		anomalousLatencyBuckets(),
 	)
 
 	require.NoError(t, err)
@@ -269,7 +269,7 @@ printf '\002\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\077
 		LoadLatencyIndicator,
 		timestamp,
 		[]ecdf.Sample{{Value: 0.5, Count: 10}},
-		[]ecdf.Sample{{Value: 10, Count: 10}},
+		anomalousLatencyBuckets(),
 		true,
 	)
 
@@ -279,6 +279,15 @@ printf '\002\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\077
 	require.Len(t, verdicts.verdicts, 1)
 	require.False(t, verdicts.verdicts[0].good)
 	require.Equal(t, timestamp, verdicts.verdicts[0].timestamp)
+}
+
+func anomalousLatencyBuckets() []ecdf.Sample {
+	const bucketCount = 47
+	latencies := make([]ecdf.Sample, 0, bucketCount)
+	for bucket := 0; bucket < bucketCount; bucket++ {
+		latencies = append(latencies, ecdf.Sample{Value: 10 + float64(bucket), Count: 1})
+	}
+	return latencies
 }
 
 func TestAnalyzeSampleReplacesBadVerdictWhenReevaluationIsNormal(t *testing.T) {

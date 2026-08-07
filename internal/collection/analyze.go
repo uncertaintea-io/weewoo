@@ -88,6 +88,7 @@ func analyzeSample(ctx context.Context, cfg config.Config, jointStore ecdf.Joint
 	}
 
 	ksResult := oneSampleKS(cdf, latencies, latencyCount)
+	latencyBucketCount := nonEmptySampleCount(latencies)
 	anomalous := isStatisticallySignificant(ksResult.PValue)
 	description := fmt.Sprintf(
 		"Current latency distribution differs from the reference at load %f (KS p-value %g; threshold %g).",
@@ -106,7 +107,8 @@ func analyzeSample(ctx context.Context, cfg config.Config, jointStore ecdf.Joint
 		"ks_statistic", ksResult.Statistic,
 		"p_value", ksResult.PValue,
 		"significance_level", ksSignificanceLevel,
-		"samples", latencyCount,
+		"buckets", latencyBucketCount,
+		"observations", latencyCount,
 		"load", loadValue,
 	)
 
@@ -128,12 +130,26 @@ func oneSampleKS(cdf func(float64) float64, samples []ecdf.Sample, count uint64)
 	})
 	values := func(yield func(float64, uint64) bool) {
 		for _, sample := range sorted {
+			if sample.Count == 0 {
+				continue
+			}
 			if !yield(sample.Value, sample.Count) {
 				return
 			}
 		}
 	}
-	return kstests.OneSampleIter(cdf, count, iter.Seq2[float64, uint64](values))
+	bucketCount := nonEmptySampleCount(sorted)
+	return kstests.OneSampleIterWithEffectiveCount(cdf, count, bucketCount, iter.Seq2[float64, uint64](values))
+}
+
+func nonEmptySampleCount(samples []ecdf.Sample) uint64 {
+	var count uint64
+	for _, sample := range samples {
+		if sample.Count > 0 {
+			count++
+		}
+	}
+	return count
 }
 
 type analysisResult struct {

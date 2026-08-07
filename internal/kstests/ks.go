@@ -86,7 +86,14 @@ func OneSample(cdf func(float64) float64, sample []float64) Result {
 // OneSampleIter is OneSample for sorted values represented by occurrence
 // counts. count must equal the sum of the yielded occurrence counts.
 func OneSampleIter(cdf func(float64) float64, count uint64, sample iter.Seq2[float64, uint64]) Result {
-	n := float64(count)
+	return OneSampleIterWithEffectiveCount(cdf, count, count, sample)
+}
+
+// OneSampleIterWithEffectiveCount is OneSampleIter with a separate effective
+// sample count used to scale the KS statistic. observationCount must equal the
+// sum of the yielded occurrence counts.
+func OneSampleIterWithEffectiveCount(cdf func(float64) float64, observationCount, effectiveCount uint64, sample iter.Seq2[float64, uint64]) Result {
+	n := float64(observationCount)
 	maximumDifference := 0.0
 	var seen uint64
 	for value, occurrences := range sample {
@@ -98,7 +105,7 @@ func OneSampleIter(cdf func(float64) float64, count uint64, sample iter.Seq2[flo
 		seen += occurrences
 		maximumDifference = math.Max(maximumDifference, math.Abs(float64(seen)/n-expectedProportion))
 	}
-	z := maximumDifference * math.Sqrt(n)
+	z := maximumDifference * math.Sqrt(float64(effectiveCount))
 	return Result{
 		Statistic: maximumDifference,
 		PValue:    kolmogorovPValue(z),
