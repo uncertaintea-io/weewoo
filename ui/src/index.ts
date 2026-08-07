@@ -1,5 +1,5 @@
 import './index.scss'
-import { CancelImport, CreateService, DeleteService, GetAlertCDFComparison, GetAlertEvidence, GetService, GetServiceDetail, ListAlerts, ListAllServices, ResetServiceBaseline, ReviewAlertOccurrence, ServicesApiError, SetServicePaused, TestService, UpdateService, type AlertCDFComparison, type AlertOccurrence, type AlertRecord, type CreateServiceInput, type Service, type ServiceChange } from './api';
+import { alertCDFComparison, CancelImport, CreateService, DeleteService, GetAlertEvidence, GetService, GetServiceDetail, ListAlerts, ListAllServices, ResetServiceBaseline, ReviewAlertOccurrence, ServicesApiError, SetServicePaused, TestService, UpdateService, type AlertCDFComparison, type AlertOccurrence, type AlertRecord, type CreateServiceInput, type Service, type ServiceChange } from './api';
 import { renderAlertPDFComparison } from './alert-pdf';
 import { historicalRangeToUtc } from './datetime';
 import { renderJECDF } from './jecdf';
@@ -270,8 +270,8 @@ function renderAlertDetail(alert: AlertRecord, comparison: AlertCDFComparison): 
           <p class="alert-pdf-instruction">Drag horizontally across the plot to focus on a latency range.</p>
         </div>
         <aside class="alert-pdf-key" aria-label="Plot series">
-          <div class="pdf-legend-row"><span class="pdf-swatch pdf-swatch--expected" aria-hidden="true"></span><div><strong>Expected PDF</strong><p>Reference CDF from last-query.json</p></div></div>
-          <div class="pdf-legend-row"><span class="pdf-swatch pdf-swatch--actual" aria-hidden="true"></span><div><strong>Actual PDF</strong><p>ECDF built from weighted samples in last-analysis.json</p></div></div>
+          <div class="pdf-legend-row"><span class="pdf-swatch pdf-swatch--expected" aria-hidden="true"></span><div><strong>Expected PDF</strong><p>Reference CDF for this occurrence</p></div></div>
+          <div class="pdf-legend-row"><span class="pdf-swatch pdf-swatch--actual" aria-hidden="true"></span><div><strong>Actual PDF</strong><p>ECDF built from this occurrence's weighted samples</p></div></div>
         </aside>
       </div>
     </section>
@@ -283,7 +283,7 @@ function renderAlertDetail(alert: AlertRecord, comparison: AlertCDFComparison): 
     eyebrow: 'WeeWoo Alert Detail',
     title: alert.title,
     description: alert.description,
-    endpoint: '/api/alerts + local distribution fixtures',
+    endpoint: '/api/alerts/occurrences/{id}/evidence',
   });
   document.querySelector('#service-count')?.replaceChildren(`${String(alert.occurrenceCount)} occurrence${alert.occurrenceCount === 1 ? '' : 's'}`);
   detailVisualizationCleanup = renderAlertPDFComparison('alert-pdf', comparison);
@@ -293,12 +293,15 @@ async function loadAlertDetail(id: number): Promise<void> {
   detailVisualizationCleanup?.();
   detailVisualizationCleanup = undefined;
   renderShell('<section class="alert-panel" aria-busy="true"><div class="skeleton-list"><div class="skeleton-row"></div><div class="skeleton-row"></div></div></section>', 'Loading', {
-    eyebrow: 'WeeWoo Alert Detail', title: 'Loading alert', description: 'Loading alert evidence and distribution fixtures.', endpoint: '/api/alerts',
+    eyebrow: 'WeeWoo Alert Detail', title: 'Loading alert', description: 'Loading alert evidence and occurrence CDF data.', endpoint: '/api/alerts',
   });
   try {
-    const [alerts, comparison] = await Promise.all([ListAlerts(true), GetAlertCDFComparison()]);
+    const alerts = await ListAlerts(true);
     const alert = alerts.find((candidate) => candidate.id === id);
     if (alert === undefined) throw new Error(`Alert #${String(id)} was not found.`);
+    const occurrence = alert.occurrences.find((candidate) => candidate.kind === 'anomaly');
+    if (occurrence === undefined) throw new Error(`Alert #${String(id)} has no anomaly occurrence.`);
+    const comparison = alertCDFComparison(await GetAlertEvidence(occurrence.id));
     if (currentRoute() === `alert/${String(id)}`) renderAlertDetail(alert, comparison);
   } catch (error) {
     if (currentRoute() === `alert/${String(id)}`) renderError(error);

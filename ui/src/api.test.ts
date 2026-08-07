@@ -1,35 +1,36 @@
 import { expect } from 'chai';
 import 'mocha';
-import { GetAlertCDFComparison, GetJointECDF } from './api';
+import { alertCDFComparison, GetAlertEvidence, GetJointECDF } from './api';
 
-describe('Alert CDF proof-of-concept API', () => {
+describe('Alert CDF API', () => {
 
-  it('combines the expected CDF and weighted analysis samples', async () => {
+  it('converts occurrence evidence into expected and actual CDFs', async () => {
     const fetcher = (url: string | URL | Request): Promise<Response> => {
-      if (url === '/fixtures/last-query.json') {
-        return Promise.resolve(new Response(JSON.stringify({ xs: [1, 2], ps: [0.25, 1] })));
-      }
-      expect(url).to.equal('/fixtures/last-analysis.json');
+      expect(url).to.equal('/api/alerts/occurrences/12/evidence');
       return Promise.resolve(new Response(JSON.stringify({
-        latency_sample: [
-          { Value: 2, Count: 3 },
-          { Value: 1, Count: 1 },
+        query: { input: 10, xs: [1, 2], ps: [0.25, 1] },
+        samples: [
+          { value: 2, count: 3 },
+          { value: 1, count: 1 },
         ],
+        pValue: 0.001,
       })));
     };
 
-    const comparison = await GetAlertCDFComparison(fetcher);
+    const details = await GetAlertEvidence(12, fetcher);
 
-    expect(comparison).to.deep.equal({
-      expected: [
-        { x: 1, probability: 0.25 },
-        { x: 2, probability: 1 },
+    expect(details).to.deep.equal({
+      query: { input: 10, xs: [1, 2], ps: [0.25, 1] },
+      samples: [
+        { value: 2, count: 3 },
+        { value: 1, count: 1 },
       ],
-      actual: [
-        { x: 1, probability: 0.25 },
-        { x: 2, probability: 1 },
-      ],
-      pValue: 0,
+      pValue: 0.001,
+    });
+    expect(alertCDFComparison(details)).to.deep.equal({
+      expected: [{ x: 1, probability: 0.25 }, { x: 2, probability: 1 }],
+      actual: [{ x: 1, probability: 0.25 }, { x: 2, probability: 1 }],
+      pValue: 0.001,
     });
   });
 
