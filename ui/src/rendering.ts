@@ -1,3 +1,9 @@
+import type { TrackingStatus } from './api';
+
+type TrackingState = TrackingStatus['state'];
+
+const ACTIVE_TRACKING_STATES = new Set<TrackingState>(['collecting', 'healthy', 'degraded', 'unavailable']);
+
 export function escapeHtml(value: string): string {
   const entityMap: Record<string, string> = {
     '&': '&amp;',
@@ -27,8 +33,8 @@ export function renderServiceUrl(prometheusUrl: string): string {
   return `<a class="service-url" href="${safeUrl}" target="_blank" rel="noreferrer">${safeUrl}</a>`;
 }
 
-export function collectionUptime(startedAt: string | undefined, now = new Date()): string {
-  if (startedAt === undefined) return 'Unavailable';
+export function collectionUptime(state: TrackingState, startedAt: string | undefined, now = new Date()): string {
+  if (!ACTIVE_TRACKING_STATES.has(state) || startedAt === undefined) return 'Unavailable';
   const elapsedMinutes = Math.max(0, Math.floor((now.getTime() - new Date(startedAt).getTime()) / 60_000));
   if (!Number.isFinite(elapsedMinutes)) return 'Unavailable';
   if (elapsedMinutes < 1) return '<1m';

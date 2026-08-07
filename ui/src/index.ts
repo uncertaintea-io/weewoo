@@ -483,7 +483,7 @@ function renderServices(services: Service[]): void {
 
       <dl class="metric-grid">
         ${renderMetricBox('Current status', statusLabel(service.tracking.state), service.tracking.error ?? 'Live scheduler status', service.tracking.state === 'healthy' ? 'ok' : '')}
-        ${renderMetricBox('Collecting for', collectionUptime(service.tracking.startedAt), service.tracking.startedAt === undefined ? 'Collection has not started yet' : `Since ${formatTimestamp(service.tracking.startedAt)}`)}
+        ${renderMetricBox('Collecting for', collectionUptime(service.tracking.state, service.tracking.startedAt), service.tracking.state === 'paused' ? 'Collection is paused' : service.tracking.startedAt === undefined ? 'Collection has not started yet' : `Since ${formatTimestamp(service.tracking.startedAt)}`)}
         ${renderMetricBox('Collection interval', formatInterval(service.intervalSeconds), 'How often new metrics are collected')}
         ${renderMetricBox('Last collection', formatTimestamp(service.tracking.lastSuccess), service.tracking.lastError === undefined ? 'No collection errors recorded' : `Last error: ${formatTimestamp(service.tracking.lastError)}`)}
       </dl>
