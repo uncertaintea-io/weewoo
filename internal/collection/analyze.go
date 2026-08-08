@@ -1,15 +1,12 @@
 package collection
 
 import (
-	"cmp"
 	"context"
 	"database/sql"
 	"errors"
 	"fmt"
-	"iter"
 	"log/slog"
 	"math/bits"
-	"slices"
 	"time"
 
 	"github.com/uncertaintea-io/weewoo/internal/alerting"
@@ -87,7 +84,7 @@ func analyzeSample(ctx context.Context, cfg config.Config, jointStore ecdf.Joint
 		return false, nil
 	}
 
-	ksResult := oneSampleKS(cdf, latencies, latencyCount)
+	ksResult := kstests.OneSample(cdf, latencies)
 	latencyBucketCount := nonEmptySampleCount(latencies)
 	anomalous := isStatisticallySignificant(ksResult.PValue)
 	description := fmt.Sprintf(
@@ -121,25 +118,6 @@ func queryJointECDF(ctx context.Context, joint []byte, x float64) (func(float64)
 		return nil, false, err
 	}
 	return cdf, cdf != nil, nil
-}
-
-func oneSampleKS(cdf func(float64) float64, samples []ecdf.Sample, count uint64) kstests.Result {
-	sorted := slices.Clone(samples)
-	slices.SortFunc(sorted, func(a, b ecdf.Sample) int {
-		return cmp.Compare(a.Value, b.Value)
-	})
-	values := func(yield func(float64, uint64) bool) {
-		for _, sample := range sorted {
-			if sample.Count == 0 {
-				continue
-			}
-			if !yield(sample.Value, sample.Count) {
-				return
-			}
-		}
-	}
-	bucketCount := nonEmptySampleCount(sorted)
-	return kstests.OneSampleIterWithEffectiveCount(cdf, count, bucketCount, iter.Seq2[float64, uint64](values))
 }
 
 func nonEmptySampleCount(samples []ecdf.Sample) uint64 {
