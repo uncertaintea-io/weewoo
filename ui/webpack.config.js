@@ -19,8 +19,6 @@ module.exports = {
       patterns: [
         { from: Path.resolve(__dirname, './src/index.html') },
         { from: Path.resolve(__dirname, './src/img'), to: 'img', noErrorOnMissing: true },
-        { from: Path.resolve(__dirname, '../last-query.json'), to: 'fixtures/last-query.json' },
-        { from: Path.resolve(__dirname, '../last-analysis.json'), to: 'fixtures/last-analysis.json' },
       ],
     }),
     new MiniCssExtractPlugin({
