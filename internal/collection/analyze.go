@@ -114,11 +114,18 @@ func analyzeSample(ctx context.Context, cfg config.Config, jointStore ecdf.Joint
 }
 
 func queryJointECDF(ctx context.Context, joint []byte, x float64) (func(float64) float64, bool, error) {
-	cdf, err := ecdf.Query(ctx, joint, x)
+	xs, ps, err := ecdf.Query(ctx, joint, x)
 	if err != nil {
 		return nil, false, err
 	}
-	return cdf, cdf != nil, nil
+	if len(xs) == 0 {
+		return nil, false, nil
+	}
+	cdf, err := ecdf.LinearInterpolation(xs, ps)
+	if err != nil {
+		return nil, false, err
+	}
+	return cdf, true, nil
 }
 
 func oneSampleKS(cdf func(float64) float64, samples []ecdf.Sample, count uint64) kstests.Result {

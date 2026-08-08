@@ -1,23 +1,29 @@
 package alerting
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/uncertaintea-io/weewoo/internal/config"
+	"github.com/uncertaintea-io/weewoo/internal/ecdf"
 )
 
 const (
 	defaultCriticalConsecutive = 3
 	defaultAlertRetention      = 90 * 24 * time.Hour
+	loadTimeOfDayIndicatorID   = 2
+	alertEvidenceWindow        = 5 * time.Minute
 )
 
 type Manager struct {
@@ -840,6 +846,183 @@ func (m *Manager) List(ctx context.Context, includeResolved bool, limit int) ([]
 		alerts[index].Events = events
 	}
 	return alerts, nil
+}
+
+// GetEvidence returns the reference distribution, observations, and test result that explain an anomaly Occurrence.
+func (m *Manager) GetEvidence(ctx context.Context, occurrenceID int64) (AlertEvidence, error) {
+	var kind string
+	var serviceID, indicatorID sql.NullInt64
+	var chunkTimestamp sql.NullTime
+	err := m.db.QueryRowContext(ctx, `
+		SELECT o.service_id, o.indicator_id, o.chunk_timestamp, o.kind
+		FROM alert_occurrence AS o
+		WHERE o.id=$1
+	`, occurrenceID).Scan(&serviceID, &indicatorID, &chunkTimestamp, &kind)
+	if errors.Is(err, sql.ErrNoRows) {
+		return AlertEvidence{}, ErrOccurrenceNotFound
+	}
+	if err != nil {
+		return AlertEvidence{}, fmt.Errorf("read Alert Evidence: %w", err)
+	}
+	if kind != KindAnomaly {
+		return AlertEvidence{}, ErrEvidenceNotApplicable
+	}
+	if !serviceID.Valid || !indicatorID.Valid || !chunkTimestamp.Valid {
+		return AlertEvidence{}, fmt.Errorf("anomaly occurrence %d has no time chunk identity", occurrenceID)
+	}
+
+	service := int(serviceID.Int64)
+	indicator := int(indicatorID.Int64)
+	primary := chunkTimestamp.Time
+	var generation, activeGeneration int64
+	var pValue sql.NullFloat64
+	err = m.db.QueryRowContext(ctx, `
+		SELECT tc.generation, v.pvalue, s.generation
+		FROM time_chunk AS tc
+		JOIN verdict AS v
+		  ON v.service_id=tc.service_id AND v.indicator_id=tc.indicator_id
+		 AND v."timestamp"=tc."timestamp" AND v.generation=tc.generation
+		JOIN service AS s ON s.id=tc.service_id
+		WHERE tc.service_id=$1 AND tc.indicator_id=$2
+		  AND tc."timestamp"=$3::timestamptz(0)
+	`, service, indicator, primary).Scan(&generation, &pValue, &activeGeneration)
+	if err != nil {
+		return AlertEvidence{}, fmt.Errorf("read occurrence time chunk verdict: %w", err)
+	}
+	if !pValue.Valid {
+		return AlertEvidence{}, fmt.Errorf("anomaly occurrence %d has no KS-test p-value", occurrenceID)
+	}
+	if generation != activeGeneration {
+		return AlertEvidence{}, ErrEvidenceReferenceGone
+	}
+
+	xSamples, ySamples, err := m.readEvidenceSamples(ctx, service, indicator, generation, primary)
+	if err != nil {
+		return AlertEvidence{}, err
+	}
+	input, err := weightedAverage(xSamples)
+	if err != nil {
+		return AlertEvidence{}, fmt.Errorf("calculate Alert Evidence query input: %w", err)
+	}
+	samples, err := aggregateSamples(ySamples)
+	if err != nil {
+		return AlertEvidence{}, fmt.Errorf("aggregate Alert Evidence samples: %w", err)
+	}
+
+	joint, err := ecdf.NewDatabaseJointStore(m.db).ReadCurrent(ctx, service, indicator)
+	if errors.Is(err, sql.ErrNoRows) {
+		return AlertEvidence{}, ErrEvidenceReferenceGone
+	}
+	if err != nil {
+		return AlertEvidence{}, fmt.Errorf("read occurrence joint ECDF: %w", err)
+	}
+	// A generation reset deletes every published ECDF for the service. Recheck
+	// after the read so a concurrent reset cannot pair an old chunk with a newly
+	// published reference from another generation.
+	if err := m.db.QueryRowContext(ctx, `SELECT generation FROM service WHERE id=$1`, service).Scan(&activeGeneration); err != nil {
+		return AlertEvidence{}, fmt.Errorf("re-read service generation: %w", err)
+	}
+	if generation != activeGeneration {
+		return AlertEvidence{}, ErrEvidenceReferenceGone
+	}
+	xs, ps, err := ecdf.Query(ctx, joint, input)
+	if err != nil {
+		return AlertEvidence{}, fmt.Errorf("query occurrence joint ECDF: %w", err)
+	}
+	if len(xs) == 0 {
+		return AlertEvidence{}, fmt.Errorf("query occurrence joint ECDF returned no points")
+	}
+	return AlertEvidence{
+		Query:   AlertQueryResult{Input: input, Xs: xs, Ps: ps},
+		Samples: samples,
+		PValue:  pValue.Float64,
+	}, nil
+}
+
+func (m *Manager) readEvidenceSamples(ctx context.Context, serviceID, indicatorID int, generation int64, primary time.Time) ([][]ecdf.Sample, [][]ecdf.Sample, error) {
+	start := primary
+	if indicatorID == loadTimeOfDayIndicatorID {
+		start = primary.Add(-alertEvidenceWindow)
+	}
+	rows, err := m.db.QueryContext(ctx, `
+		SELECT chunk
+		FROM time_chunk
+		WHERE service_id=$1 AND indicator_id=$2 AND generation=$3
+		  AND "timestamp">=$4::timestamptz(0) AND "timestamp"<=$5::timestamptz(0)
+		ORDER BY "timestamp"
+	`, serviceID, indicatorID, generation, start, primary)
+	if err != nil {
+		return nil, nil, fmt.Errorf("read occurrence time chunks: %w", err)
+	}
+	defer rows.Close()
+	var xs, ys [][]ecdf.Sample
+	for rows.Next() {
+		var chunk []byte
+		if err := rows.Scan(&chunk); err != nil {
+			return nil, nil, fmt.Errorf("scan occurrence time chunk: %w", err)
+		}
+		_, x, y, err := ecdf.Decode(chunk)
+		if err != nil {
+			return nil, nil, fmt.Errorf("decode occurrence time chunk: %w", err)
+		}
+		xs = append(xs, x)
+		ys = append(ys, y)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, nil, fmt.Errorf("iterate occurrence time chunks: %w", err)
+	}
+	if len(xs) == 0 {
+		return nil, nil, fmt.Errorf("occurrence time chunks are unavailable")
+	}
+	return xs, ys, nil
+}
+
+func weightedAverage(groups [][]ecdf.Sample) (float64, error) {
+	var total, weight float64
+	for _, samples := range groups {
+		for _, sample := range samples {
+			if sample.Count == 0 || math.IsNaN(sample.Value) || math.IsInf(sample.Value, 0) {
+				return 0, fmt.Errorf("invalid independent-variable sample")
+			}
+			count := float64(sample.Count)
+			total = math.FMA(sample.Value, count, total)
+			weight += count
+		}
+	}
+	if weight == 0 || math.IsInf(total, 0) || math.IsNaN(total) {
+		return 0, fmt.Errorf("no finite independent-variable observations")
+	}
+	return total / weight, nil
+}
+
+func aggregateSamples(groups [][]ecdf.Sample) ([]ecdf.Sample, error) {
+	switch len(groups) {
+	case 0:
+		return []ecdf.Sample{}, nil
+	case 1:
+		return groups[0], nil
+	}
+
+	// Start with the first group, in sorted order, and merge the remaining groups into it.
+	result := slices.Clone(groups[0])
+	sortFunc := func(a, b ecdf.Sample) int {
+		return cmp.Compare(a.Value, b.Value)
+	}
+	slices.SortFunc(result, sortFunc)
+	for _, samples := range groups[1:] {
+		for _, sample := range samples {
+			i, found := slices.BinarySearchFunc(result, sample, sortFunc)
+			if found {
+				if ^uint64(0)-result[i].Count < sample.Count {
+					return nil, fmt.Errorf("dependent-variable sample count overflows uint64")
+				}
+				result[i].Count += sample.Count
+				continue
+			}
+			result = slices.Insert(result, i, sample)
+		}
+	}
+	return result, nil
 }
 
 func (m *Manager) listOccurrences(ctx context.Context, alertID int64) ([]Occurrence, error) {

@@ -129,6 +129,21 @@ export interface AlertRecord {
   events: AlertEvent[];
 }
 
+export interface Sample {
+  value: number;
+  count: number;
+}
+
+export interface AlertEvidence {
+  query: {
+    input: number;
+    xs: number[];
+    ps: number[];
+  };
+  samples: Sample[];
+  pValue: number;
+}
+
 export interface JointECDFRender {
   width: number;
   height: number;
@@ -454,6 +469,36 @@ export async function ListAlerts(includeHistory = true, fetcher: Fetcher = fetch
   const body: unknown = await response.json();
   if (!Array.isArray(body)) throw new Error('Alerts response must be an array.');
   return body.map(parseAlert);
+}
+
+export async function GetAlertEvidence(
+  occurrenceId: number,
+  fetcher: Fetcher = fetch,
+): Promise<AlertEvidence> {
+  const response = await fetcher(`/api/alerts/occurrences/${String(occurrenceId)}/evidence`, {
+    headers: { Accept: 'application/json' },
+  });
+  if (!response.ok) throw await readServiceError(response);
+  const body: unknown = await response.json();
+  if (!isRecord(body) || !isRecord(body.query)
+    || typeof body.query.input !== 'number'
+    || !Array.isArray(body.query.xs) || !body.query.xs.every((point) => typeof point === 'number')
+    || !Array.isArray(body.query.ps) || !body.query.ps.every((point) => typeof point === 'number')
+    || body.query.xs.length !== body.query.ps.length
+    || !Array.isArray(body.samples) || typeof body.pValue !== 'number') {
+    throw new Error('alert evidence response is invalid.');
+  }
+  const parseSamples = (samples: unknown[]): Sample[] => samples.map((sample) => {
+    if (!isRecord(sample) || typeof sample.value !== 'number' || typeof sample.count !== 'number') {
+      throw new Error('alert evidence samples are invalid.');
+    }
+    return { value: sample.value, count: sample.count };
+  });
+  return {
+    query: { input: body.query.input, xs: body.query.xs, ps: body.query.ps },
+    samples: parseSamples(body.samples),
+    pValue: body.pValue,
+  };
 }
 
 export async function GetJointECDF(

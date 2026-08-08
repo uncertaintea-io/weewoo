@@ -15,8 +15,10 @@ import (
 // cumulative probability expressed as a float in the range [0,1].
 type CDF func(float64) float64
 
-// Query finds the CDF for the dependent variable in a Joint ECDF given the value of the independent variable.
-func Query(ctx context.Context, jointECDF []byte, x float64) (CDF, error) {
+// Query finds the dependent-variable CDF points in a Joint ECDF for the given
+// independent-variable value. Callers choose how to interpolate these points
+// when they need a continuous CDF.
+func Query(ctx context.Context, jointECDF []byte, x float64) ([]float64, []float64, error) {
 	var points bytes.Buffer
 	err := runJECDF(
 		ctx,
@@ -29,32 +31,32 @@ func Query(ctx context.Context, jointECDF []byte, x float64) (CDF, error) {
 		},
 		&points)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	xs, ys, err := readPoints(&points)
+	xs, ps, err := readPoints(&points)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	if len(xs) != len(ys) {
-		return nil, errors.New("number of x and y values do not match")
+	if len(xs) != len(ps) {
+		return nil, nil, errors.New("number of x and y values do not match")
 	}
-	if len(xs) == 0 && len(ys) == 0 {
-		return nil, nil
+	if len(xs) == 0 && len(ps) == 0 {
+		return nil, nil, nil
 	}
-	if !(slices.IsSorted(xs) && slices.IsSorted(ys)) {
-		return nil, errors.New("data points not monotonically increasing")
+	if !(slices.IsSorted(xs) && slices.IsSorted(ps)) {
+		return nil, nil, errors.New("data points not monotonically increasing")
 	}
-	if ys[0] < 0.0 || ys[len(ys)-1] > 1.0 {
-		return nil, errors.New("cumulative probability not bounded to [0,1]")
+	if ps[0] < 0.0 || ps[len(ps)-1] > 1.0 {
+		return nil, nil, errors.New("cumulative probability not bounded to [0,1]")
 	}
-	return linearInterpolation(xs, ys)
+	return xs, ps, nil
 }
 
 // readPoints is a helper function that reads a series of coordinates
 // for an empirical distribution from the jecdf tool.
 // It returns two arrays:
 //   - x values, which are samples of the dependent variable,
-//   - y values, which are cumulative probabiltiies of each sample,
+//   - p values, which are cumulative probabilities of each sample,
 //     expressed as a float in the range [0, 1].
 func readPoints(reader *bytes.Buffer) ([]float64, []float64, error) {
 	// Read the number of points in the result:
@@ -69,14 +71,14 @@ func readPoints(reader *bytes.Buffer) ([]float64, []float64, error) {
 		return nil, nil, errors.New("truncated or corrupt response")
 	}
 	xs := make([]float64, n)
-	ys := make([]float64, n)
+	ps := make([]float64, n)
 	for i := range n {
 		if err := binary.Read(reader, binary.BigEndian, &xs[i]); err != nil {
 			return nil, nil, err
 		}
-		if err := binary.Read(reader, binary.BigEndian, &ys[i]); err != nil {
+		if err := binary.Read(reader, binary.BigEndian, &ps[i]); err != nil {
 			return nil, nil, err
 		}
 	}
-	return xs, ys, nil
+	return xs, ps, nil
 }

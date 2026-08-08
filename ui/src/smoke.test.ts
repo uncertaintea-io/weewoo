@@ -1,6 +1,6 @@
 import { expect } from 'chai';
 import 'mocha';
-import { CreateService, GetServiceDetail, ListAlerts, ListAllServices, ResetServiceBaseline, ReviewAlertOccurrence, ServicesApiError } from './api';
+import { CreateService, GetAlertEvidence, GetServiceDetail, ListAlerts, ListAllServices, ResetServiceBaseline, ReviewAlertOccurrence, ServicesApiError } from './api';
 import { datetimeLocalToUtcISOString, historicalRangeToUtc } from './datetime';
 import {
   LIVE_REFRESH_MILLISECONDS,
@@ -343,6 +343,23 @@ describe('Alerts API', () => {
     };
 
     await ReviewAlertOccurrence(12, 3, true, 'planned deployment', fetcher);
+  });
+
+  it('loads Alert Evidence for an anomaly occurrence', async () => {
+    const fetcher = (url: string | URL | Request): Promise<Response> => {
+      expect(url).to.equal('/api/alerts/occurrences/12/evidence');
+      return Promise.resolve(new Response(JSON.stringify({
+        query: { input: 125.4, xs: [0.1, 0.2], ps: [0.25, 0.75] },
+        samples: [{ value: 0.18, count: 91 }],
+        pValue: 0.001,
+      }), { status: 200 }));
+    };
+
+    const evidence = await GetAlertEvidence(12, fetcher);
+
+    expect(evidence.query).to.deep.equal({ input: 125.4, xs: [0.1, 0.2], ps: [0.25, 0.75] });
+    expect(evidence.samples).to.deep.equal([{ value: 0.18, count: 91 }]);
+    expect(evidence.pValue).to.equal(0.001);
   });
 
 });

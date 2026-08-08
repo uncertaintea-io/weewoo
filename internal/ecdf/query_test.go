@@ -37,12 +37,14 @@ func TestQueryWithRealTool(t *testing.T) {
 	require.NoError(t, BuildJointECDFContext(ctx, store, 1, 1, &jointECDF))
 
 	const value = 1.5
-	cdf, err := Query(ctx, jointECDF.Bytes(), value)
+	xs, ps, err := Query(ctx, jointECDF.Bytes(), value)
 	require.NoError(t, err)
-	if cdf == nil {
+	if len(xs) == 0 {
 		t.Log("jecdf returned zero points; no CDF is available yet")
 		return
 	}
+	cdf, err := LinearInterpolation(xs, ps)
+	require.NoError(t, err)
 	assert.Equal(t, 0.0, cdf(-1000))
 	assert.Equal(t, 1.0, cdf(1000))
 	assert.Greater(t, cdf(3), 0.0)
@@ -57,8 +59,9 @@ cat >/dev/null
 printf '\000'
 `))
 
-	cdf, err := Query(context.Background(), nil, 0)
+	xs, ps, err := Query(context.Background(), nil, 0)
 
 	require.NoError(t, err)
-	assert.Nil(t, cdf)
+	assert.Nil(t, xs)
+	assert.Nil(t, ps)
 }

@@ -47,6 +47,25 @@ Raw upstream errors are never rendered directly without sanitization.
 Alertmanager labels contain the stable WeeWoo alert ID; annotations contain the
 same title, description, impact, and suggested action as the UI.
 
+An anomaly Occurrence exposes its **Alert Evidence** through
+`GET /api/alerts/occurrences/{id}/evidence`. The UI requests it only when the
+user opens that Occurrence's **More details**
+disclosure. This disclosure shows the existing technical information for every
+kind of Alert, but each anomaly Occurrence additionally requests its Alert
+Evidence once per rendered page. Opening **More details** for a non-anomaly
+Occurrence does not request Alert Evidence.
+
+Alert Evidence contains the weighted independent-variable input, the raw `xs`
+and `ps` emitted by `jecdf query`, the aggregated dependent-variable samples
+from the analyzed time chunks, and the persisted KS-test p-value. Load vs.
+Latency uses its one chunk; Load vs. UTC Time of Day reconstructs the trailing
+five-minute analysis window. Because the exact ECDF version used by analysis
+is not persisted, the endpoint uses the latest reference only while the
+Occurrence's chunk generation remains active. After a generation reset it
+returns `410 Gone`; the UI explains that the matching reference is no longer
+retained. Non-anomaly Occurrences do not expose the action and are rejected by
+the endpoint.
+
 ## Reviews and ECDF eligibility
 
 Automated Verdict and Review are independent:

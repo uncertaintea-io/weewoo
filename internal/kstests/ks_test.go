@@ -55,7 +55,9 @@ func TestOneSampleAgainstJointECDF(t *testing.T) {
 	var jointECDF bytes.Buffer
 	require.NoError(t, ecdf.BuildJointECDF(chunkStore, serviceID, indicatorID, &jointECDF))
 
-	cdf, err := ecdf.Query(ctx, jointECDF.Bytes(), fixedLoad)
+	xs, ps, err := ecdf.Query(ctx, jointECDF.Bytes(), fixedLoad)
+	require.NoError(t, err)
+	cdf, err := ecdf.LinearInterpolation(xs, ps)
 	require.NoError(t, err)
 
 	result := OneSample(cdf, latencies)
