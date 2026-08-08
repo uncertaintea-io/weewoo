@@ -1,15 +1,12 @@
 package collection
 
 import (
-	"cmp"
 	"context"
 	"database/sql"
 	"errors"
 	"fmt"
-	"iter"
 	"log/slog"
 	"math/bits"
-	"slices"
 	"time"
 
 	"github.com/uncertaintea-io/weewoo/internal/alerting"
@@ -87,7 +84,8 @@ func analyzeSample(ctx context.Context, cfg config.Config, jointStore ecdf.Joint
 		return false, nil
 	}
 
-	ksResult := oneSampleKS(cdf, latencies, latencyCount)
+	ksResult := kstests.OneSample(cdf, latencies)
+	latencyBucketCount := nonEmptySampleCount(latencies)
 	anomalous := isStatisticallySignificant(ksResult.PValue)
 	description := fmt.Sprintf(
 		"Current latency distribution differs from the reference at load %f (KS p-value %g; threshold %g).",
@@ -106,7 +104,8 @@ func analyzeSample(ctx context.Context, cfg config.Config, jointStore ecdf.Joint
 		"ks_statistic", ksResult.Statistic,
 		"p_value", ksResult.PValue,
 		"significance_level", ksSignificanceLevel,
-		"samples", latencyCount,
+		"buckets", latencyBucketCount,
+		"observations", latencyCount,
 		"load", loadValue,
 	)
 
@@ -128,19 +127,14 @@ func queryJointECDF(ctx context.Context, joint []byte, x float64) (func(float64)
 	return cdf, true, nil
 }
 
-func oneSampleKS(cdf func(float64) float64, samples []ecdf.Sample, count uint64) kstests.Result {
-	sorted := slices.Clone(samples)
-	slices.SortFunc(sorted, func(a, b ecdf.Sample) int {
-		return cmp.Compare(a.Value, b.Value)
-	})
-	values := func(yield func(float64, uint64) bool) {
-		for _, sample := range sorted {
-			if !yield(sample.Value, sample.Count) {
-				return
-			}
+func nonEmptySampleCount(samples []ecdf.Sample) uint64 {
+	var count uint64
+	for _, sample := range samples {
+		if sample.Count > 0 {
+			count++
 		}
 	}
-	return kstests.OneSampleIter(cdf, count, iter.Seq2[float64, uint64](values))
+	return count
 }
 
 type analysisResult struct {
