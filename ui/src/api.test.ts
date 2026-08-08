@@ -30,7 +30,6 @@ describe('Alert CDF API', () => {
     expect(alertCDFComparison(details)).to.deep.equal({
       expected: [{ x: 1, probability: 0.25 }, { x: 2, probability: 1 }],
       actual: [{ x: 1, probability: 0.25 }, { x: 2, probability: 1 }],
-      pValue: 0.001,
     });
   });
 

@@ -1,5 +1,6 @@
 import './index.scss'
-import { alertCDFComparison, CancelImport, CreateService, DeleteService, GetAlertEvidence, GetService, GetServiceDetail, ListAlerts, ListAllServices, ResetServiceBaseline, ReviewAlertOccurrence, ServicesApiError, SetServicePaused, TestService, UpdateService, type AlertCDFComparison, type AlertOccurrence, type AlertRecord, type CreateServiceInput, type Service, type ServiceChange } from './api';
+import { anomalyOccurrence, resolveAlertPDFState, type AlertPDFState } from './alert-detail';
+import { CancelImport, CreateService, DeleteService, GetAlertEvidence, GetService, GetServiceDetail, ListAlerts, ListAllServices, ResetServiceBaseline, ReviewAlertOccurrence, ServicesApiError, SetServicePaused, TestService, UpdateService, type AlertOccurrence, type AlertRecord, type CreateServiceInput, type Service, type ServiceChange } from './api';
 import { renderAlertPDFComparison } from './alert-pdf';
 import { historicalRangeToUtc } from './datetime';
 import { renderJECDF } from './jecdf';
@@ -170,15 +171,15 @@ function reviewLabel(occurrence: AlertOccurrence): string {
   return 'No manual override';
 }
 
-function renderEvidence(evidence: Record<string, unknown>, observedPValue?: number): string {
-  const entries = orderedAlertEvidence(evidence, observedPValue);
+function renderEvidence(evidence: Record<string, unknown>): string {
+  const entries = orderedAlertEvidence(evidence);
   if (entries.length === 0) return '';
   return `<dl class="evidence-grid">${entries.map(({ label, value }) => `
     <div><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(String(value))}</dd></div>
   `).join('')}</dl>`;
 }
 
-function renderOccurrence(occurrence: AlertOccurrence, allowReview = true, observedPValue?: number): string {
+function renderOccurrence(occurrence: AlertOccurrence, allowReview = true): string {
   const reviewable = allowReview && occurrence.chunkTimestamp !== undefined;
   const hasEvidence = occurrence.kind === 'anomaly';
   const accepted = occurrence.reviewOverride === true;
@@ -188,7 +189,7 @@ function renderOccurrence(occurrence: AlertOccurrence, allowReview = true, obser
         <div><strong>${escapeHtml(occurrence.summary)}</strong><time>${escapeHtml(formatTimestamp(occurrence.occurredAt))}</time></div>
         <span class="review-state${accepted ? ' is-accepted' : ''}">${escapeHtml(reviewLabel(occurrence))}</span>
       </header>
-      ${renderEvidence(occurrence.evidence, observedPValue)}
+      ${renderEvidence(occurrence.evidence)}
       ${occurrence.technicalDetails === '' ? '' : `<details class="occurrence-more-details"${hasEvidence ? ` data-evidence-occurrence-id="${String(occurrence.id)}"` : ''}><summary>More details</summary><pre>${escapeHtml(occurrence.technicalDetails)}</pre>${hasEvidence ? `<div class="occurrence-evidence-result" data-occurrence-id="${String(occurrence.id)}" hidden></div>` : ''}</details>`}
       ${occurrence.reviewReason === undefined || occurrence.reviewReason === '' ? '' : `<p class="review-reason">Review note: ${escapeHtml(occurrence.reviewReason)}</p>`}
       ${reviewable ? `
@@ -238,7 +239,10 @@ function renderAlertCard(alert: AlertRecord): string {
   `;
 }
 
-function renderAlertDetail(alert: AlertRecord, comparison: AlertCDFComparison): void {
+function renderAlertDetail(alert: AlertRecord, pdfState: AlertPDFState): void {
+  const consecutiveLabel = alert.kind === 'anomaly'
+    ? `Bad chunk${alert.consecutiveCount === 1 ? '' : 's'}`
+    : `occurrence${alert.consecutiveCount === 1 ? '' : 's'}`;
   renderShell(`
     <section class="detail-header alert-detail-header">
       <div class="detail-identity">
@@ -252,19 +256,19 @@ function renderAlertDetail(alert: AlertRecord, comparison: AlertCDFComparison): 
       </div>
     </section>
     <section class="detail-grid alert-detail-stats" aria-label="Alert statistics">
-      <article class="detail-card"><span>Occurrences</span><strong>${String(alert.occurrenceCount)}</strong><p>${String(alert.consecutiveCount)} consecutive Bad chunk${alert.consecutiveCount === 1 ? '' : 's'}.</p></article>
+      <article class="detail-card"><span>Occurrences</span><strong>${String(alert.occurrenceCount)}</strong><p>${String(alert.consecutiveCount)} consecutive ${consecutiveLabel}.</p></article>
       <article class="detail-card"><span>Last observed</span><strong>${escapeHtml(formatTimestamp(alert.lastOccurredAt))}</strong><p>${escapeHtml(alertmanagerLabel(alert.alertmanagerState))}</p></article>
     </section>
     <section class="detail-columns alert-detail-copy">
       <article class="detail-panel"><div class="panel-header"><h2>Impact</h2></div><p>${escapeHtml(alert.impact)}</p></article>
       <article class="detail-panel"><div class="panel-header"><h2>Suggested action</h2></div><p>${escapeHtml(alert.suggestedAction)}</p></article>
     </section>
-    <section class="detail-panel alert-pdf-panel" aria-labelledby="alert-pdf-heading">
+    ${pdfState.status === 'not-applicable' ? '' : `<section class="detail-panel alert-pdf-panel" aria-labelledby="alert-pdf-heading">
       <div class="panel-header">
         <div><h2 id="alert-pdf-heading">Expected and actual latency PDFs</h2><p>Derived from monotonic interpolation of the expected CDF and observed ECDF.</p></div>
-        <button id="alert-pdf-reset" class="secondary-button alert-pdf-reset" type="button" hidden>Reset view</button>
+        ${pdfState.status === 'available' ? '<button id="alert-pdf-reset" class="secondary-button alert-pdf-reset" type="button" hidden>Reset view</button>' : ''}
       </div>
-      <div class="alert-pdf-content">
+      ${pdfState.status === 'available' ? `<div class="alert-pdf-content">
         <div class="alert-pdf-plot">
           <canvas id="alert-pdf" aria-label="Expected and actual latency probability density functions. Drag horizontally to zoom.">Expected and actual latency probability density functions.</canvas>
           <p class="alert-pdf-instruction">Drag horizontally across the plot to focus on a latency range.</p>
@@ -273,20 +277,22 @@ function renderAlertDetail(alert: AlertRecord, comparison: AlertCDFComparison): 
           <div class="pdf-legend-row"><span class="pdf-swatch pdf-swatch--expected" aria-hidden="true"></span><div><strong>Expected PDF</strong><p>Reference CDF for this occurrence</p></div></div>
           <div class="pdf-legend-row"><span class="pdf-swatch pdf-swatch--actual" aria-hidden="true"></span><div><strong>Actual PDF</strong><p>ECDF built from this occurrence's weighted samples</p></div></div>
         </aside>
-      </div>
-    </section>
+      </div>` : `<div class="empty-state"><p>${escapeHtml(pdfState.status === 'loading' ? 'Loading PDF evidence…' : pdfState.message)}</p></div>`}
+    </section>`}
     <section class="detail-panel alert-occurrences-panel">
       <div class="panel-header"><h2>Occurrences and evidence</h2><span>${String(alert.occurrences.length)} retained</span></div>
-      <div class="occurrence-list">${alert.occurrences.map((occurrence) => renderOccurrence(occurrence, false, comparison.pValue)).join('')}</div>
+      <div class="occurrence-list">${alert.occurrences.map((occurrence) => renderOccurrence(occurrence, false)).join('')}</div>
     </section>
   `, '200 OK', {
     eyebrow: 'WeeWoo Alert Detail',
     title: alert.title,
     description: alert.description,
-    endpoint: '/api/alerts/occurrences/{id}/evidence',
+    endpoint: pdfState.status === 'not-applicable' ? '/api/alerts' : '/api/alerts/occurrences/{id}/evidence',
   });
   document.querySelector('#service-count')?.replaceChildren(`${String(alert.occurrenceCount)} occurrence${alert.occurrenceCount === 1 ? '' : 's'}`);
-  detailVisualizationCleanup = renderAlertPDFComparison('alert-pdf', comparison);
+  if (pdfState.status === 'available') {
+    detailVisualizationCleanup = renderAlertPDFComparison('alert-pdf', pdfState.comparison);
+  }
 }
 
 async function loadAlertDetail(id: number): Promise<void> {
@@ -299,10 +305,15 @@ async function loadAlertDetail(id: number): Promise<void> {
     const alerts = await ListAlerts(true);
     const alert = alerts.find((candidate) => candidate.id === id);
     if (alert === undefined) throw new Error(`Alert #${String(id)} was not found.`);
-    const occurrence = alert.occurrences.find((candidate) => candidate.kind === 'anomaly');
-    if (occurrence === undefined) throw new Error(`Alert #${String(id)} has no anomaly occurrence.`);
-    const comparison = alertCDFComparison(await GetAlertEvidence(occurrence.id));
-    if (currentRoute() === `alert/${String(id)}`) renderAlertDetail(alert, comparison);
+    if (currentRoute() !== `alert/${String(id)}`) return;
+    const occurrence = anomalyOccurrence(alert.occurrences);
+    if (occurrence === undefined) {
+      renderAlertDetail(alert, { status: 'not-applicable' });
+      return;
+    }
+    renderAlertDetail(alert, { status: 'loading' });
+    const pdfState = await resolveAlertPDFState(occurrence.id);
+    if (currentRoute() === `alert/${String(id)}`) renderAlertDetail(alert, pdfState);
   } catch (error) {
     if (currentRoute() === `alert/${String(id)}`) renderError(error);
   }

@@ -65,7 +65,6 @@ export interface AlertEvidenceEntry {
 
 export function orderedAlertEvidence(
   evidence: Record<string, unknown>,
-  observedPValue?: number,
 ): AlertEvidenceEntry[] {
   const entries: AlertEvidenceEntry[] = [];
   const appendEvidence = (key: string, label: string): void => {
@@ -76,8 +75,7 @@ export function orderedAlertEvidence(
 
   appendEvidence('indicator', 'Indicator');
   appendEvidence('load', 'Load');
-  const observed = observedPValue ?? evidence.pValue;
-  if (observed !== undefined) entries.push({ label: 'Observed p-value', value: observed });
+  if (evidence.pValue !== undefined) entries.push({ label: 'Observed p-value', value: evidence.pValue });
   appendEvidence('threshold', 'Alerting threshold');
 
   const handledKeys = new Set(['historical', 'indicator', 'load', 'pValue', 'threshold']);

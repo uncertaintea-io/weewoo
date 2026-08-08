@@ -147,7 +147,7 @@ describe('orderedAlertEvidence', () => {
       load: 14,
       pValue: 0,
       threshold: 0.01,
-    }, 0);
+    });
 
     expect(entries).to.deep.equal([
       { label: 'Indicator', value: 2 },
@@ -155,6 +155,14 @@ describe('orderedAlertEvidence', () => {
       { label: 'Observed p-value', value: 0 },
       { label: 'Alerting threshold', value: 0.01 },
     ]);
+  });
+
+  it('preserves the observed p-value from each occurrence', () => {
+    const first = orderedAlertEvidence({ pValue: 0.001 });
+    const second = orderedAlertEvidence({ pValue: 0.2 });
+
+    expect(first).to.deep.equal([{ label: 'Observed p-value', value: 0.001 }]);
+    expect(second).to.deep.equal([{ label: 'Observed p-value', value: 0.2 }]);
   });
 
 });

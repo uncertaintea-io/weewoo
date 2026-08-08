@@ -154,7 +154,6 @@ export interface CDFPoint {
 export interface AlertCDFComparison {
   expected: CDFPoint[];
   actual: CDFPoint[];
-  pValue: number;
 }
 
 export interface JointECDFRender {
@@ -530,7 +529,7 @@ export function alertCDFComparison(details: AlertEvidence): AlertCDFComparison {
     return { x: sample.value, probability: cumulative / total };
   });
 
-  return { expected, actual, pValue: details.pValue };
+  return { expected, actual };
 }
 
 export async function GetJointECDF(
