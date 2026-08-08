@@ -1,9 +1,11 @@
 package kstests
 
 import (
-	"iter"
+	"cmp"
 	"math"
 	"slices"
+
+	"github.com/uncertaintea-io/weewoo/internal/ecdf"
 )
 
 // Round to nearest integer. Rounds half integers to the nearest even integer.
@@ -21,17 +23,6 @@ func nint(x float64) int {
 		}
 	}
 	return i
-}
-
-// Result contains the two outputs of a one-sample Kolmogorov-Smirnov test.
-type Result struct {
-	// Statistic is the largest absolute difference between the sample's
-	// empirical CDF and the reference CDF. It is commonly called D.
-	Statistic float64
-
-	// PValue is the probability, assuming the reference CDF is correct, of
-	// observing a KS statistic at least as large as Statistic.
-	PValue float64
 }
 
 // kolmogorovPValue returns the asymptotic tail probability for the scaled KS
@@ -69,43 +60,56 @@ func kolmogorovPValue(z float64) float64 {
 	return pValue
 }
 
+// Result contains the two outputs of a one-sample Kolmogorov-Smirnov test.
+type Result struct {
+	// Statistic is the largest absolute difference between the sample's
+	// empirical CDF and the reference CDF. It is commonly called D.
+	Statistic float64
+
+	// PValue is the probability, assuming the reference CDF is correct, of
+	// observing a KS statistic at least as large as Statistic.
+	PValue float64
+}
+
 // OneSample compares a sample with a reference CDF using a one-sample
 // Kolmogorov-Smirnov test. The returned p-value is not the probability that the
 // sample came from the reference distribution.
-func OneSample(cdf func(float64) float64, sample []float64) Result {
-	slices.Sort(sample)
-	return OneSampleIter(cdf, uint64(len(sample)), func(yield func(float64, uint64) bool) {
-		for _, value := range sample {
-			if !yield(value, 1) {
-				return
-			}
+func OneSample(cdf func(float64) float64, samples []ecdf.Sample) Result {
+	if len(samples) == 0 {
+		return Result{
+			Statistic: 0,
+			PValue:    1,
 		}
-	})
-}
+	}
 
-// OneSampleIter is OneSample for sorted values represented by occurrence
-// counts. count must equal the sum of the yielded occurrence counts.
-func OneSampleIter(cdf func(float64) float64, count uint64, sample iter.Seq2[float64, uint64]) Result {
-	return OneSampleIterWithEffectiveCount(cdf, count, count, sample)
-}
+	sum := samples[0].Count
+	last := samples[0].Value
+	sorted := true
+	for _, sample := range samples[1:] {
+		sorted = sorted && sample.Value >= last
+		last = sample.Value
+		sum += sample.Count
+	}
+	if !sorted {
+		slices.SortFunc(samples, func(a, b ecdf.Sample) int {
+			return cmp.Compare(a.Value, b.Value)
+		})
+	}
 
-// OneSampleIterWithEffectiveCount is OneSampleIter with a separate effective
-// sample count used to scale the KS statistic. observationCount must equal the
-// sum of the yielded occurrence counts.
-func OneSampleIterWithEffectiveCount(cdf func(float64) float64, observationCount, effectiveCount uint64, sample iter.Seq2[float64, uint64]) Result {
-	n := float64(observationCount)
+	n := float64(sum)
 	maximumDifference := 0.0
 	var seen uint64
-	for value, occurrences := range sample {
-		if occurrences == 0 {
+	for _, sample := range samples {
+		if sample.Count == 0 {
 			continue
 		}
-		expectedProportion := cdf(value)
+		expectedProportion := cdf(sample.Value)
+		seen += sample.Count - 1
 		maximumDifference = math.Max(maximumDifference, math.Abs(expectedProportion-float64(seen)/n))
-		seen += occurrences
+		seen++
 		maximumDifference = math.Max(maximumDifference, math.Abs(float64(seen)/n-expectedProportion))
 	}
-	z := maximumDifference * math.Sqrt(float64(effectiveCount))
+	z := maximumDifference * math.Sqrt(float64(len(samples)))
 	return Result{
 		Statistic: maximumDifference,
 		PValue:    kolmogorovPValue(z),
