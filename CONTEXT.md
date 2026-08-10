@@ -50,6 +50,11 @@ firing or resolved lifecycle.
 Immutable evidence that contributed to an Alert, such as one Bad chunk or one
 failed collection attempt.
 
+**Alert Evidence**:
+The conditional reference distribution, analyzed observations, and test result
+that explain why an anomaly Occurrence was created.
+_Avoid_: Occurrence CDF, CDF details
+
 **Notification**:
 An Alertmanager handoff for an Alert firing, changing severity, or resolving.
 _Avoid_: Alert

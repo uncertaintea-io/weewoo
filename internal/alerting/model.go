@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"errors"
 	"time"
+
+	"github.com/uncertaintea-io/weewoo/internal/ecdf"
 )
 
 const (
@@ -21,6 +23,9 @@ const (
 )
 
 var ErrReviewConflict = errors.New("alert occurrence review changed")
+var ErrOccurrenceNotFound = errors.New("alert occurrence not found")
+var ErrEvidenceNotApplicable = errors.New("alert evidence is only available for anomaly occurrences")
+var ErrEvidenceReferenceGone = errors.New("the matching reference distribution is no longer retained")
 
 // AnalysisOutcome is the complete durable result of analyzing one time chunk.
 // Recording a live outcome updates the Verdict and matching alert condition
@@ -118,6 +123,20 @@ type ReviewResult struct {
 	Accepted      bool      `json:"accepted"`
 	ReviewedAt    time.Time `json:"reviewedAt"`
 	AlertResolved bool      `json:"alertResolved"`
+}
+
+// AlertEvidence contains the conditional reference distribution, observations,
+// and KS-test result that explains an anomaly.
+type AlertEvidence struct {
+	Query   AlertQueryResult `json:"query"`
+	Samples []ecdf.Sample    `json:"samples"`
+	PValue  float64          `json:"pValue"`
+}
+
+type AlertQueryResult struct {
+	Input float64   `json:"input"`
+	Xs    []float64 `json:"xs"`
+	Ps    []float64 `json:"ps"`
 }
 
 // Recorder is the small interface used by collection and analysis.
