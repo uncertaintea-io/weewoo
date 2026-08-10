@@ -1,6 +1,39 @@
 import { expect } from 'chai';
 import 'mocha';
-import { GetJointECDF } from './api';
+import { alertCDFComparison, GetAlertEvidence, GetJointECDF } from './api';
+
+describe('Alert CDF API', () => {
+
+  it('converts occurrence evidence into expected and actual CDFs', async () => {
+    const fetcher = (url: string | URL | Request): Promise<Response> => {
+      expect(url).to.equal('/api/alerts/occurrences/12/evidence');
+      return Promise.resolve(new Response(JSON.stringify({
+        query: { input: 10, xs: [1, 2], ps: [0.25, 1] },
+        samples: [
+          { value: 2, count: 3 },
+          { value: 1, count: 1 },
+        ],
+        pValue: 0.001,
+      })));
+    };
+
+    const details = await GetAlertEvidence(12, fetcher);
+
+    expect(details).to.deep.equal({
+      query: { input: 10, xs: [1, 2], ps: [0.25, 1] },
+      samples: [
+        { value: 2, count: 3 },
+        { value: 1, count: 1 },
+      ],
+      pValue: 0.001,
+    });
+    expect(alertCDFComparison(details)).to.deep.equal({
+      expected: [{ x: 1, probability: 0.25 }, { x: 2, probability: 1 }],
+      actual: [{ x: 1, probability: 0.25 }, { x: 2, probability: 1 }],
+    });
+  });
+
+});
 
 describe('Joint ECDF API', () => {
 

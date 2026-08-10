@@ -146,6 +146,16 @@ export interface AlertEvidence {
   pValue: number;
 }
 
+export interface CDFPoint {
+  x: number;
+  probability: number;
+}
+
+export interface AlertCDFComparison {
+  expected: CDFPoint[];
+  actual: CDFPoint[];
+}
+
 export interface JointECDFRender {
   width: number;
   height: number;
@@ -503,6 +513,23 @@ export async function GetAlertEvidence(
     samples: parseSamples(body.samples),
     pValue: body.pValue,
   };
+}
+
+export function alertCDFComparison(details: AlertEvidence): AlertCDFComparison {
+  const expected = details.query.xs.map((x, index) => ({
+    x,
+    probability: details.query.ps[index],
+  }));
+  const samples = [...details.samples].sort((left, right) => left.value - right.value);
+  const total = samples.reduce((sum, sample) => sum + sample.count, 0);
+  if (total <= 0) throw new Error('Analysis fixture must contain at least one observation.');
+  let cumulative = 0;
+  const actual = samples.map((sample) => {
+    cumulative += sample.count;
+    return { x: sample.value, probability: cumulative / total };
+  });
+
+  return { expected, actual };
 }
 
 export async function GetJointECDF(
