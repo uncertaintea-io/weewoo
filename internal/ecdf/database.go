@@ -17,6 +17,7 @@ func NewDatabaseChunkStore(db *sql.DB) ChunkStore {
 
 // WriteChunk writes a time chunk to the database.
 func (c *database) WriteChunk(serviceID, indicatorID int, generation int64, timestamp time.Time, chunk []byte) error {
+	timestamp = timestamp.Truncate(time.Second)
 	tx, err := c.db.Begin()
 	if err != nil {
 		return fmt.Errorf("begin chunk write: %w", err)
@@ -60,6 +61,7 @@ func (c *database) WriteChunk(serviceID, indicatorID int, generation int64, time
 
 // ReadChunk reads a time chunk from the database.
 func (c *database) ReadChunk(serviceId int, indicatorId int, timestamp time.Time) ([]byte, error) {
+	timestamp = timestamp.Truncate(time.Second)
 	var chunk []byte
 	err := c.db.QueryRow(`
 		SELECT chunk
@@ -77,6 +79,7 @@ func (c *database) ReadChunk(serviceId int, indicatorId int, timestamp time.Time
 // WriteVerdict records the latest verdict for a time chunk. The upsert permits
 // a later review workflow to reverse a verdict without changing this API.
 func (c *database) WriteVerdict(ctx context.Context, serviceID, indicatorID int, generation int64, timestamp time.Time, good bool, pValue float64) error {
+	timestamp = timestamp.Truncate(time.Second)
 	_, err := c.db.ExecContext(ctx, `
 		UPDATE verdict
 		SET automated_good=$5, pvalue=$6, analysis_state=CASE WHEN $5 THEN 'good' ELSE 'bad' END

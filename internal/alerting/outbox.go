@@ -269,11 +269,16 @@ func (d *OutboxDispatcher) deliverOne() error {
 func (d *OutboxDispatcher) markFailed(id, alertID int64, attempt int, deliveryErr error) error {
 	delay := time.Duration(math.Min(math.Pow(2, float64(attempt)), 300)) * time.Second
 	now := time.Now().UTC()
+	nextAttempt := now.Add(delay)
+	nextAttemptAt := any(nextAttempt)
+	if d.sqlite {
+		nextAttemptAt = nextAttempt.Format(time.DateTime)
+	}
 	tx, err := d.db.BeginTx(d.ctx, nil)
 	if err == nil {
 		_, err = tx.ExecContext(d.ctx, `
 			UPDATE alert_outbox SET next_attempt_at=$2, last_error=$3 WHERE id=$1
-		`, id, now.Add(delay), sanitizeDetails(deliveryErr.Error()))
+		`, id, nextAttemptAt, sanitizeDetails(deliveryErr.Error()))
 	}
 	if err == nil {
 		_, err = tx.ExecContext(d.ctx, `

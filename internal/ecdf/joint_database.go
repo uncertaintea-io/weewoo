@@ -37,7 +37,11 @@ func (s *databaseJointStore) Publish(ctx context.Context, serviceID, indicatorID
 	if err != nil {
 		return 0, false, fmt.Errorf("acquire ECDF database connection: %w", err)
 	}
-	defer conn.Close()
+	defer func() {
+		if conn != nil {
+			_ = conn.Close()
+		}
+	}()
 
 	if !s.sqlite {
 		var acquired bool
@@ -65,17 +69,24 @@ func (s *databaseJointStore) Publish(ctx context.Context, serviceID, indicatorID
 		}()
 	}
 
-	var alreadyPublished bool
-	if err := conn.QueryRowContext(ctx, `
+	const alreadyPublishedQuery = `
 		SELECT EXISTS (
 			SELECT 1 FROM ecdf
 			WHERE service_id = $1 AND indicator_id = $2 AND interval_end = $3
 		)
-	`, serviceID, indicatorID, intervalEnd).Scan(&alreadyPublished); err != nil {
+	`
+	var alreadyPublished bool
+	if err := conn.QueryRowContext(ctx, alreadyPublishedQuery, serviceID, indicatorID, intervalEnd).Scan(&alreadyPublished); err != nil {
 		return 0, false, fmt.Errorf("check ECDF build interval: %w", err)
 	}
 	if alreadyPublished {
 		return 0, false, nil
+	}
+	if s.sqlite {
+		if err := conn.Close(); err != nil {
+			return 0, false, fmt.Errorf("release ECDF database connection for build: %w", err)
+		}
+		conn = nil
 	}
 
 	var body bytes.Buffer
@@ -85,12 +96,26 @@ func (s *databaseJointStore) Publish(ctx context.Context, serviceID, indicatorID
 	if body.Len() == 0 {
 		return 0, false, errors.New("built ECDF is empty")
 	}
+	if s.sqlite {
+		conn, err = s.db.Conn(ctx)
+		if err != nil {
+			return 0, false, fmt.Errorf("reacquire ECDF database connection after build: %w", err)
+		}
+	}
 
 	tx, err := conn.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, false, fmt.Errorf("begin ECDF publication: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
+	if s.sqlite {
+		if err := tx.QueryRowContext(ctx, alreadyPublishedQuery, serviceID, indicatorID, intervalEnd).Scan(&alreadyPublished); err != nil {
+			return 0, false, fmt.Errorf("recheck ECDF build interval: %w", err)
+		}
+		if alreadyPublished {
+			return 0, false, nil
+		}
+	}
 
 	var version int64
 	if err := tx.QueryRowContext(ctx, `
