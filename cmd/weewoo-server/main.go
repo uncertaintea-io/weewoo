@@ -83,6 +83,7 @@ type serviceResponse struct {
 type modelStatus struct {
 	State       string     `json:"state"`
 	Coverage    float64    `json:"coverage"`
+	Progress    float64    `json:"progress"`
 	Required    int        `json:"requiredDays"`
 	LatestBuild *time.Time `json:"latestBuild,omitempty"`
 }

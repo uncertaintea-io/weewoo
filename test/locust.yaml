@@ -14,6 +14,6 @@ spec:
           def call_main_handler(self):
               self.client.get("/", name="Main UI/API")
 
-          @task
-          def call_sleep_handler(self):
-              self.client.get("/sleep", name="Sleep handler")
+          # @task
+          # def call_sleep_handler(self):
+          #     self.client.get("/sleep", name="Sleep handler")

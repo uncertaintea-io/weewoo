@@ -16,6 +16,7 @@ export interface Service {
 export interface TimeOfDayModelStatus {
   state: 'learning' | 'ready' | 'degraded';
   coverage: number;
+  progress: number;
   requiredDays: number;
   latestBuild?: string;
 }
@@ -28,6 +29,7 @@ export interface ActivityEntry {
 
 export interface TrackingStatus {
   state: 'pending' | 'collecting' | 'healthy' | 'degraded' | 'unavailable' | 'paused';
+  startedAt?: string;
   lastSuccess?: string;
   lastError?: string;
   error?: string;
@@ -246,6 +248,7 @@ function parseService(value: unknown): Service {
     ...(typeof value.baselineResetAt === 'string' ? { baselineResetAt: value.baselineResetAt } : {}),
     tracking: {
       state: (typeof trackingValue.state === 'string' ? trackingValue.state : 'pending') as TrackingStatus['state'],
+      ...(typeof trackingValue.startedAt === 'string' ? { startedAt: trackingValue.startedAt } : {}),
       ...(typeof trackingValue.lastSuccess === 'string' ? { lastSuccess: trackingValue.lastSuccess } : {}),
       ...(typeof trackingValue.lastError === 'string' ? { lastError: trackingValue.lastError } : {}),
       ...(typeof trackingValue.error === 'string' ? { error: trackingValue.error } : {}),
@@ -256,6 +259,7 @@ function parseService(value: unknown): Service {
     ...(isRecord(value.timeOfDayModel) ? { timeOfDayModel: {
       state: (typeof timeOfDayValue.state === 'string' ? timeOfDayValue.state : 'learning') as TimeOfDayModelStatus['state'],
       coverage: typeof timeOfDayValue.coverage === 'number' ? timeOfDayValue.coverage : 0,
+      progress: typeof timeOfDayValue.progress === 'number' ? timeOfDayValue.progress : (typeof timeOfDayValue.coverage === 'number' ? timeOfDayValue.coverage : 0),
       requiredDays: typeof timeOfDayValue.requiredDays === 'number' ? timeOfDayValue.requiredDays : 5,
       ...(typeof timeOfDayValue.latestBuild === 'string' ? { latestBuild: timeOfDayValue.latestBuild } : {}),
     } } : {}),

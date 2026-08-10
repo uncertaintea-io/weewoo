@@ -56,6 +56,25 @@ func TestTimeOfDayCoverageRequiresFiveDistinctDatesForNinetyFivePercentOfBuckets
 	assert.True(t, readiness.Ready)
 }
 
+func TestTimeOfDayLearningProgressAdvancesBeforeBucketsAreFullyTrained(t *testing.T) {
+	store := ecdf.NewFakeChunkStore()
+	service := &config.Service{Id: 7, Interval: 12 * time.Hour, Generation: 1}
+	for day := range 2 {
+		for bucket := range 2 {
+			timestamp := time.Date(2026, time.July, 1+day, bucket*12, 0, 0, 0, time.UTC)
+			chunk, err := ecdf.Encode(timestamp, []ecdf.Sample{{Value: float64(bucket), Count: 1}}, []ecdf.Sample{{Value: 42, Count: 1}})
+			require.NoError(t, err)
+			require.NoError(t, store.WriteChunk(service.Id, TimeOfDayIndicator, service.Generation, timestamp, chunk))
+		}
+	}
+
+	readiness, err := ReadModelReadiness(context.Background(), config.NewFakeConfig(), store, service, TimeOfDayIndicator)
+
+	require.NoError(t, err)
+	assert.Equal(t, 0.0, readiness.Coverage)
+	assert.InDelta(t, 0.4, readiness.Progress, 0.0001)
+}
+
 func TestModelReadinessUsesEligibleChunkRequirementForLoadLatency(t *testing.T) {
 	cfg := config.NewFakeConfig()
 	require.NoError(t, cfg.SetConfig(ECDFBaselineChunksConfigKey, "2"))
