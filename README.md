@@ -2,6 +2,32 @@
 
 ![Wee Woo Wee Woo](minion.gif)
 
+## Database
+
+Each WeeWoo server uses either PostgreSQL or its own SQLite database. Select the
+backend explicitly in `config.yaml`:
+
+```yaml
+database: postgresql
+database_url: postgresql://weewoo:weewoo@localhost/weewoo
+```
+
+For a single-server SQLite installation, provide the database file path:
+
+```yaml
+database: sqlite
+database_url: /var/lib/weewoo/weewoo.db
+```
+
+Initialize or update either backend with the same migration command:
+
+```shell
+go run ./cmd/migrate -config config.yaml up
+```
+
+Each SQLite-backed WeeWoo server should own its database file. Use PostgreSQL
+when multiple WeeWoo processes need to share one database.
+
 ## Prerequisites
 
 ### jecdf
@@ -26,7 +52,7 @@ diagnostics from the `jecdf` process are printed directly to the terminal. Use
 ## Alerts
 
 WeeWoo stores user-visible alert conditions, occurrences, review decisions, and
-Alertmanager handoff state in PostgreSQL. The server applies pending database
+Alertmanager handoff state in its configured database. The server applies pending database
 migrations automatically before it starts workers or accepts requests. To
 inspect or apply migrations administratively, run:
 

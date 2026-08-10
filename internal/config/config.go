@@ -4,12 +4,15 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"net/url"
 	"os"
+	"strings"
 	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"gopkg.in/yaml.v3"
+	_ "modernc.org/sqlite"
 )
 
 var (
@@ -23,13 +26,41 @@ var MinimumServiceInterval = 15 * time.Second
 
 // this struct tells config how to connect to the database using yaml files
 type SystemSettings struct {
+	Database    string `yaml:"database"`
 	DatabaseURL string `yaml:"database_url"`
 }
 
 func (s *SystemSettings) OpenDatabase() (*sql.DB, error) {
-	db, err := sql.Open("pgx", s.DatabaseURL)
+	var driver string
+	switch strings.ToLower(strings.TrimSpace(s.Database)) {
+	case "postgresql":
+		driver = "pgx"
+	case "sqlite":
+		driver = "sqlite"
+	default:
+		return nil, fmt.Errorf("database must be either postgresql or sqlite")
+	}
+	if strings.TrimSpace(s.DatabaseURL) == "" {
+		return nil, fmt.Errorf("database_url is required")
+	}
+	db, err := sql.Open(driver, s.DatabaseURL)
 	if err != nil {
 		return nil, err
+	}
+	if driver == "sqlite" {
+		// A WeeWoo process owns its SQLite file. Keeping one connection makes
+		// multi-step publication and baseline changes serialize consistently.
+		db.SetMaxOpenConns(1)
+		for _, pragma := range []string{
+			`PRAGMA foreign_keys = ON`,
+			`PRAGMA busy_timeout = 5000`,
+			`PRAGMA journal_mode = WAL`,
+		} {
+			if _, err := db.Exec(pragma); err != nil {
+				_ = db.Close()
+				return nil, fmt.Errorf("configure sqlite database: %w", err)
+			}
+		}
 	}
 	return db, nil
 }

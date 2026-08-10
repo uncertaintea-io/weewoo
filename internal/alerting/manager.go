@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/uncertaintea-io/weewoo/internal/config"
+	databaseutil "github.com/uncertaintea-io/weewoo/internal/database"
 	"github.com/uncertaintea-io/weewoo/internal/ecdf"
 )
 
@@ -27,19 +28,24 @@ const (
 )
 
 type Manager struct {
-	db  *sql.DB
-	cfg config.Config
-	now func() time.Time
+	db        *sql.DB
+	cfg       config.Config
+	now       func() time.Time
+	forUpdate string
 }
 
 func NewManager(db *sql.DB, cfg config.Config) *Manager {
-	return &Manager{db: db, cfg: cfg, now: func() time.Time { return time.Now().UTC() }}
+	forUpdate := " FOR UPDATE"
+	if databaseutil.IsSQLite(db) {
+		forUpdate = ""
+	}
+	return &Manager{db: db, cfg: cfg, now: func() time.Time { return time.Now().UTC() }, forUpdate: forUpdate}
 }
 
 func (m *Manager) RecordBaseline(ctx context.Context, serviceID, indicatorID int, timestamp time.Time) error {
 	_, err := m.db.ExecContext(ctx, `
 		INSERT INTO verdict (service_id, indicator_id, "timestamp", automated_good, pvalue, analysis_state)
-		VALUES ($1, $2, $3::timestamptz(0), NULL, NULL, 'baseline')
+		VALUES ($1, $2, $3, NULL, NULL, 'baseline')
 		ON CONFLICT (service_id, indicator_id, "timestamp")
 		DO UPDATE SET automated_good = NULL, pvalue = NULL, analysis_state = 'baseline'
 	`, serviceID, indicatorID, timestamp)
@@ -68,7 +74,7 @@ func (m *Manager) recordHistoricalAnalysis(ctx context.Context, outcome Analysis
 	}
 	_, err := m.db.ExecContext(ctx, `
 		INSERT INTO verdict (service_id, indicator_id, "timestamp", automated_good, pvalue, analysis_state)
-		VALUES ($1, $2, $3::timestamptz(0), $4, $5, $6)
+		VALUES ($1, $2, $3, $4, $5, $6)
 		ON CONFLICT (service_id, indicator_id, "timestamp")
 		DO UPDATE SET automated_good = EXCLUDED.automated_good,
 			pvalue = EXCLUDED.pvalue, analysis_state = EXCLUDED.analysis_state
@@ -89,7 +95,7 @@ func (m *Manager) recordGoodAnalysis(ctx context.Context, outcome AnalysisOutcom
 
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO verdict (service_id, indicator_id, "timestamp", automated_good, pvalue, analysis_state)
-		VALUES ($1, $2, $3::timestamptz(0), true, $4, 'good')
+		VALUES ($1, $2, $3, true, $4, 'good')
 		ON CONFLICT (service_id, indicator_id, "timestamp")
 		DO UPDATE SET automated_good = true, pvalue = EXCLUDED.pvalue, analysis_state = 'good'
 	`, outcome.ServiceID, outcome.IndicatorID, outcome.Timestamp, outcome.PValue); err != nil {
@@ -129,7 +135,7 @@ func (m *Manager) recordAnomaly(ctx context.Context, outcome AnalysisOutcome) er
 
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO verdict (service_id, indicator_id, "timestamp", automated_good, pvalue, analysis_state)
-		VALUES ($1, $2, $3::timestamptz(0), false, $4, 'bad')
+		VALUES ($1, $2, $3, false, $4, 'bad')
 		ON CONFLICT (service_id, indicator_id, "timestamp")
 		DO UPDATE SET automated_good = false, pvalue = EXCLUDED.pvalue, analysis_state = 'bad'
 	`, outcome.ServiceID, outcome.IndicatorID, outcome.Timestamp, outcome.PValue); err != nil {
@@ -229,9 +235,8 @@ func (m *Manager) ensureAnomalyAlert(ctx context.Context, tx *sql.Tx, conditionK
 	err := tx.QueryRowContext(ctx, `
 		SELECT id, occurrence_count
 		FROM alert
-		WHERE condition_key = $1 AND status = 'firing'
-		FOR UPDATE
-	`, conditionKey).Scan(&id, &count)
+		WHERE condition_key = $1 AND status = 'firing'`+m.forUpdate,
+		conditionKey).Scan(&id, &count)
 	if err == nil {
 		count++
 		return id, count, severityForCount(count, m.criticalThreshold("alert_critical_consecutive")), false, nil
@@ -268,7 +273,7 @@ func (m *Manager) RecordAnalysisFailure(ctx context.Context, outcome AnalysisOut
 	if outcome.Historical {
 		_, err := m.db.ExecContext(ctx, `
 			INSERT INTO verdict (service_id, indicator_id, "timestamp", automated_good, pvalue, analysis_state)
-			VALUES ($1, $2, $3::timestamptz(0), NULL, NULL, 'failed')
+			VALUES ($1, $2, $3, NULL, NULL, 'failed')
 			ON CONFLICT (service_id, indicator_id, "timestamp")
 			DO UPDATE SET automated_good = NULL, pvalue = NULL, analysis_state = 'failed'
 		`, outcome.ServiceID, outcome.IndicatorID, outcome.Timestamp)
@@ -285,7 +290,7 @@ func (m *Manager) RecordAnalysisFailure(ctx context.Context, outcome AnalysisOut
 	defer func() { _ = tx.Rollback() }()
 	_, verdictErr := tx.ExecContext(ctx, `
 		INSERT INTO verdict (service_id, indicator_id, "timestamp", automated_good, pvalue, analysis_state)
-		VALUES ($1, $2, $3::timestamptz(0), NULL, NULL, 'failed')
+		VALUES ($1, $2, $3, NULL, NULL, 'failed')
 		ON CONFLICT (service_id, indicator_id, "timestamp")
 		DO UPDATE SET automated_good = NULL, pvalue = NULL, analysis_state = 'failed'
 	`, outcome.ServiceID, outcome.IndicatorID, outcome.Timestamp)
@@ -332,8 +337,8 @@ func (m *Manager) RecordCollectionFailureTx(ctx context.Context, tx *sql.Tx, fai
 	created := false
 	err := tx.QueryRowContext(ctx, `
 		SELECT id, consecutive_count FROM alert
-		WHERE condition_key = $1 AND status = 'firing' FOR UPDATE
-	`, key).Scan(&alertID, &count)
+		WHERE condition_key = $1 AND status = 'firing'`+m.forUpdate,
+		key).Scan(&alertID, &count)
 	if errors.Is(err, sql.ErrNoRows) {
 		created = true
 		err = tx.QueryRowContext(ctx, `
@@ -431,9 +436,8 @@ func (m *Manager) recordMonitoringFailureTx(ctx context.Context, tx *sql.Tx, eve
 	err := tx.QueryRowContext(ctx, `
 		SELECT id, occurrence_count
 		FROM alert
-		WHERE condition_key=$1 AND status='firing'
-		FOR UPDATE
-	`, key).Scan(&id, &count)
+		WHERE condition_key=$1 AND status='firing'`+m.forUpdate,
+		key).Scan(&id, &count)
 	if errors.Is(err, sql.ErrNoRows) {
 		count = 1
 		err = tx.QueryRowContext(ctx, `
@@ -509,9 +513,8 @@ func (m *Manager) InterruptAnomalies(ctx context.Context, serviceID int, at time
 	rows, err := tx.QueryContext(ctx, `
 		SELECT id
 		FROM alert
-		WHERE service_id=$1 AND kind=$2 AND status='firing'
-		FOR UPDATE
-	`, serviceID, KindAnomaly)
+		WHERE service_id=$1 AND kind=$2 AND status='firing'`+m.forUpdate,
+		serviceID, KindAnomaly)
 	if err != nil {
 		return fmt.Errorf("read anomalies interrupted by monitoring gap: %w", err)
 	}
@@ -550,7 +553,7 @@ func (m *Manager) CloseService(ctx context.Context, serviceID int, reason string
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
-	rows, err := tx.QueryContext(ctx, `SELECT id FROM alert WHERE service_id=$1 AND status='firing' FOR UPDATE`, serviceID)
+	rows, err := tx.QueryContext(ctx, `SELECT id FROM alert WHERE service_id=$1 AND status='firing'`+m.forUpdate, serviceID)
 	if err != nil {
 		return err
 	}
@@ -607,7 +610,7 @@ func (m *Manager) ResolveAlert(ctx context.Context, id int64, reason string, at 
 	}
 	defer func() { _ = tx.Rollback() }()
 	var status string
-	if err := tx.QueryRowContext(ctx, `SELECT status FROM alert WHERE id=$1 FOR UPDATE`, id).Scan(&status); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT status FROM alert WHERE id=$1`+m.forUpdate, id).Scan(&status); err != nil {
 		return err
 	}
 	if status == StatusResolved {
@@ -625,7 +628,7 @@ func (m *Manager) ResolveAlert(ctx context.Context, id int64, reason string, at 
 
 func (m *Manager) resolveByKey(ctx context.Context, tx *sql.Tx, events *pendingLifecycleEvents, key, reason string, at time.Time) error {
 	var id int64
-	err := tx.QueryRowContext(ctx, `SELECT id FROM alert WHERE condition_key=$1 AND status='firing' FOR UPDATE`, key).Scan(&id)
+	err := tx.QueryRowContext(ctx, `SELECT id FROM alert WHERE condition_key=$1 AND status='firing'`+m.forUpdate, key).Scan(&id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil
 	}
@@ -686,8 +689,8 @@ func (m *Manager) ReviewOccurrence(ctx context.Context, occurrenceID, expectedRe
 	var timestamp time.Time
 	err = tx.QueryRowContext(ctx, `
 		SELECT alert_id, review_revision, review_override, service_id, indicator_id, chunk_timestamp
-		FROM alert_occurrence WHERE id=$1 FOR UPDATE
-	`, occurrenceID).Scan(&alertID, &revision, &current, &serviceID, &indicatorID, &timestamp)
+		FROM alert_occurrence WHERE id=$1`+m.forUpdate,
+		occurrenceID).Scan(&alertID, &revision, &current, &serviceID, &indicatorID, &timestamp)
 	if err != nil {
 		return ReviewResult{}, fmt.Errorf("read review occurrence: %w", err)
 	}
@@ -711,7 +714,7 @@ func (m *Manager) ReviewOccurrence(ctx context.Context, occurrenceID, expectedRe
 	}
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE verdict SET review_override=$4, review_revision=$5, reviewed_at=$6, review_reason=$7
-		WHERE service_id=$1 AND indicator_id=$2 AND "timestamp"=$3::timestamptz(0)
+		WHERE service_id=$1 AND indicator_id=$2 AND "timestamp"=$3
 	`, serviceID, indicatorID, timestamp, accept, newRevision, now, strings.TrimSpace(reason)); err != nil {
 		return ReviewResult{}, err
 	}
@@ -884,7 +887,7 @@ func (m *Manager) GetEvidence(ctx context.Context, occurrenceID int64) (AlertEvi
 		 AND v."timestamp"=tc."timestamp" AND v.generation=tc.generation
 		JOIN service AS s ON s.id=tc.service_id
 		WHERE tc.service_id=$1 AND tc.indicator_id=$2
-		  AND tc."timestamp"=$3::timestamptz(0)
+		  AND tc."timestamp"=$3
 	`, service, indicator, primary).Scan(&generation, &pValue, &activeGeneration)
 	if err != nil {
 		return AlertEvidence{}, fmt.Errorf("read occurrence time chunk verdict: %w", err)
@@ -948,7 +951,7 @@ func (m *Manager) readEvidenceSamples(ctx context.Context, serviceID, indicatorI
 		SELECT chunk
 		FROM time_chunk
 		WHERE service_id=$1 AND indicator_id=$2 AND generation=$3
-		  AND "timestamp">=$4::timestamptz(0) AND "timestamp"<=$5::timestamptz(0)
+		  AND "timestamp">=$4 AND "timestamp"<=$5
 		ORDER BY "timestamp"
 	`, serviceID, indicatorID, generation, start, primary)
 	if err != nil {

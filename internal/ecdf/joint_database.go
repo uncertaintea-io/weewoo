@@ -11,16 +11,19 @@ import (
 	"io"
 	"log/slog"
 	"time"
+
+	databaseutil "github.com/uncertaintea-io/weewoo/internal/database"
 )
 
 const retainedJointECDFVersions = 5
 
 type databaseJointStore struct {
-	db *sql.DB
+	db     *sql.DB
+	sqlite bool
 }
 
 func NewDatabaseJointStore(db *sql.DB) JointStore {
-	return &databaseJointStore{db: db}
+	return &databaseJointStore{db: db, sqlite: databaseutil.IsSQLite(db)}
 }
 
 func (s *databaseJointStore) Publish(ctx context.Context, serviceID, indicatorID int, intervalEnd time.Time, build func(io.Writer) error) (bytesWritten int64, published bool, err error) {
@@ -36,29 +39,31 @@ func (s *databaseJointStore) Publish(ctx context.Context, serviceID, indicatorID
 	}
 	defer conn.Close()
 
-	var acquired bool
-	if err := conn.QueryRowContext(ctx, `SELECT pg_try_advisory_lock($1, $2)`, serviceID, indicatorID).Scan(&acquired); err != nil {
-		return 0, false, fmt.Errorf("acquire ECDF publication lock: %w", err)
-	}
-	if !acquired {
-		slog.Info(
-			"ECDF publication skipped because PostgreSQL advisory lock is held",
-			"service_id", serviceID,
-			"indicator_id", indicatorID,
-			"coordination_mode", "postgres_advisory_lock",
-		)
-		return 0, false, nil
-	}
-	defer func() {
-		var unlocked bool
-		unlockErr := conn.QueryRowContext(context.Background(), `SELECT pg_advisory_unlock($1, $2)`, serviceID, indicatorID).Scan(&unlocked)
-		if unlockErr != nil || !unlocked {
-			if unlockErr == nil {
-				unlockErr = errors.New("database reported lock was not held")
-			}
-			err = errors.Join(err, fmt.Errorf("release ECDF publication lock: %w", unlockErr))
+	if !s.sqlite {
+		var acquired bool
+		if err := conn.QueryRowContext(ctx, `SELECT pg_try_advisory_lock($1, $2)`, serviceID, indicatorID).Scan(&acquired); err != nil {
+			return 0, false, fmt.Errorf("acquire ECDF publication lock: %w", err)
 		}
-	}()
+		if !acquired {
+			slog.Info(
+				"ECDF publication skipped because PostgreSQL advisory lock is held",
+				"service_id", serviceID,
+				"indicator_id", indicatorID,
+				"coordination_mode", "postgres_advisory_lock",
+			)
+			return 0, false, nil
+		}
+		defer func() {
+			var unlocked bool
+			unlockErr := conn.QueryRowContext(context.Background(), `SELECT pg_advisory_unlock($1, $2)`, serviceID, indicatorID).Scan(&unlocked)
+			if unlockErr != nil || !unlocked {
+				if unlockErr == nil {
+					unlockErr = errors.New("database reported lock was not held")
+				}
+				err = errors.Join(err, fmt.Errorf("release ECDF publication lock: %w", unlockErr))
+			}
+		}()
+	}
 
 	var alreadyPublished bool
 	if err := conn.QueryRowContext(ctx, `

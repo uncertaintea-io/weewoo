@@ -1,2 +1,3 @@
 # this is the configuration for the database
+database: postgresql
 database_url: example

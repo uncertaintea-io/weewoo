@@ -1,6 +1,6 @@
 # ECDF publication deployment contract
 
-Generated joint ECDFs are stored in PostgreSQL. Every publisher and reader must
+Generated joint ECDFs are stored in the configured database. Every publisher and reader must
 use the same database. No shared filesystem or ECDF output directory is needed.
 
 The `ecdf` table retains the five newest versions for each
@@ -11,10 +11,11 @@ transaction, so readers continue to see the previous committed version until
 the new one is complete. Reads verify the stored length and SHA-256 checksum
 and fall back through retained versions if a newer row fails verification.
 
-Publishers coordinate with a PostgreSQL advisory lock keyed by service and
+PostgreSQL publishers coordinate with an advisory lock keyed by service and
 indicator. If another process already holds that lock, the scheduled invocation
-is skipped successfully. This permits multiple server instances to run the
-scheduler without generating the same ECDF concurrently.
+is skipped successfully. SQLite servers serialize database work through one
+connection and each server owns its database file. PostgreSQL therefore remains
+the backend for multiple server processes sharing one database.
 
 Each publication also records the scheduler's aligned `interval_end`. After a
 publisher acquires the advisory lock, it skips the build if that service and

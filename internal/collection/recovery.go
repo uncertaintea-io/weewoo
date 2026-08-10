@@ -122,7 +122,7 @@ func (q *RecoveryQueue) EnqueueFailure(ctx context.Context, service *config.Serv
 		ON CONFLICT (service_id, window_start, window_end)
 		DO UPDATE SET state='pending', attempts=collection_backlog.attempts+1,
 			next_attempt_at=EXCLUDED.next_attempt_at, last_error=EXCLUDED.last_error,
-			updated_at=NOW()
+			updated_at=CURRENT_TIMESTAMP
 	`, service.Id, service.Name, start, end, retryAt,
 		time.Now().UTC().Add(retention), alertingSanitizedError(failure))
 	if err != nil {
@@ -151,7 +151,7 @@ func enqueueFailedWindow(ctx context.Context, executor sqlExecutor, service *con
 		ON CONFLICT (service_id, window_start, window_end)
 		DO UPDATE SET state='pending', attempts=collection_backlog.attempts+1,
 			next_attempt_at=EXCLUDED.next_attempt_at, last_error=EXCLUDED.last_error,
-			updated_at=NOW()
+			updated_at=CURRENT_TIMESTAMP
 	`, service.Id, service.Name, start, end, retryAt,
 		time.Now().UTC().Add(retention), alertingSanitizedError(failure))
 	if err != nil {

@@ -11,9 +11,11 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	databaseutil "github.com/uncertaintea-io/weewoo/internal/database"
 )
 
-//go:embed sql/*.sql
+//go:embed sql/*.sql sqlite/*.sql
 var migrationFS embed.FS
 
 // This lock ID is stable for WeeWoo migrations and prevents two replicas from
@@ -24,7 +26,7 @@ const createSchemaMigrationsTableSQL = `
 CREATE TABLE IF NOT EXISTS schema_migrations (
 	version BIGINT PRIMARY KEY,
 	name TEXT NOT NULL,
-	applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+	applied_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 )`
 
 type migration struct {
@@ -43,6 +45,9 @@ type Status struct {
 // Apply applies every pending embedded migration in version order. Calls from
 // concurrent processes are serialized with a PostgreSQL advisory lock.
 func Apply(ctx context.Context, db *sql.DB) error {
+	if databaseutil.IsSQLite(db) {
+		return applyWithoutAdvisoryLock(ctx, db)
+	}
 	conn, err := db.Conn(ctx)
 	if err != nil {
 		return fmt.Errorf("acquire migration connection: %w", err)
@@ -104,12 +109,51 @@ func Apply(ctx context.Context, db *sql.DB) error {
 	return nil
 }
 
+func applyWithoutAdvisoryLock(ctx context.Context, db *sql.DB) error {
+	if _, err := db.ExecContext(ctx, createSchemaMigrationsTableSQL); err != nil {
+		return fmt.Errorf("ensure schema_migrations table: %w", err)
+	}
+	items, err := loadFor(true)
+	if err != nil {
+		return err
+	}
+	applied, err := appliedMigrations(ctx, db)
+	if err != nil {
+		return err
+	}
+	for _, item := range items {
+		if appliedName, ok := applied[item.Version]; ok {
+			if appliedName != item.Name {
+				return fmt.Errorf("migration %d was applied as %q but is now named %q", item.Version, appliedName, item.Name)
+			}
+			continue
+		}
+		tx, err := db.BeginTx(ctx, nil)
+		if err != nil {
+			return fmt.Errorf("begin migration %d: %w", item.Version, err)
+		}
+		if _, err := tx.ExecContext(ctx, item.SQL); err != nil {
+			_ = tx.Rollback()
+			return fmt.Errorf("apply migration %d (%s): %w", item.Version, item.Name, err)
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO schema_migrations (version, name, applied_at) VALUES ($1, $2, CURRENT_TIMESTAMP)`, item.Version, item.Name); err != nil {
+			_ = tx.Rollback()
+			return fmt.Errorf("record migration %d (%s): %w", item.Version, item.Name, err)
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("commit migration %d (%s): %w", item.Version, item.Name, err)
+		}
+		slog.Info("database migration applied", "version", item.Version, "name", item.Name)
+	}
+	return nil
+}
+
 // Statuses reports embedded migrations and whether each has been applied.
 func Statuses(ctx context.Context, db *sql.DB) ([]Status, error) {
 	if _, err := db.ExecContext(ctx, createSchemaMigrationsTableSQL); err != nil {
 		return nil, fmt.Errorf("ensure schema_migrations table: %w", err)
 	}
-	items, err := load()
+	items, err := loadFor(databaseutil.IsSQLite(db))
 	if err != nil {
 		return nil, err
 	}
@@ -169,7 +213,15 @@ func appliedMigrations(ctx context.Context, db queryer) (map[int64]string, error
 }
 
 func load() ([]migration, error) {
-	entries, err := fs.ReadDir(migrationFS, "sql")
+	return loadFor(false)
+}
+
+func loadFor(sqlite bool) ([]migration, error) {
+	directory := "sql"
+	if sqlite {
+		directory = "sqlite"
+	}
+	entries, err := fs.ReadDir(migrationFS, directory)
 	if err != nil {
 		return nil, fmt.Errorf("read migrations: %w", err)
 	}
@@ -186,7 +238,7 @@ func load() ([]migration, error) {
 		if previous, ok := seen[version]; ok {
 			return nil, fmt.Errorf("duplicate migration version %d in %q and %q", version, previous, entry.Name())
 		}
-		body, err := fs.ReadFile(migrationFS, "sql/"+entry.Name())
+		body, err := fs.ReadFile(migrationFS, directory+"/"+entry.Name())
 		if err != nil {
 			return nil, fmt.Errorf("read migration %q: %w", entry.Name(), err)
 		}
