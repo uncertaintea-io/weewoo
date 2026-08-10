@@ -21,9 +21,13 @@ import (
 	"github.com/uncertaintea-io/weewoo/internal/collection"
 	"github.com/uncertaintea-io/weewoo/internal/config"
 	"github.com/uncertaintea-io/weewoo/internal/ecdf"
+	"github.com/uncertaintea-io/weewoo/internal/migrations"
 )
 
-const appServerWriteTimeout = 20 * time.Second
+const (
+	appServerWriteTimeout   = 20 * time.Second
+	startupMigrationTimeout = 2 * time.Minute
+)
 const (
 	sleep_duration = 1 * time.Second
 	sleep_message  = "zzz\n"
@@ -248,6 +252,12 @@ func main() {
 	db, err := systemSettings.OpenDatabase()
 	if err != nil {
 		log.Fatalf("Failed to open database: %v", err)
+	}
+	migrationCtx, cancelMigrations := context.WithTimeout(context.Background(), startupMigrationTimeout)
+	err = migrations.Apply(migrationCtx, db)
+	cancelMigrations()
+	if err != nil {
+		log.Fatalf("Failed to apply database migrations: %v", err)
 	}
 
 	cfg := config.NewDatabaseConfig(db)

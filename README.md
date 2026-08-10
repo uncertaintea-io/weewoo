@@ -26,10 +26,12 @@ diagnostics from the `jecdf` process are printed directly to the terminal. Use
 ## Alerts
 
 WeeWoo stores user-visible alert conditions, occurrences, review decisions, and
-Alertmanager handoff state in PostgreSQL. Apply migrations before starting a
-server built from a newer revision:
+Alertmanager handoff state in PostgreSQL. The server applies pending database
+migrations automatically before it starts workers or accepts requests. To
+inspect or apply migrations administratively, run:
 
 ```shell
+go run ./cmd/migrate -config config.yaml status
 go run ./cmd/migrate -config config.yaml up
 ```
 
@@ -51,6 +53,6 @@ receivers:
         send_resolved: true
 ```
 
-The initial global alert and recovery defaults are inserted by migration
-`000011_create_alert_history.sql`. The complete lifecycle and retention
+The initial global alert and recovery defaults are inserted by the initial
+schema migration. The complete lifecycle and retention
 contract is documented in [`docs/design/alerts.md`](docs/design/alerts.md).

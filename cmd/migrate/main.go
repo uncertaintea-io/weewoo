@@ -9,6 +9,7 @@ import (
 	"text/tabwriter"
 
 	"github.com/uncertaintea-io/weewoo/internal/config"
+	"github.com/uncertaintea-io/weewoo/internal/migrations"
 )
 
 func main() {
@@ -44,13 +45,13 @@ func main() {
 
 	switch flag.Arg(0) {
 	case "up":
-		if err := Migrate(context.Background(), db); err != nil {
+		if err := migrations.Apply(context.Background(), db); err != nil {
 			slog.Error("failed to apply migrations", slog.Any("error", err))
 			os.Exit(1)
 		}
 		slog.Info("migrations applied")
 	case "status":
-		statuses, err := MigrationStatuses(context.Background(), db)
+		statuses, err := migrations.Statuses(context.Background(), db)
 		if err != nil {
 			slog.Error("failed to list migrations", slog.Any("error", err))
 			os.Exit(1)

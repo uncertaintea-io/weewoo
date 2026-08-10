@@ -1,24 +1,90 @@
-ALTER TABLE time_chunk
-    ADD COLUMN collected_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP;
+CREATE TABLE config (
+    key varchar PRIMARY KEY,
+    value varchar
+);
 
-ALTER TABLE verdict RENAME COLUMN good TO automated_good;
-ALTER TABLE verdict
-    ADD COLUMN analysis_state varchar NOT NULL DEFAULT 'pending',
-    ADD COLUMN review_override boolean,
-    ADD COLUMN review_revision bigint NOT NULL DEFAULT 0,
-    ADD COLUMN reviewed_at TIMESTAMP WITH TIME ZONE,
-    ADD COLUMN review_reason text;
+CREATE TABLE data_source (
+    id int GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    type varchar,
+    url varchar,
+    polling_interval int
+);
 
-UPDATE verdict
-SET analysis_state = CASE
-    WHEN automated_good = true THEN 'good'
-    WHEN automated_good = false THEN 'bad'
-    ELSE 'pending'
-END;
+CREATE TABLE service (
+    id int GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    name varchar,
+    prometheus_url varchar,
+    load_query varchar,
+    latency_query varchar,
+    interval_seconds int,
+    paused boolean NOT NULL DEFAULT false,
+    revision bigint NOT NULL DEFAULT 1,
+    generation bigint NOT NULL DEFAULT 1,
+    baseline_reset_at TIMESTAMP WITH TIME ZONE
+);
 
-ALTER TABLE verdict
-    ADD CONSTRAINT verdict_analysis_state_check
-    CHECK (analysis_state IN ('pending', 'baseline', 'good', 'bad', 'failed'));
+CREATE TABLE service_revision (
+    id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    service_id int NOT NULL,
+    previous_revision bigint NOT NULL,
+    new_revision bigint NOT NULL,
+    changed_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    changed_by text NOT NULL,
+    material boolean NOT NULL,
+    previous_configuration jsonb NOT NULL,
+    new_configuration jsonb NOT NULL,
+    UNIQUE (service_id, new_revision)
+);
+CREATE INDEX service_revision_history_idx ON service_revision (service_id, new_revision DESC);
+
+CREATE TABLE time_chunk (
+    service_id int NOT NULL,
+    indicator_id int NOT NULL,
+    "timestamp" TIMESTAMP(0) WITH TIME ZONE NOT NULL,
+    chunk bytea,
+    collected_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    generation bigint NOT NULL DEFAULT 1,
+    PRIMARY KEY (service_id, indicator_id, "timestamp")
+);
+
+CREATE TABLE verdict (
+    service_id int,
+    indicator_id int,
+    "timestamp" TIMESTAMP(0) WITH TIME ZONE,
+    automated_good boolean,
+    pvalue float,
+    analysis_state varchar NOT NULL DEFAULT 'pending'
+        CHECK (analysis_state IN ('pending', 'baseline', 'good', 'bad', 'failed')),
+    review_override boolean,
+    review_revision bigint NOT NULL DEFAULT 0,
+    reviewed_at TIMESTAMP WITH TIME ZONE,
+    review_reason text,
+    generation bigint NOT NULL DEFAULT 1,
+    PRIMARY KEY (service_id, indicator_id, "timestamp"),
+    FOREIGN KEY (service_id, indicator_id, "timestamp")
+        REFERENCES time_chunk(service_id, indicator_id, "timestamp") ON DELETE CASCADE
+);
+
+CREATE TABLE alert_sink (
+    id int GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    type varchar,
+    url varchar
+);
+
+CREATE TABLE ecdf (
+    service_id int NOT NULL,
+    indicator_id int NOT NULL,
+    version bigint NOT NULL,
+    body bytea NOT NULL,
+    bytes bigint NOT NULL CHECK (bytes > 0 AND octet_length(body) = bytes),
+    sha256 char(64) NOT NULL CHECK (sha256 ~ '^[0-9a-f]{64}$'),
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    interval_end TIMESTAMP WITH TIME ZONE,
+    PRIMARY KEY (service_id, indicator_id, version)
+);
+CREATE INDEX ecdf_current_version_idx ON ecdf (service_id, indicator_id, version DESC);
+CREATE UNIQUE INDEX ecdf_build_interval_idx
+    ON ecdf (service_id, indicator_id, interval_end) WHERE interval_end IS NOT NULL;
 
 CREATE TABLE alert (
     id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -49,14 +115,10 @@ CREATE TABLE alert (
     created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
-
-CREATE UNIQUE INDEX alert_one_firing_condition_idx
-    ON alert (condition_key)
-    WHERE status = 'firing';
+CREATE UNIQUE INDEX alert_one_firing_condition_idx ON alert (condition_key) WHERE status = 'firing';
 CREATE INDEX alert_list_idx ON alert (status, last_occurred_at DESC);
 CREATE INDEX alert_service_idx ON alert (service_id, last_occurred_at DESC);
-CREATE INDEX alert_retention_idx ON alert (retention_anchor)
-    WHERE status = 'resolved';
+CREATE INDEX alert_retention_idx ON alert (retention_anchor) WHERE status = 'resolved';
 
 CREATE TABLE alert_occurrence (
     id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -79,12 +141,9 @@ CREATE TABLE alert_occurrence (
     review_reason text,
     created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
-
-CREATE INDEX alert_occurrence_alert_idx
-    ON alert_occurrence (alert_id, occurred_at DESC);
+CREATE INDEX alert_occurrence_alert_idx ON alert_occurrence (alert_id, occurred_at DESC);
 CREATE UNIQUE INDEX alert_occurrence_chunk_idx
-    ON alert_occurrence (service_id, indicator_id, chunk_timestamp)
-    WHERE chunk_timestamp IS NOT NULL;
+    ON alert_occurrence (service_id, indicator_id, chunk_timestamp) WHERE chunk_timestamp IS NOT NULL;
 
 CREATE TABLE alert_event (
     id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -94,7 +153,6 @@ CREATE TABLE alert_event (
     metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
     occurred_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
-
 CREATE INDEX alert_event_alert_idx ON alert_event (alert_id, occurred_at DESC);
 
 CREATE TABLE alert_outbox (
@@ -102,18 +160,14 @@ CREATE TABLE alert_outbox (
     alert_id bigint NOT NULL REFERENCES alert(id) ON DELETE CASCADE,
     operation varchar NOT NULL CHECK (operation IN ('firing', 'resolved')),
     payload jsonb NOT NULL,
-    state varchar NOT NULL DEFAULT 'pending'
-        CHECK (state IN ('pending', 'delivered', 'missed')),
+    state varchar NOT NULL DEFAULT 'pending' CHECK (state IN ('pending', 'delivered', 'missed')),
     attempts int NOT NULL DEFAULT 0,
     next_attempt_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
     delivered_at TIMESTAMP WITH TIME ZONE,
     last_error text,
     created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
-
-CREATE INDEX alert_outbox_pending_idx
-    ON alert_outbox (next_attempt_at, id)
-    WHERE state = 'pending';
+CREATE INDEX alert_outbox_pending_idx ON alert_outbox (next_attempt_at, id) WHERE state = 'pending';
 
 CREATE TABLE collection_backlog (
     id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -131,10 +185,8 @@ CREATE TABLE collection_backlog (
     updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
     UNIQUE (service_id, window_start, window_end)
 );
-
 CREATE INDEX collection_backlog_pending_idx
-    ON collection_backlog (service_id, window_start)
-    WHERE state IN ('pending', 'collecting');
+    ON collection_backlog (service_id, window_start) WHERE state IN ('pending', 'collecting');
 
 INSERT INTO config (key, value) VALUES
     ('alert_retention', '2160h'),
@@ -144,5 +196,4 @@ INSERT INTO config (key, value) VALUES
     ('collection_probe_after', '1h'),
     ('collection_probe_interval', '1h'),
     ('collection_backlog_retention', '24h'),
-    ('ecdf_baseline_chunks', '10')
-ON CONFLICT (key) DO NOTHING;
+    ('ecdf_baseline_chunks', '10');
