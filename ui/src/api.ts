@@ -61,6 +61,11 @@ export interface CreateServiceInput {
   importEnd?: string;
 }
 
+export interface ApplicationSettings {
+  alertmanagerUrl: string;
+  setupComplete: boolean;
+}
+
 export interface ServiceChange {
   serviceId: number;
   previousRevision: number;
@@ -202,6 +207,43 @@ async function readServiceError(response: Response): Promise<ServicesApiError> {
     error.message = detail;
   }
   return error;
+}
+
+function parseApplicationSettings(value: unknown): ApplicationSettings {
+  if (!isRecord(value) || typeof value.alertmanagerUrl !== 'string' || typeof value.setupComplete !== 'boolean') {
+    throw new Error('Settings response is invalid.');
+  }
+  return { alertmanagerUrl: value.alertmanagerUrl, setupComplete: value.setupComplete };
+}
+
+export async function GetSettings(fetcher: Fetcher = fetch): Promise<ApplicationSettings> {
+  const response = await fetcher('/api/settings', { headers: { Accept: 'application/json' } });
+  if (!response.ok) throw await readServiceError(response);
+  return parseApplicationSettings(await response.json());
+}
+
+export async function SaveSettings(alertmanagerUrl: string, fetcher: Fetcher = fetch): Promise<ApplicationSettings> {
+  const response = await fetcher('/api/settings', {
+    method: 'PUT',
+    headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+    body: JSON.stringify({ alertmanagerUrl }),
+  });
+  if (!response.ok) throw await readServiceError(response);
+  return parseApplicationSettings(await response.json());
+}
+
+export async function TestAlertmanager(alertmanagerUrl: string, fetcher: Fetcher = fetch): Promise<string> {
+  const response = await fetcher('/api/settings/test', {
+    method: 'POST',
+    headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+    body: JSON.stringify({ alertmanagerUrl }),
+  });
+  if (!response.ok) throw await readServiceError(response);
+  const value: unknown = await response.json();
+  if (!isRecord(value) || value.ready !== true || typeof value.message !== 'string') {
+    throw new Error('Alertmanager test response is invalid.');
+  }
+  return value.message;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

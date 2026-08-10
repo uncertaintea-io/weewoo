@@ -1,6 +1,6 @@
 import './index.scss'
 import { anomalyOccurrence, resolveAlertPDFState, type AlertPDFState } from './alert-detail';
-import { CancelImport, CreateService, DeleteService, GetAlertEvidence, GetService, GetServiceDetail, ListAlerts, ListAllServices, ResetServiceBaseline, ReviewAlertOccurrence, ServicesApiError, SetServicePaused, TestService, UpdateService, type AlertOccurrence, type AlertRecord, type CreateServiceInput, type Service, type ServiceChange } from './api';
+import { CancelImport, CreateService, DeleteService, GetAlertEvidence, GetService, GetServiceDetail, GetSettings, ListAlerts, ListAllServices, ResetServiceBaseline, ReviewAlertOccurrence, SaveSettings, ServicesApiError, SetServicePaused, TestAlertmanager, TestService, UpdateService, type AlertOccurrence, type AlertRecord, type ApplicationSettings, type CreateServiceInput, type Service, type ServiceChange } from './api';
 import { renderAlertPDFComparison } from './alert-pdf';
 import { historicalRangeToUtc } from './datetime';
 import { renderJECDF } from './jecdf';
@@ -12,6 +12,7 @@ const app = document.querySelector<HTMLDivElement>('#app');
 let liveRefreshTimer: number | undefined;
 let lastRenderedRoute: string | undefined;
 let detailVisualizationCleanup: (() => void) | undefined;
+let applicationSettings: ApplicationSettings | undefined;
 type Theme = 'light' | 'dark' | 'system';
 
 function savedTheme(): Theme {
@@ -759,6 +760,7 @@ function renderPlaceholder(route: string): void {
 
 function renderSettings(): void {
   const theme = savedTheme();
+  const alertmanagerUrl = applicationSettings?.alertmanagerUrl ?? '';
   renderShell(`
     <section class="settings-panel">
       <div class="settings-heading">
@@ -783,6 +785,17 @@ function renderSettings(): void {
           `).join('')}
         </div>
       </div>
+      <div class="setting-row integration-setting">
+        <div>
+          <strong>Alertmanager</strong>
+          <p>Send WeeWoo alerts to this Alertmanager instance.</p>
+        </div>
+        <form id="alertmanager-settings-form" class="endpoint-form">
+          <label><span>Alertmanager URL</span><input name="alertmanagerUrl" required type="url" value="${escapeHtml(alertmanagerUrl)}" placeholder="http://alertmanager:9093" /></label>
+          <div id="alertmanager-settings-status" class="form-error" role="status"></div>
+          <div class="form-actions"><button class="secondary-button test-alertmanager" type="button">Test connection</button><button class="primary-button" type="submit">Save changes</button></div>
+        </form>
+      </div>
     </section>
   `);
   document.querySelectorAll<HTMLButtonElement>('[data-theme-option]').forEach((button) => {
@@ -793,6 +806,74 @@ function renderSettings(): void {
       renderSettings();
     });
   });
+  bindAlertmanagerForm('alertmanager-settings-form', 'alertmanager-settings-status', false);
+}
+
+function renderWelcome(): void {
+  if (app === null) return;
+  app.innerHTML = `
+    <main class="welcome-shell">
+      <section class="welcome-card">
+        <div class="welcome-brand"><img src="/img/logo.svg" alt="" aria-hidden="true" /><span>WeeWoo Services</span></div>
+        <p class="eyebrow">Welcome to WeeWoo</p>
+        <h1>Connect your Alertmanager</h1>
+        <p class="welcome-copy">WeeWoo needs one destination for the alerts it creates. You can change this URL later in Settings.</p>
+        <form id="welcome-form" class="endpoint-form welcome-form">
+          <label><span>Alertmanager URL</span><input name="alertmanagerUrl" required type="url" autocomplete="url" placeholder="http://alertmanager:9093" /></label>
+          <div id="welcome-status" class="form-error" role="status"></div>
+          <div class="form-actions"><button class="secondary-button test-alertmanager" type="button">Test connection</button><button class="primary-button" type="submit">Finish setup</button></div>
+        </form>
+        <p class="welcome-note">The connection test is optional. A valid URL is required to finish setup.</p>
+      </section>
+    </main>`;
+  bindAlertmanagerForm('welcome-form', 'welcome-status', true);
+}
+
+function bindAlertmanagerForm(formID: string, statusID: string, finishSetup: boolean): void {
+  const form = document.querySelector<HTMLFormElement>(`#${formID}`);
+  const status = document.querySelector<HTMLElement>(`#${statusID}`);
+  if (form === null) return;
+  form.querySelector<HTMLButtonElement>('.test-alertmanager')?.addEventListener('click', () => {
+    if (!form.reportValidity()) return;
+    const button = form.querySelector<HTMLButtonElement>('.test-alertmanager');
+    if (button !== null) { button.disabled = true; button.textContent = 'Testing…'; }
+    if (status !== null) { status.classList.remove('is-success'); status.textContent = ''; }
+    void TestAlertmanager(inputValue(form, 'alertmanagerUrl')).then((message) => {
+      if (status !== null) { status.classList.add('is-success'); status.textContent = message; }
+    }).catch((error: unknown) => {
+      if (status !== null) status.textContent = error instanceof Error ? error.message : 'Connection test failed.';
+    }).finally(() => {
+      if (button !== null) { button.disabled = false; button.textContent = 'Test connection'; }
+    });
+  });
+  form.addEventListener('submit', (event) => {
+    event.preventDefault();
+    if (!form.reportValidity()) return;
+    const submit = form.querySelector<HTMLButtonElement>('button[type="submit"]');
+    if (submit !== null) { submit.disabled = true; submit.textContent = 'Saving…'; }
+    if (status !== null) { status.classList.remove('is-success'); status.textContent = ''; }
+    void SaveSettings(inputValue(form, 'alertmanagerUrl')).then((settings) => {
+      applicationSettings = settings;
+      if (finishSetup) {
+        window.location.hash = 'services';
+        void boot();
+      } else if (status !== null) {
+        status.classList.add('is-success');
+        status.textContent = 'Alertmanager settings saved.';
+      }
+    }).catch((error: unknown) => {
+      if (status !== null) status.textContent = error instanceof Error ? error.message : 'Unable to save settings.';
+    }).finally(() => {
+      if (submit !== null && document.body.contains(submit)) { submit.disabled = false; submit.textContent = finishSetup ? 'Finish setup' : 'Save changes'; }
+    });
+  });
+}
+
+function renderSettingsLoadError(error: unknown): void {
+  if (app === null) return;
+  const message = error instanceof Error ? error.message : 'Unable to read application settings.';
+  app.innerHTML = `<main class="welcome-shell"><section class="welcome-card"><p class="eyebrow">WeeWoo Services</p><h1>Setup could not be loaded</h1><p class="welcome-copy">${escapeHtml(message)}</p><button id="retry-settings" class="primary-button" type="button">Try again</button></section></main>`;
+  document.querySelector('#retry-settings')?.addEventListener('click', () => { applicationSettings = undefined; void boot(); });
 }
 
 function renderActivity(service: Service): string {
@@ -999,6 +1080,18 @@ async function boot(): Promise<void> {
   detailVisualizationCleanup?.();
   detailVisualizationCleanup = undefined;
   clearLiveRefresh();
+  if (applicationSettings === undefined) {
+    try {
+      applicationSettings = await GetSettings();
+    } catch (error) {
+      renderSettingsLoadError(error);
+      return;
+    }
+  }
+  if (!applicationSettings.setupComplete) {
+    renderWelcome();
+    return;
+  }
   const route = currentRoute();
   if (route === 'add') { renderAddChoice(); return; }
   if (route === 'add/new') { renderServiceForm(false); return; }

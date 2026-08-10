@@ -52,22 +52,34 @@ func (c *database) GetConfig(key string) (string, error) {
 
 // sets the 'key' and 'value' strings into the config table.
 func (c *database) SetConfig(key string, value string) error {
-	if key == "" || value == "" {
-		return errors.New("key and value are required")
+	return c.SetConfigs(map[string]string{key: value})
+}
+
+// SetConfigs atomically inserts or updates a group of configuration values.
+func (c *database) SetConfigs(values map[string]string) error {
+	if len(values) == 0 {
+		return errors.New("at least one config value is required")
 	}
-	_, err := c.db.Exec(`
-		WITH updated AS (
-			UPDATE config
-			SET value = $2
-			WHERE key = $1
-			RETURNING key
-		)
-		INSERT INTO config (key, value)
-		SELECT $1, $2
-		WHERE NOT EXISTS (SELECT 1 FROM updated)
-	`, key, value)
+	for key, value := range values {
+		if key == "" || value == "" {
+			return errors.New("key and value are required")
+		}
+	}
+	tx, err := c.db.Begin()
 	if err != nil {
-		return fmt.Errorf("failed to set config: %w", err)
+		return fmt.Errorf("begin config update: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	for key, value := range values {
+		if _, err := tx.Exec(`
+			INSERT INTO config (key, value) VALUES ($1, $2)
+			ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+		`, key, value); err != nil {
+			return fmt.Errorf("set config %q: %w", key, err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit config update: %w", err)
 	}
 	return nil
 }

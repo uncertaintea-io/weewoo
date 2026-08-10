@@ -17,6 +17,14 @@ type testConfig struct {
 	alertManagerURL string
 }
 
+func TestAlertmanagerTransportUsesConfiguredURL(t *testing.T) {
+	transport, err := alertmanagerTransportConfig("https://alerts.example.com/proxy")
+	require.NoError(t, err)
+	require.Equal(t, "alerts.example.com", transport.Host)
+	require.Equal(t, []string{"https"}, transport.Schemes)
+	require.Equal(t, "/proxy/api/v2/", transport.BasePath)
+}
+
 func TestSendItContextHonorsDeadline(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(250 * time.Millisecond)

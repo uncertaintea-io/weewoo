@@ -43,6 +43,12 @@ func testConfigFunctions(t *testing.T, config Config) {
 	// testing setConfig with empty value
 	err = config.SetConfig("key", "")
 	assert.EqualError(t, err, "key and value are required")
+	// grouped writes are available for settings that must change together
+	err = config.SetConfigs(map[string]string{"grouped1": "value1", "grouped2": "value2"})
+	require.NoError(t, err)
+	grouped, err := config.GetConfig("grouped2")
+	require.NoError(t, err)
+	assert.Equal(t, "value2", grouped)
 }
 
 // this is one testing function that tests both readData and writeData making them deterministic.

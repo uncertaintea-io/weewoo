@@ -50,6 +50,7 @@ func ReadSystemSettings(filename string) (*SystemSettings, error) {
 type Config interface {
 	GetConfig(key string) (string, error)
 	SetConfig(key string, value string) error
+	SetConfigs(values map[string]string) error
 	ReadDataSource(id int) (*DataSource, error)
 	WriteDataSource(dataSource *DataSource) error
 	WriteService(service *Service) error

@@ -27,10 +27,21 @@ func (c *fakeConfig) GetConfig(key string) (string, error) {
 }
 
 func (c *fakeConfig) SetConfig(key string, value string) error {
-	if key == "" || value == "" {
-		return errors.New("key and value are required")
+	return c.SetConfigs(map[string]string{key: value})
+}
+
+func (c *fakeConfig) SetConfigs(values map[string]string) error {
+	if len(values) == 0 {
+		return errors.New("at least one config value is required")
 	}
-	c.config[key] = value
+	for key, value := range values {
+		if key == "" || value == "" {
+			return errors.New("key and value are required")
+		}
+	}
+	for key, value := range values {
+		c.config[key] = value
+	}
 	return nil
 }
 

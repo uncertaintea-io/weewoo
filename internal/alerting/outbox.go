@@ -43,7 +43,10 @@ func NewOutboxDispatcher(db *sql.DB, cfg config.Config, manager *Manager) *Outbo
 
 func newOutboxDispatcher(db *sql.DB, cfg config.Config, manager *Manager, send sendAlert) *OutboxDispatcher {
 	ctx, cancel := context.WithCancel(context.Background())
-	host, _ := cfg.GetConfig("alertmanager_host")
+	host, _ := cfg.GetConfig("alertmanager_url")
+	if host == "" {
+		host, _ = cfg.GetConfig("alertmanager_host")
+	}
 	dispatcher := &OutboxDispatcher{
 		db: db, cfg: cfg, manager: manager, send: send,
 		ctx: ctx, cancel: cancel, done: make(chan struct{}), alertmanagerHost: host,

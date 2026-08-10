@@ -330,6 +330,9 @@ func main() {
 		})),
 	)
 	appMux.Handle("/api/jecdf", observeRequestDuration(NewJointECDFAPIHandler(jointStore)))
+	settingsHandler := observeRequestDuration(NewSettingsAPIHandler(cfg))
+	appMux.Handle("/api/settings", settingsHandler)
+	appMux.Handle("/api/settings/test", settingsHandler)
 	//edit this to change the sleep time
 	appMux.Handle("/sleep", observeRequestDuration(SleepHandler(sleep_duration)))
 	//Serve files from static folder
