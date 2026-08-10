@@ -311,7 +311,9 @@ func main() {
 			return collection.ScheduleECDFBuilder(serviceID, chunkStore, jointStore, cfg, scheduler)
 		},
 	}
-	imports := newImportManager(tracker, monitor)
+	imports := newImportManager(tracker, monitor, func(ctx context.Context, serviceID int) error {
+		return collection.BuildServiceECDFs(ctx, chunkStore, jointStore, cfg, serviceID, time.Now().UTC())
+	})
 
 	appMux := http.NewServeMux()
 	registerAPIHandlers(

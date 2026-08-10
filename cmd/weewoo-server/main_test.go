@@ -44,7 +44,7 @@ func (c *fakeServiceCollector) Schedule(service *config.Service) error {
 func newTestServiceAPIHandler(cfg config.Config, tracker serviceCollector, monitor *trackingMonitor) http.Handler {
 	return NewServiceAPIHandler(serviceAPIOptions{
 		Config: cfg, Tracker: tracker, Monitor: monitor,
-		Imports: newImportManager(tracker, monitor), HTTPClient: http.DefaultClient,
+		Imports: newImportManager(tracker, monitor, nil), HTTPClient: http.DefaultClient,
 	})
 }
 
@@ -142,7 +142,7 @@ func TestServiceAPIReportsTrackingStatusAndDeletesService(t *testing.T) {
 	now := time.Now().UTC()
 	monitor.record(service.Id, "healthy", "collection_succeeded", "collected", now)
 	tracker := &fakeServiceCollector{}
-	imports := newImportManager(tracker, monitor)
+	imports := newImportManager(tracker, monitor, nil)
 	handler := NewServiceAPIHandler(serviceAPIOptions{
 		Config: cfg, Tracker: tracker, Monitor: monitor,
 		Imports: imports, HTTPClient: http.DefaultClient,
@@ -292,7 +292,7 @@ func TestServiceAPITestsBothQueriesBeforeActivation(t *testing.T) {
 	tracker := &fakeServiceCollector{}
 	handler := NewServiceAPIHandler(serviceAPIOptions{
 		Config: cfg, Tracker: tracker, Monitor: newTrackingMonitor(),
-		Imports: newImportManager(tracker, newTrackingMonitor()), HTTPClient: client,
+		Imports: newImportManager(tracker, newTrackingMonitor(), nil), HTTPClient: client,
 	})
 	body := bytes.NewBufferString(fmt.Sprintf(`{
 		"name":"checkout", "prometheusUrl":%q, "loadQuery":"load",
@@ -324,7 +324,7 @@ func TestServiceAPICreatesBackgroundImport(t *testing.T) {
 	cfg := config.NewFakeConfig()
 	monitor := newTrackingMonitor()
 	tracker := &fakeServiceCollector{}
-	imports := newImportManager(tracker, monitor)
+	imports := newImportManager(tracker, monitor, nil)
 	handler := NewServiceAPIHandler(serviceAPIOptions{
 		Config: cfg, Tracker: tracker, Monitor: monitor,
 		Imports: imports, HTTPClient: http.DefaultClient,
