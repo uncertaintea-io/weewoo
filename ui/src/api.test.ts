@@ -1,6 +1,38 @@
 import { expect } from 'chai';
 import 'mocha';
-import { alertCDFComparison, GetAlertEvidence, GetJointECDF } from './api';
+import { alertCDFComparison, GetAlertEvidence, GetJointECDF, GetSettings, SaveSettings, TestAlertmanager } from './api';
+
+describe('Application settings API', () => {
+
+  it('reads first-run state', async () => {
+    const settings = await GetSettings(() => Promise.resolve(new Response(JSON.stringify({
+      alertmanagerUrl: '', setupComplete: false,
+    }))));
+    expect(settings).to.deep.equal({ alertmanagerUrl: '', setupComplete: false });
+  });
+
+  it('saves the required Alertmanager URL', async () => {
+    const fetcher = (url: string | URL | Request, init?: RequestInit): Promise<Response> => {
+      expect(url).to.equal('/api/settings');
+      expect(init?.method).to.equal('PUT');
+      expect(init?.body).to.be.a('string');
+      expect(JSON.parse(init?.body as string)).to.deep.equal({ alertmanagerUrl: 'http://alerts:9093' });
+      return Promise.resolve(new Response(JSON.stringify({ alertmanagerUrl: 'http://alerts:9093', setupComplete: true })));
+    };
+    expect(await SaveSettings('http://alerts:9093', fetcher)).to.deep.equal({
+      alertmanagerUrl: 'http://alerts:9093', setupComplete: true,
+    });
+  });
+
+  it('tests Alertmanager readiness through the server', async () => {
+    const fetcher = (url: string | URL | Request): Promise<Response> => {
+      expect(url).to.equal('/api/settings/test');
+      return Promise.resolve(new Response(JSON.stringify({ ready: true, message: 'Alertmanager is ready.' })));
+    };
+    expect(await TestAlertmanager('http://alerts:9093', fetcher)).to.equal('Alertmanager is ready.');
+  });
+
+});
 
 describe('Alert CDF API', () => {
 

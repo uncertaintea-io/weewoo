@@ -129,10 +129,11 @@ type importManager struct {
 	jobs    map[int]*importJob
 	tracker serviceCollector
 	monitor *trackingMonitor
+	build   func(context.Context, int) error
 }
 
-func newImportManager(tracker serviceCollector, monitor *trackingMonitor) *importManager {
-	return &importManager{nextID: 1, jobs: make(map[int]*importJob), tracker: tracker, monitor: monitor}
+func newImportManager(tracker serviceCollector, monitor *trackingMonitor, build func(context.Context, int) error) *importManager {
+	return &importManager{nextID: 1, jobs: make(map[int]*importJob), tracker: tracker, monitor: monitor, build: build}
 }
 
 func (m *importManager) start(service *config.Service, start, end time.Time) importJob {
@@ -164,6 +165,18 @@ func (m *importManager) start(service *config.Service, start, end time.Time) imp
 			m.monitor.record(service.Id, "", "import_failed", message, now)
 			slog.Error("historical import failed", "import_id", job.ID, "service_id", service.Id, "error", err)
 			return
+		}
+		if m.build != nil {
+			m.update(job.ID, "building", 100, "")
+			if err := m.build(ctx, service.Id); err != nil {
+				message := fmt.Sprintf("Historical import succeeded but JECDF build failed: %v", err)
+				m.finish(job.ID, "failed", message, now)
+				m.monitor.record(service.Id, "", "jecdf_build_failed", message, now)
+				slog.Error("post-import JECDF build failed", "import_id", job.ID, "service_id", service.Id, "error", err)
+				return
+			}
+			m.monitor.record(service.Id, "", "jecdf_built", "JECDF built from imported history", now)
+			slog.Info("post-import JECDF build completed", "import_id", job.ID, "service_id", service.Id)
 		}
 		state := "complete"
 		message := "Historical Prometheus import completed"

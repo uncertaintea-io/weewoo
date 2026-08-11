@@ -1072,6 +1072,96 @@ h1 {
   backdrop-filter: blur(10px);
 }
 
+.welcome-shell {
+  display: grid;
+  min-height: 100vh;
+  place-items: center;
+  padding: 28px;
+}
+
+.welcome-card {
+  width: min(100%, 620px);
+  padding: clamp(28px, 6vw, 56px);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--glass);
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(12px);
+}
+
+.welcome-brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 42px;
+  color: var(--secondary);
+  font-size: 0.9rem;
+  font-weight: 650;
+}
+
+.welcome-brand img {
+  width: 34px;
+  height: 34px;
+}
+
+.welcome-card h1 {
+  margin: 6px 0 12px;
+  font-size: clamp(1.8rem, 5vw, 2.6rem);
+  line-height: 1.12;
+}
+
+.welcome-copy {
+  max-width: 52ch;
+  margin: 0 0 30px;
+  color: var(--secondary);
+}
+
+.welcome-note {
+  margin: 18px 0 0;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.endpoint-form {
+  display: grid;
+  min-width: min(100%, 460px);
+  gap: 14px;
+}
+
+.endpoint-form label {
+  display: grid;
+  gap: 7px;
+}
+
+.endpoint-form label span {
+  color: var(--secondary);
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+.endpoint-form input {
+  width: 100%;
+  padding: 11px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  outline: none;
+  background: var(--field);
+  color: var(--text);
+}
+
+.endpoint-form input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--soft-accent);
+}
+
+.endpoint-form .form-actions {
+  justify-content: flex-end;
+}
+
+.integration-setting {
+  border-top: 1px solid var(--border);
+}
+
 .settings-heading,
 .setting-row {
   display: flex;

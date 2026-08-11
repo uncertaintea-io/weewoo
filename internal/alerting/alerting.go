@@ -9,6 +9,8 @@ import (
 	"log/slog"
 	"maps"
 	"net/http"
+	"net/url"
+	"strings"
 	"time"
 
 	"github.com/go-openapi/strfmt"
@@ -40,19 +42,21 @@ func SendIt(cfg config.Config, options AlertingOptions) error {
 }
 
 func SendItContext(ctx context.Context, cfg config.Config, options AlertingOptions) error {
-	alertmanagerHost, err := cfg.GetConfig("alertmanager_host")
+	alertmanagerEndpoint, err := cfg.GetConfig(config.AlertmanagerURLConfigKey)
 	if err != nil {
-		return fmt.Errorf("failed to get alertmanager host: %w", err)
+		return fmt.Errorf("failed to get alertmanager URL: %w", err)
 	}
-	return sendToAlertmanagerHost(ctx, alertmanagerHost, options)
+	return sendToAlertmanagerEndpoint(ctx, alertmanagerEndpoint, options)
 }
 
-func sendToAlertmanagerHost(ctx context.Context, alertmanagerHost string, options AlertingOptions) error {
-	// configure the transport to use the alertmanager API
-	transportConfig := amclient.DefaultTransportConfig().WithHost(alertmanagerHost)
+func sendToAlertmanagerEndpoint(ctx context.Context, alertmanagerEndpoint string, options AlertingOptions) error {
+	transportConfig, err := alertmanagerTransportConfig(alertmanagerEndpoint)
+	if err != nil {
+		return err
+	}
 	api := amclient.NewHTTPClientWithConfig(strfmt.Default, transportConfig)
 
-	slog.Debug("sending alert to alertmanager", "host", alertmanagerHost)
+	slog.Debug("sending alert to alertmanager", "endpoint", alertmanagerEndpoint)
 
 	annotations := models.LabelSet{
 		"description": options.Description,
@@ -97,17 +101,29 @@ func sendToAlertmanagerHost(ctx context.Context, alertmanagerHost string, option
 			Annotations: annotations,
 		},
 	}
-	// prepare the request parameters
 	params := alert.NewPostAlertsParams().WithContext(ctx).WithHTTPClient(http.DefaultClient).WithAlerts(alertPayload)
-
-	slog.Debug("params", "params", params)
-	// send the alerts over HTTP v2 API
-	_, err := api.Alert.PostAlerts(params)
+	_, err = api.Alert.PostAlerts(params)
 	if err != nil {
 		return fmt.Errorf("failed to send alert: %w", err)
 	}
-
-	// print the response
 	slog.Debug("alert sent successfully")
 	return nil
+}
+
+func alertmanagerTransportConfig(alertmanagerEndpoint string) (*amclient.TransportConfig, error) {
+	host := alertmanagerEndpoint
+	scheme := "http"
+	basePath := amclient.DefaultBasePath
+	if strings.Contains(alertmanagerEndpoint, "://") {
+		parsed, err := url.Parse(alertmanagerEndpoint)
+		if err != nil || parsed.Host == "" {
+			return nil, fmt.Errorf("invalid alertmanager URL %q", alertmanagerEndpoint)
+		}
+		host = parsed.Host
+		scheme = parsed.Scheme
+		if parsed.Path != "" && parsed.Path != "/" {
+			basePath = strings.TrimRight(parsed.Path, "/") + amclient.DefaultBasePath
+		}
+	}
+	return amclient.DefaultTransportConfig().WithHost(host).WithSchemes([]string{scheme}).WithBasePath(basePath), nil
 }

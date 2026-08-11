@@ -31,7 +31,7 @@ func TestCancelImportDoesNotDegradeHealthyService(t *testing.T) {
 	monitor := newTrackingMonitor()
 	monitor.record(service.Id, "healthy", "collection_succeeded", "collected", time.Now().UTC())
 	tracker := &cancellableImportCollector{started: make(chan struct{})}
-	imports := newImportManager(tracker, monitor)
+	imports := newImportManager(tracker, monitor, nil)
 	job := imports.start(service, time.Now().Add(-time.Hour), time.Now())
 	<-tracker.started
 	handler := NewServiceAPIHandler(serviceAPIOptions{
@@ -64,7 +64,7 @@ func TestFailedImportDoesNotDegradeHealthyLiveMonitoring(t *testing.T) {
 	service := &config.Service{Id: 42}
 	monitor := newTrackingMonitor()
 	monitor.record(service.Id, "healthy", "collection_succeeded", "collected", time.Now().UTC())
-	imports := newImportManager(&failingImportCollector{}, monitor)
+	imports := newImportManager(&failingImportCollector{}, monitor, nil)
 
 	job := imports.start(service, time.Now().Add(-time.Hour), time.Now())
 
@@ -89,7 +89,7 @@ func (*gapImportCollector) Import(_ context.Context, _ *config.Service, _, _ tim
 
 func TestImportJobCompletesWithMonitoringGapSummary(t *testing.T) {
 	service := &config.Service{Id: 42}
-	imports := newImportManager(&gapImportCollector{}, newTrackingMonitor())
+	imports := newImportManager(&gapImportCollector{}, newTrackingMonitor(), nil)
 
 	job := imports.start(service, time.Now().Add(-time.Hour), time.Now())
 
@@ -101,6 +101,69 @@ func TestImportJobCompletesWithMonitoringGapSummary(t *testing.T) {
 	assert.Equal(t, 100, completed.TotalWindows)
 	assert.Equal(t, 75, completed.ImportedWindows)
 	assert.Equal(t, 25, completed.GapWindows)
+}
+
+func TestSuccessfulImportBuildsJECDFBeforeCompleting(t *testing.T) {
+	service := &config.Service{Id: 42}
+	built := make(chan int, 1)
+	imports := newImportManager(&gapImportCollector{}, newTrackingMonitor(), func(_ context.Context, serviceID int) error {
+		built <- serviceID
+		return nil
+	})
+
+	job := imports.start(service, time.Now().Add(-time.Hour), time.Now())
+
+	require.Eventually(t, func() bool {
+		return imports.get(job.ID).State == "complete_with_gaps"
+	}, time.Second, time.Millisecond)
+	select {
+	case serviceID := <-built:
+		assert.Equal(t, service.Id, serviceID)
+	default:
+		t.Fatal("JECDF build was not triggered")
+	}
+	status := imports.monitor.status(service.Id)
+	require.NotEmpty(t, status.Activity)
+	assert.Equal(t, "import_completed", status.Activity[0].Type)
+	assert.Equal(t, "jecdf_built", status.Activity[1].Type)
+}
+
+func TestPostImportJECDFFailureFailsTheImportWorkflow(t *testing.T) {
+	service := &config.Service{Id: 42}
+	imports := newImportManager(&gapImportCollector{}, newTrackingMonitor(), func(context.Context, int) error {
+		return fmt.Errorf("builder unavailable")
+	})
+
+	job := imports.start(service, time.Now().Add(-time.Hour), time.Now())
+
+	require.Eventually(t, func() bool {
+		return imports.get(job.ID).State == "failed"
+	}, time.Second, time.Millisecond)
+	failed := imports.get(job.ID)
+	assert.Contains(t, failed.Error, "import succeeded but JECDF build failed")
+	status := imports.monitor.status(service.Id)
+	require.NotEmpty(t, status.Activity)
+	assert.Equal(t, "jecdf_build_failed", status.Activity[0].Type)
+}
+
+func TestFailedImportDoesNotBuildJECDF(t *testing.T) {
+	service := &config.Service{Id: 42}
+	built := make(chan struct{}, 1)
+	imports := newImportManager(&failingImportCollector{}, newTrackingMonitor(), func(context.Context, int) error {
+		built <- struct{}{}
+		return nil
+	})
+
+	job := imports.start(service, time.Now().Add(-time.Hour), time.Now())
+
+	require.Eventually(t, func() bool {
+		return imports.get(job.ID).State == "failed"
+	}, time.Second, time.Millisecond)
+	select {
+	case <-built:
+		t.Fatal("failed import triggered a JECDF build")
+	default:
+	}
 }
 
 func TestRecoveredHistoryDoesNotOverwriteHealthyLiveMonitoring(t *testing.T) {

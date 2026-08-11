@@ -98,41 +98,59 @@ func ScheduleECDFBuilder(serviceID int, chunkStore ecdf.ChunkStore, jointStore e
 	if scheduler == nil || jointStore == nil || cfg == nil {
 		return fmt.Errorf("ECDF builder dependencies must not be nil")
 	}
-	buildTimeout, err := configuredDuration(cfg, ECDFScheduledBuildTimeoutConfigKey, defaultECDFScheduledBuildTimeout)
-	if err != nil {
-		return fmt.Errorf("failed to get build timeout: %w", err)
-	}
 	callbackID := CallbackID(serviceID, BuilderCallback)
-	err = scheduler.AddCallback(callbackID, serviceInterval, func(ctx context.Context, start time.Time, end time.Time) IntervalResult {
-		buildCtx, cancel := context.WithTimeout(ctx, buildTimeout)
-		defer cancel()
-
-		service, err := cfg.ReadService(serviceID)
-		if err != nil {
-			return IntervalRetry(fmt.Errorf("read service generation: %w", err))
-		}
-		for _, indicatorID := range indicatorIDs {
-			if indicatorID == TimeOfDayIndicator && service.Interval <= 0 {
-				continue
-			}
-			readiness, err := ReadModelReadiness(buildCtx, cfg, chunkStore, service, indicatorID)
-			if err != nil {
-				return IntervalRetry(fmt.Errorf("measure indicator %d readiness: %w", indicatorID, err))
-			}
-			if !readiness.Ready {
-				slog.Info("deferring joint ECDF build until reference data is ready", "service_id", serviceID,
-					"indicator_id", indicatorID, "coverage", readiness.Coverage, "eligible", readiness.Eligible, "required", readiness.Required)
-				continue
-			}
-			result := publishIndicator(buildCtx, cfg, chunkStore, jointStore, service, indicatorID, start, end)
-			if result.Err != nil {
-				return result
-			}
+	err := scheduler.AddCallback(callbackID, serviceInterval, func(ctx context.Context, _ time.Time, end time.Time) IntervalResult {
+		if err := BuildServiceECDFs(ctx, chunkStore, jointStore, cfg, serviceID, end); err != nil {
+			return IntervalRetry(err)
 		}
 		return IntervalSuccess()
 	}, WithLastEnd(time.Now().UTC().Truncate(serviceInterval).Add(-serviceInterval)))
 	if err != nil {
 		return fmt.Errorf("failed to add callback for service %d: %w", serviceID, err)
+	}
+	return nil
+}
+
+// BuildServiceECDFs publishes every ready model for one service. Scheduled
+// publication and post-import publication share this interface.
+func BuildServiceECDFs(ctx context.Context, chunkStore ecdf.ChunkStore, jointStore ecdf.JointStore, cfg config.Config, serviceID int, intervalEnd time.Time) error {
+	if serviceID <= 0 {
+		return fmt.Errorf("service ID must be greater than zero")
+	}
+	if chunkStore == nil || jointStore == nil || cfg == nil {
+		return fmt.Errorf("ECDF builder dependencies must not be nil")
+	}
+	if intervalEnd.IsZero() {
+		return fmt.Errorf("ECDF build interval end must not be zero")
+	}
+	buildTimeout, err := configuredDuration(cfg, ECDFScheduledBuildTimeoutConfigKey, defaultECDFScheduledBuildTimeout)
+	if err != nil {
+		return fmt.Errorf("failed to get build timeout: %w", err)
+	}
+	buildCtx, cancel := context.WithTimeout(ctx, buildTimeout)
+	defer cancel()
+
+	service, err := cfg.ReadService(serviceID)
+	if err != nil {
+		return fmt.Errorf("read service generation: %w", err)
+	}
+	for _, indicatorID := range indicatorIDs {
+		if indicatorID == TimeOfDayIndicator && service.Interval <= 0 {
+			continue
+		}
+		readiness, err := ReadModelReadiness(buildCtx, cfg, chunkStore, service, indicatorID)
+		if err != nil {
+			return fmt.Errorf("measure indicator %d readiness: %w", indicatorID, err)
+		}
+		if !readiness.Ready {
+			slog.Info("deferring joint ECDF build until reference data is ready", "service_id", serviceID,
+				"indicator_id", indicatorID, "coverage", readiness.Coverage, "eligible", readiness.Eligible, "required", readiness.Required)
+			continue
+		}
+		result := publishIndicator(buildCtx, cfg, chunkStore, jointStore, service, indicatorID, intervalEnd.Add(-serviceInterval), intervalEnd)
+		if result.Err != nil {
+			return result.Err
+		}
 	}
 	return nil
 }

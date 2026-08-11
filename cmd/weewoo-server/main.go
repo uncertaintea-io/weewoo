@@ -21,9 +21,13 @@ import (
 	"github.com/uncertaintea-io/weewoo/internal/collection"
 	"github.com/uncertaintea-io/weewoo/internal/config"
 	"github.com/uncertaintea-io/weewoo/internal/ecdf"
+	"github.com/uncertaintea-io/weewoo/internal/migrations"
 )
 
-const appServerWriteTimeout = 20 * time.Second
+const (
+	appServerWriteTimeout   = 20 * time.Second
+	startupMigrationTimeout = 2 * time.Minute
+)
 const (
 	sleep_duration = 1 * time.Second
 	sleep_message  = "zzz\n"
@@ -249,6 +253,12 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to open database: %v", err)
 	}
+	migrationCtx, cancelMigrations := context.WithTimeout(context.Background(), startupMigrationTimeout)
+	err = migrations.Apply(migrationCtx, db)
+	cancelMigrations()
+	if err != nil {
+		log.Fatalf("Failed to apply database migrations: %v", err)
+	}
 
 	cfg := config.NewDatabaseConfig(db)
 	defer cfg.Close()
@@ -301,7 +311,9 @@ func main() {
 			return collection.ScheduleECDFBuilder(serviceID, chunkStore, jointStore, cfg, scheduler)
 		},
 	}
-	imports := newImportManager(tracker, monitor)
+	imports := newImportManager(tracker, monitor, func(ctx context.Context, serviceID int) error {
+		return collection.BuildServiceECDFs(ctx, chunkStore, jointStore, cfg, serviceID, time.Now().UTC())
+	})
 
 	appMux := http.NewServeMux()
 	registerAPIHandlers(
@@ -318,6 +330,9 @@ func main() {
 		})),
 	)
 	appMux.Handle("/api/jecdf", observeRequestDuration(NewJointECDFAPIHandler(jointStore)))
+	settingsHandler := observeRequestDuration(NewSettingsAPIHandler(cfg))
+	appMux.Handle("/api/settings", settingsHandler)
+	appMux.Handle("/api/settings/test", settingsHandler)
 	//edit this to change the sleep time
 	appMux.Handle("/sleep", observeRequestDuration(SleepHandler(sleep_duration)))
 	//Serve files from static folder
