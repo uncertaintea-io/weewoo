@@ -207,7 +207,7 @@ func (a *serviceAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		idText := strings.TrimSuffix(strings.TrimPrefix(path, "imports/"), "/cancel")
-		id, err := strconv.Atoi(idText)
+		id, err := strconv.ParseInt(idText, 10, 64)
 		if err != nil || id <= 0 {
 			http.Error(w, "invalid import ID", http.StatusBadRequest)
 			return

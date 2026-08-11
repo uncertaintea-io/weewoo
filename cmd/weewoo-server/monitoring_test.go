@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
@@ -13,6 +14,45 @@ import (
 	"github.com/uncertaintea-io/weewoo/internal/collection"
 	"github.com/uncertaintea-io/weewoo/internal/config"
 )
+
+type durableImportJobStore struct {
+	mu     sync.Mutex
+	nextID int64
+	jobs   map[int64]importJob
+}
+
+func newDurableImportJobStore() *durableImportJobStore {
+	return &durableImportJobStore{nextID: 1, jobs: make(map[int64]importJob)}
+}
+
+func (s *durableImportJobStore) create(_ context.Context, job *importJob) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	job.ID = s.nextID
+	s.nextID++
+	copy := *job
+	copy.cancel = nil
+	s.jobs[job.ID] = copy
+	return nil
+}
+
+func (s *durableImportJobStore) update(_ context.Context, job importJob) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	job.cancel = nil
+	s.jobs[job.ID] = job
+	return nil
+}
+
+func (s *durableImportJobStore) list(context.Context) ([]importJob, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	jobs := make([]importJob, 0, len(s.jobs))
+	for _, job := range s.jobs {
+		jobs = append(jobs, job)
+	}
+	return jobs, nil
+}
 
 type cancellableImportCollector struct {
 	started chan struct{}
@@ -194,4 +234,40 @@ func TestTrackingMonitorReportsWhenCollectionStarted(t *testing.T) {
 
 	require.NotNil(t, status.StartedAt)
 	assert.Equal(t, startedAt, *status.StartedAt)
+}
+
+func TestCompletedHistoricalImportSurvivesManagerRestart(t *testing.T) {
+	store := newDurableImportJobStore()
+	service := &config.Service{Id: 42}
+	first := newImportManager(&gapImportCollector{}, newTrackingMonitor(), nil, store)
+	start := time.Now().UTC().Add(-time.Hour)
+	job := first.start(service, start, start.Add(time.Hour))
+	require.Eventually(t, func() bool {
+		return first.get(job.ID).State == "complete_with_gaps"
+	}, time.Second, time.Millisecond)
+
+	restarted := newImportManager(&gapImportCollector{}, newTrackingMonitor(), nil, store)
+	jobs := restarted.listForService(service.Id)
+
+	require.Len(t, jobs, 1)
+	assert.Equal(t, "complete_with_gaps", jobs[0].State)
+	assert.Equal(t, 100, jobs[0].Progress)
+	assert.Equal(t, start, jobs[0].RangeStart)
+	assert.Equal(t, start.Add(time.Hour), jobs[0].RangeEnd)
+}
+
+func TestRunningHistoricalImportIsMarkedInterruptedAfterRestart(t *testing.T) {
+	store := newDurableImportJobStore()
+	start := time.Now().UTC().Add(-time.Hour)
+	job := importJob{
+		ServiceID: 42, State: "running", RangeStart: start, RangeEnd: start.Add(time.Hour), StartedAt: start,
+	}
+	require.NoError(t, store.create(context.Background(), &job))
+
+	restarted := newImportManager(&gapImportCollector{}, newTrackingMonitor(), nil, store)
+	loaded := restarted.get(job.ID)
+
+	assert.Equal(t, "failed", loaded.State)
+	assert.Equal(t, "Historical import interrupted by server restart", loaded.Error)
+	assert.NotNil(t, loaded.EndedAt)
 }

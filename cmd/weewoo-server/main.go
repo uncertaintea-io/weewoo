@@ -313,7 +313,7 @@ func main() {
 	}
 	imports := newImportManager(tracker, monitor, func(ctx context.Context, serviceID int) error {
 		return collection.BuildServiceECDFs(ctx, chunkStore, jointStore, cfg, serviceID, time.Now().UTC())
-	})
+	}, &databaseImportJobStore{db: db})
 
 	appMux := http.NewServeMux()
 	registerAPIHandlers(
