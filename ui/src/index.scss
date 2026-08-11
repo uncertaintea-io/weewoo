@@ -1162,6 +1162,13 @@ h1 {
   border-top: 1px solid var(--border);
 }
 
+.integration-setting .endpoint-form {
+  padding: 18px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--panel-heading);
+}
+
 .settings-heading,
 .setting-row {
   display: flex;
