@@ -80,7 +80,7 @@ func (s *databaseImportJobStore) list(ctx context.Context) ([]importJob, error) 
 func (s *databaseImportJobStore) markInterruptedIfStale(ctx context.Context, id int64, cutoff time.Time) (bool, error) {
 	result, err := s.db.ExecContext(ctx, `
 		UPDATE historical_import_job
-		SET state='failed', error='Historical import interrupted by server restart', ended_at=NOW(), owner_id=NULL
+		SET state='failed', error='Historical import interrupted by server restart', ended_at=CURRENT_TIMESTAMP, owner_id=NULL
 		WHERE id=$1
 			AND state IN ('queued', 'running', 'building')
 			AND (heartbeat_at IS NULL OR heartbeat_at < $2)
