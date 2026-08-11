@@ -788,10 +788,10 @@ function renderSettings(): void {
       <div class="setting-row integration-setting">
         <div>
           <strong>Alertmanager</strong>
-          <p>Send WeeWoo alerts to this Alertmanager instance.</p>
+          <p id="alertmanager-settings-description">Change the Alertmanager instance that receives alerts from every monitored service.</p>
         </div>
         <form id="alertmanager-settings-form" class="endpoint-form">
-          <label><span>Alertmanager URL</span><input name="alertmanagerUrl" required type="url" value="${escapeHtml(alertmanagerUrl)}" placeholder="http://alertmanager:9093" /></label>
+          <label><span>Alertmanager URL</span><input name="alertmanagerUrl" required type="url" inputmode="url" autocomplete="url" aria-describedby="alertmanager-settings-description alertmanager-settings-status" value="${escapeHtml(alertmanagerUrl)}" placeholder="http://alertmanager:9093" /></label>
           <div id="alertmanager-settings-status" class="form-error" role="status"></div>
           <div class="form-actions"><button class="secondary-button test-alertmanager" type="button">Test connection</button><button class="primary-button" type="submit">Save changes</button></div>
         </form>

@@ -39,6 +39,29 @@ func TestSettingsAPIGuidesFirstRunAndPersistsConfiguration(t *testing.T) {
 	assert.Equal(t, "true", mustConfig(t, cfg, config.SetupCompleteConfigKey))
 }
 
+func TestSettingsAPIUpdatesAlertmanagerURLAfterSetup(t *testing.T) {
+	cfg := config.NewFakeConfig()
+	require.NoError(t, cfg.SetConfigs(map[string]string{
+		config.AlertmanagerURLConfigKey: "https://old-alerts.example.com",
+		config.SetupCompleteConfigKey:   "true",
+	}))
+	handler := NewSettingsAPIHandler(cfg)
+
+	saved := httptest.NewRecorder()
+	handler.ServeHTTP(saved, httptest.NewRequest(
+		http.MethodPut,
+		"/api/settings",
+		strings.NewReader(`{"alertmanagerUrl":"https://new-alerts.example.com/"}`),
+	))
+	require.Equal(t, http.StatusOK, saved.Code, saved.Body.String())
+	assert.JSONEq(t, `{"alertmanagerUrl":"https://new-alerts.example.com","setupComplete":true}`, saved.Body.String())
+
+	read := httptest.NewRecorder()
+	handler.ServeHTTP(read, httptest.NewRequest(http.MethodGet, "/api/settings", nil))
+	require.Equal(t, http.StatusOK, read.Code, read.Body.String())
+	assert.JSONEq(t, `{"alertmanagerUrl":"https://new-alerts.example.com","setupComplete":true}`, read.Body.String())
+}
+
 func TestSettingsAPIRejectsInvalidURLsWithoutCompletingSetup(t *testing.T) {
 	cfg := config.NewFakeConfig()
 	handler := NewSettingsAPIHandler(cfg)
