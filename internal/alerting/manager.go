@@ -28,18 +28,18 @@ const (
 )
 
 type Manager struct {
-	db        *sql.DB
-	cfg       config.Config
-	now       func() time.Time
-	forUpdate string
+	db         *sql.DB
+	cfg        config.Config
+	now        func() time.Time
+	lockClause string
 }
 
 func NewManager(db *sql.DB, cfg config.Config) *Manager {
-	forUpdate := " FOR UPDATE"
+	lockClause := " FOR UPDATE"
 	if databaseutil.IsSQLite(db) {
-		forUpdate = ""
+		lockClause = ""
 	}
-	return &Manager{db: db, cfg: cfg, now: func() time.Time { return time.Now().UTC() }, forUpdate: forUpdate}
+	return &Manager{db: db, cfg: cfg, now: func() time.Time { return time.Now().UTC() }, lockClause: lockClause}
 }
 
 func (m *Manager) RecordBaseline(ctx context.Context, serviceID, indicatorID int, timestamp time.Time) error {
@@ -235,7 +235,7 @@ func (m *Manager) ensureAnomalyAlert(ctx context.Context, tx *sql.Tx, conditionK
 	err := tx.QueryRowContext(ctx, `
 		SELECT id, occurrence_count
 		FROM alert
-		WHERE condition_key = $1 AND status = 'firing'`+m.forUpdate,
+		WHERE condition_key = $1 AND status = 'firing'`+m.lockClause,
 		conditionKey).Scan(&id, &count)
 	if err == nil {
 		count++
@@ -337,7 +337,7 @@ func (m *Manager) RecordCollectionFailureTx(ctx context.Context, tx *sql.Tx, fai
 	created := false
 	err := tx.QueryRowContext(ctx, `
 		SELECT id, consecutive_count FROM alert
-		WHERE condition_key = $1 AND status = 'firing'`+m.forUpdate,
+		WHERE condition_key = $1 AND status = 'firing'`+m.lockClause,
 		key).Scan(&alertID, &count)
 	if errors.Is(err, sql.ErrNoRows) {
 		created = true
@@ -436,7 +436,7 @@ func (m *Manager) recordMonitoringFailureTx(ctx context.Context, tx *sql.Tx, eve
 	err := tx.QueryRowContext(ctx, `
 		SELECT id, occurrence_count
 		FROM alert
-		WHERE condition_key=$1 AND status='firing'`+m.forUpdate,
+		WHERE condition_key=$1 AND status='firing'`+m.lockClause,
 		key).Scan(&id, &count)
 	if errors.Is(err, sql.ErrNoRows) {
 		count = 1
@@ -513,7 +513,7 @@ func (m *Manager) InterruptAnomalies(ctx context.Context, serviceID int, at time
 	rows, err := tx.QueryContext(ctx, `
 		SELECT id
 		FROM alert
-		WHERE service_id=$1 AND kind=$2 AND status='firing'`+m.forUpdate,
+		WHERE service_id=$1 AND kind=$2 AND status='firing'`+m.lockClause,
 		serviceID, KindAnomaly)
 	if err != nil {
 		return fmt.Errorf("read anomalies interrupted by monitoring gap: %w", err)
@@ -553,7 +553,7 @@ func (m *Manager) CloseService(ctx context.Context, serviceID int, reason string
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
-	rows, err := tx.QueryContext(ctx, `SELECT id FROM alert WHERE service_id=$1 AND status='firing'`+m.forUpdate, serviceID)
+	rows, err := tx.QueryContext(ctx, `SELECT id FROM alert WHERE service_id=$1 AND status='firing'`+m.lockClause, serviceID)
 	if err != nil {
 		return err
 	}
@@ -610,7 +610,7 @@ func (m *Manager) ResolveAlert(ctx context.Context, id int64, reason string, at 
 	}
 	defer func() { _ = tx.Rollback() }()
 	var status string
-	if err := tx.QueryRowContext(ctx, `SELECT status FROM alert WHERE id=$1`+m.forUpdate, id).Scan(&status); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT status FROM alert WHERE id=$1`+m.lockClause, id).Scan(&status); err != nil {
 		return err
 	}
 	if status == StatusResolved {
@@ -628,7 +628,7 @@ func (m *Manager) ResolveAlert(ctx context.Context, id int64, reason string, at 
 
 func (m *Manager) resolveByKey(ctx context.Context, tx *sql.Tx, events *pendingLifecycleEvents, key, reason string, at time.Time) error {
 	var id int64
-	err := tx.QueryRowContext(ctx, `SELECT id FROM alert WHERE condition_key=$1 AND status='firing'`+m.forUpdate, key).Scan(&id)
+	err := tx.QueryRowContext(ctx, `SELECT id FROM alert WHERE condition_key=$1 AND status='firing'`+m.lockClause, key).Scan(&id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil
 	}
@@ -689,7 +689,7 @@ func (m *Manager) ReviewOccurrence(ctx context.Context, occurrenceID, expectedRe
 	var timestamp time.Time
 	err = tx.QueryRowContext(ctx, `
 		SELECT alert_id, review_revision, review_override, service_id, indicator_id, chunk_timestamp
-		FROM alert_occurrence WHERE id=$1`+m.forUpdate,
+		FROM alert_occurrence WHERE id=$1`+m.lockClause,
 		occurrenceID).Scan(&alertID, &revision, &current, &serviceID, &indicatorID, &timestamp)
 	if err != nil {
 		return ReviewResult{}, fmt.Errorf("read review occurrence: %w", err)
