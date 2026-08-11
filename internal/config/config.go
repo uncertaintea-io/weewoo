@@ -27,21 +27,21 @@ var MinimumServiceInterval = 15 * time.Second
 
 // this struct tells config how to connect to the database using yaml files
 type SystemSettings struct {
-	Database    string `yaml:"database"`
-	DatabaseURL string `yaml:"database_url"`
+	Database         string `yaml:"database"`
+	ConnectionString string `yaml:"connection_string"`
 }
 
 func (s *SystemSettings) OpenDatabase() (*sql.DB, error) {
-	if strings.TrimSpace(s.DatabaseURL) == "" {
-		return nil, fmt.Errorf("database_url is required")
+	if strings.TrimSpace(s.ConnectionString) == "" {
+		return nil, fmt.Errorf("connection_string is required")
 	}
 
 	var db *sql.DB
 	switch strings.ToLower(strings.TrimSpace(s.Database)) {
 	case "postgresql":
-		connectionConfig, err := pgx.ParseConfig(s.DatabaseURL)
+		connectionConfig, err := pgx.ParseConfig(s.ConnectionString)
 		if err != nil {
-			return nil, fmt.Errorf("parse postgresql database_url: %w", err)
+			return nil, fmt.Errorf("parse postgresql connection_string: %w", err)
 		}
 		db = stdlib.OpenDB(*connectionConfig, stdlib.OptionAfterConnect(func(ctx context.Context, conn *pgx.Conn) error {
 			_, err := conn.Exec(ctx, `SET timezone TO 'UTC'`)
@@ -49,7 +49,7 @@ func (s *SystemSettings) OpenDatabase() (*sql.DB, error) {
 		}))
 	case "sqlite":
 		var err error
-		db, err = sql.Open("sqlite", s.DatabaseURL)
+		db, err = sql.Open("sqlite", s.ConnectionString)
 		if err != nil {
 			return nil, err
 		}

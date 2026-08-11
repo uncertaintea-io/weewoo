@@ -14,8 +14,8 @@ import (
 
 func TestSQLiteMigrationsAndStores(t *testing.T) {
 	settings := config.SystemSettings{
-		Database:    "sqlite",
-		DatabaseURL: filepath.Join(t.TempDir(), "weewoo.db"),
+		Database:         "sqlite",
+		ConnectionString: filepath.Join(t.TempDir(), "weewoo.db"),
 	}
 	db, err := settings.OpenDatabase()
 	require.NoError(t, err)

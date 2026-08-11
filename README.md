@@ -9,14 +9,14 @@ backend explicitly in `config.yaml`:
 
 ```yaml
 database: postgresql
-database_url: postgresql://weewoo:weewoo@localhost/weewoo
+connection_string: postgresql://weewoo:weewoo@localhost/weewoo
 ```
 
 For a single-server SQLite installation, provide the database file path:
 
 ```yaml
 database: sqlite
-database_url: /var/lib/weewoo/weewoo.db
+connection_string: /var/lib/weewoo/weewoo.db
 ```
 
 Initialize or update either backend with the same migration command:

@@ -158,13 +158,13 @@ func TestReadingYamlFile(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotNil(t, systemSettings)
 	assert.Equal(t, "postgresql", systemSettings.Database)
-	assert.Equal(t, "example", systemSettings.DatabaseURL)
+	assert.Equal(t, "example", systemSettings.ConnectionString)
 }
 
 func TestSystemSettingsOpenSQLiteDatabase(t *testing.T) {
 	settings := SystemSettings{
-		Database:    "SQLite",
-		DatabaseURL: filepath.Join(t.TempDir(), "weewoo.db"),
+		Database:         "SQLite",
+		ConnectionString: filepath.Join(t.TempDir(), "weewoo.db"),
 	}
 	db, err := settings.OpenDatabase()
 	require.NoError(t, err)
@@ -179,8 +179,8 @@ func TestSystemSettingsOpenSQLiteDatabase(t *testing.T) {
 
 func TestSQLiteTimestampsRoundTripAsTheSameInstant(t *testing.T) {
 	settings := SystemSettings{
-		Database:    "sqlite",
-		DatabaseURL: filepath.Join(t.TempDir(), "timestamps.db"),
+		Database:         "sqlite",
+		ConnectionString: filepath.Join(t.TempDir(), "timestamps.db"),
 	}
 	db, err := settings.OpenDatabase()
 	require.NoError(t, err)
@@ -194,7 +194,7 @@ func TestPostgreSQLTimestampsRoundTripAsTheSameInstant(t *testing.T) {
 	if databaseURL == "" {
 		t.Skip("WEEWOO_TEST_POSTGRES_URL is not set")
 	}
-	settings := SystemSettings{Database: "postgresql", DatabaseURL: databaseURL}
+	settings := SystemSettings{Database: "postgresql", ConnectionString: databaseURL}
 	db, err := settings.OpenDatabase()
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
@@ -231,6 +231,6 @@ func testTimestampRoundTrips(t *testing.T, db *sql.DB, timestampType string) {
 }
 
 func TestSystemSettingsRejectsUnknownDatabase(t *testing.T) {
-	_, err := (&SystemSettings{Database: "mysql", DatabaseURL: "ignored"}).OpenDatabase()
+	_, err := (&SystemSettings{Database: "mysql", ConnectionString: "ignored"}).OpenDatabase()
 	assert.EqualError(t, err, "database must be either postgresql or sqlite")
 }
