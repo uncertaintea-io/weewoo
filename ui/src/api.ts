@@ -46,6 +46,8 @@ export interface ImportJob {
   importedWindows: number;
   gapWindows: number;
   error?: string;
+  rangeStart?: string;
+  rangeEnd?: string;
   startedAt: string;
   endedAt?: string;
 }
@@ -284,6 +286,8 @@ function parseService(value: unknown): Service {
     importedWindows: typeof job.importedWindows === 'number' ? job.importedWindows : 0,
     gapWindows: typeof job.gapWindows === 'number' ? job.gapWindows : 0,
     ...(typeof job.error === 'string' ? { error: job.error } : {}),
+    ...(typeof job.rangeStart === 'string' ? { rangeStart: job.rangeStart } : {}),
+    ...(typeof job.rangeEnd === 'string' ? { rangeEnd: job.rangeEnd } : {}),
     startedAt: readString(job.startedAt, 'import.startedAt'),
     ...(typeof job.endedAt === 'string' ? { endedAt: job.endedAt } : {}),
   })) : [];

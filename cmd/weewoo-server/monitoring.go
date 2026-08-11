@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
 	"fmt"
 	"log/slog"
 	"sort"
@@ -10,6 +11,11 @@ import (
 
 	"github.com/uncertaintea-io/weewoo/internal/collection"
 	"github.com/uncertaintea-io/weewoo/internal/config"
+)
+
+const (
+	importHeartbeatInterval = 10 * time.Second
+	importHeartbeatTimeout  = 30 * time.Second
 )
 
 type activityEntry struct {
@@ -110,7 +116,7 @@ func (m *trackingMonitor) handleCollectorEvent(event collection.CollectorEvent) 
 }
 
 type importJob struct {
-	ID              int        `json:"id"`
+	ID              int64      `json:"id"`
 	ServiceID       int        `json:"serviceId"`
 	State           string     `json:"state"`
 	Progress        int        `json:"progress"`
@@ -118,34 +124,78 @@ type importJob struct {
 	ImportedWindows int        `json:"importedWindows"`
 	GapWindows      int        `json:"gapWindows"`
 	Error           string     `json:"error,omitempty"`
+	RangeStart      time.Time  `json:"rangeStart"`
+	RangeEnd        time.Time  `json:"rangeEnd"`
 	StartedAt       time.Time  `json:"startedAt"`
 	EndedAt         *time.Time `json:"endedAt,omitempty"`
+	OwnerID         string     `json:"-"`
+	HeartbeatAt     *time.Time `json:"-"`
 	cancel          context.CancelFunc
 }
 
 type importManager struct {
 	mu      sync.RWMutex
-	nextID  int
-	jobs    map[int]*importJob
+	nextID  int64
+	jobs    map[int64]*importJob
 	tracker serviceCollector
 	monitor *trackingMonitor
 	build   func(context.Context, int) error
+	store   importJobStore
+	ownerID string
 }
 
-func newImportManager(tracker serviceCollector, monitor *trackingMonitor, build func(context.Context, int) error) *importManager {
-	return &importManager{nextID: 1, jobs: make(map[int]*importJob), tracker: tracker, monitor: monitor, build: build}
+func newImportManager(tracker serviceCollector, monitor *trackingMonitor, build func(context.Context, int) error, stores ...importJobStore) *importManager {
+	m := &importManager{nextID: 1, jobs: make(map[int64]*importJob), tracker: tracker, monitor: monitor, build: build, ownerID: rand.Text()}
+	if len(stores) == 0 || stores[0] == nil {
+		return m
+	}
+	m.store = stores[0]
+	jobs, err := m.store.list(context.Background())
+	if err != nil {
+		slog.Error("failed to load historical import jobs", "error", err)
+		return m
+	}
+	for i := range jobs {
+		job := jobs[i]
+		if job.State == "queued" || job.State == "running" || job.State == "building" {
+			interrupted, err := m.store.markInterruptedIfStale(context.Background(), job.ID, time.Now().UTC().Add(-importHeartbeatTimeout))
+			if err != nil {
+				slog.Error("failed to mark interrupted historical import", "import_id", job.ID, "error", err)
+			} else if interrupted {
+				job.State = "failed"
+				job.Error = "Historical import interrupted by server restart"
+				job.EndedAt = interruptedImportEnd()
+			}
+		}
+		m.jobs[job.ID] = &job
+		if job.ID >= m.nextID {
+			m.nextID = job.ID + 1
+		}
+	}
+	return m
 }
 
 func (m *importManager) start(service *config.Service, start, end time.Time) importJob {
 	ctx, cancel := context.WithCancel(context.Background())
 	m.mu.Lock()
-	job := &importJob{ID: m.nextID, ServiceID: service.Id, State: "queued", Progress: 0, StartedAt: time.Now().UTC(), cancel: cancel}
-	m.nextID++
+	now := time.Now().UTC()
+	job := &importJob{ID: m.nextID, ServiceID: service.Id, State: "queued", Progress: 0, RangeStart: start, RangeEnd: end, StartedAt: now, OwnerID: m.ownerID, HeartbeatAt: &now, cancel: cancel}
+	if m.store != nil {
+		if err := m.store.create(context.Background(), job); err != nil {
+			m.mu.Unlock()
+			cancel()
+			slog.Error("failed to persist historical import job", "service_id", service.Id, "error", err)
+			return importJob{ServiceID: service.Id, State: "failed", Error: "Historical import could not be recorded"}
+		}
+	}
+	m.nextID = job.ID + 1
 	m.jobs[job.ID] = job
 	m.mu.Unlock()
 	m.monitor.record(service.Id, "", "import_started", "Historical Prometheus import started", job.StartedAt)
 	slog.Info("historical import started", "import_id", job.ID, "service_id", service.Id, "start", start, "end", end)
 	go func() {
+		defer cancel()
+		go m.heartbeat(ctx, job.ID)
 		m.update(job.ID, "running", 0, "")
 		summary, err := m.tracker.Import(ctx, service, start, end, func(progress collection.ImportProgress) {
 			m.updateProgress(job.ID, progress)
@@ -195,7 +245,34 @@ func (m *importManager) start(service *config.Service, start, end time.Time) imp
 	return m.get(job.ID)
 }
 
-func (m *importManager) updateProgress(id int, progress collection.ImportProgress) {
+func (m *importManager) heartbeat(ctx context.Context, id int64) {
+	ticker := time.NewTicker(importHeartbeatInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case now := <-ticker.C:
+			m.mu.Lock()
+			if job := m.jobs[id]; job != nil && job.OwnerID == m.ownerID {
+				now = now.UTC()
+				job.HeartbeatAt = &now
+				m.persist(job)
+			}
+			m.mu.Unlock()
+		}
+	}
+}
+
+func (m *importManager) persist(job *importJob) {
+	if m.store != nil {
+		if err := m.store.update(context.Background(), *job); err != nil {
+			slog.Error("failed to persist historical import job update", "import_id", job.ID, "error", err)
+		}
+	}
+}
+
+func (m *importManager) updateProgress(id int64, progress collection.ImportProgress) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if job := m.jobs[id]; job != nil {
@@ -203,28 +280,33 @@ func (m *importManager) updateProgress(id int, progress collection.ImportProgres
 		job.TotalWindows = progress.TotalWindows
 		job.ImportedWindows = progress.ImportedWindows
 		job.GapWindows = progress.GapWindows
+		m.persist(job)
 	}
 }
 
-func (m *importManager) updateSummary(id int, summary collection.ImportSummary) {
+func (m *importManager) updateSummary(id int64, summary collection.ImportSummary) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if job := m.jobs[id]; job != nil {
 		job.TotalWindows = summary.TotalWindows
 		job.ImportedWindows = summary.ImportedWindows
 		job.GapWindows = summary.GapWindows
+		m.persist(job)
 	}
 }
 
-func (m *importManager) update(id int, state string, progress int, errMessage string) {
+func (m *importManager) update(id int64, state string, progress int, errMessage string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if job := m.jobs[id]; job != nil {
 		job.State, job.Progress, job.Error = state, progress, errMessage
+		now := time.Now().UTC()
+		job.HeartbeatAt = &now
+		m.persist(job)
 	}
 }
 
-func (m *importManager) finish(id int, state, errMessage string, ended time.Time) {
+func (m *importManager) finish(id int64, state, errMessage string, ended time.Time) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if job := m.jobs[id]; job != nil {
@@ -232,10 +314,11 @@ func (m *importManager) finish(id int, state, errMessage string, ended time.Time
 		if state == "complete" || state == "complete_with_gaps" {
 			job.Progress = 100
 		}
+		m.persist(job)
 	}
 }
 
-func (m *importManager) get(id int) importJob {
+func (m *importManager) get(id int64) importJob {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	if job := m.jobs[id]; job != nil {
@@ -261,7 +344,7 @@ func (m *importManager) listForService(serviceID int) []importJob {
 	return jobs
 }
 
-func (m *importManager) cancel(id int) error {
+func (m *importManager) cancel(id int64) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	job := m.jobs[id]
