@@ -35,7 +35,6 @@ func TestSettingsAPIGuidesFirstRunAndPersistsConfiguration(t *testing.T) {
 	saved := httptest.NewRecorder()
 	handler.ServeHTTP(saved, httptest.NewRequest(http.MethodPut, "/api/settings", body))
 	require.Equal(t, http.StatusOK, saved.Code, saved.Body.String())
-	assert.Equal(t, "alerts.example.com:9093", mustConfig(t, cfg, config.AlertmanagerHostConfigKey))
 	assert.Equal(t, "https://alerts.example.com:9093", mustConfig(t, cfg, config.AlertmanagerURLConfigKey))
 	assert.Equal(t, "true", mustConfig(t, cfg, config.SetupCompleteConfigKey))
 }
@@ -48,21 +47,6 @@ func TestSettingsAPIRejectsInvalidURLsWithoutCompletingSetup(t *testing.T) {
 	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPut, "/api/settings", body))
 	assert.Equal(t, http.StatusBadRequest, recorder.Code)
 	assert.Empty(t, mustConfig(t, cfg, config.SetupCompleteConfigKey))
-}
-
-func TestSettingsAPITreatsLegacyAlertmanagerConfigurationAsComplete(t *testing.T) {
-	cfg := config.NewFakeConfig()
-	require.NoError(t, cfg.SetConfig(config.AlertmanagerHostConfigKey, "alerts.internal:9093"))
-	handler := NewSettingsAPIHandler(cfg)
-	recorder := httptest.NewRecorder()
-
-	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/settings", nil))
-
-	require.Equal(t, http.StatusOK, recorder.Code)
-	var settings applicationSettings
-	require.NoError(t, json.NewDecoder(recorder.Body).Decode(&settings))
-	assert.True(t, settings.SetupComplete)
-	assert.Equal(t, "http://alerts.internal:9093", settings.AlertmanagerURL)
 }
 
 func TestSettingsAPITestsAlertmanagerReadiness(t *testing.T) {

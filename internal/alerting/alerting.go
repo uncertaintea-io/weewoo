@@ -46,16 +46,10 @@ func SendItContext(ctx context.Context, cfg config.Config, options AlertingOptio
 	if err != nil {
 		return fmt.Errorf("failed to get alertmanager URL: %w", err)
 	}
-	if alertmanagerEndpoint == "" {
-		alertmanagerEndpoint, err = cfg.GetConfig(config.AlertmanagerHostConfigKey)
-		if err != nil {
-			return fmt.Errorf("failed to get alertmanager host: %w", err)
-		}
-	}
-	return sendToAlertmanagerHost(ctx, alertmanagerEndpoint, options)
+	return sendToAlertmanagerEndpoint(ctx, alertmanagerEndpoint, options)
 }
 
-func sendToAlertmanagerHost(ctx context.Context, alertmanagerEndpoint string, options AlertingOptions) error {
+func sendToAlertmanagerEndpoint(ctx context.Context, alertmanagerEndpoint string, options AlertingOptions) error {
 	transportConfig, err := alertmanagerTransportConfig(alertmanagerEndpoint)
 	if err != nil {
 		return err

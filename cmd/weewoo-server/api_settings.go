@@ -57,11 +57,9 @@ func (a *settingsAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		parsedAlertmanager, _ := url.Parse(alertmanagerURL)
 		if err := a.cfg.SetConfigs(map[string]string{
-			config.AlertmanagerURLConfigKey:  alertmanagerURL,
-			config.AlertmanagerHostConfigKey: parsedAlertmanager.Host,
-			config.SetupCompleteConfigKey:    "true",
+			config.AlertmanagerURLConfigKey: alertmanagerURL,
+			config.SetupCompleteConfigKey:   "true",
 		}); err != nil {
 			http.Error(w, "failed to save settings", http.StatusInternalServerError)
 			return
@@ -84,10 +82,6 @@ func decodeSettingsRequest(w http.ResponseWriter, r *http.Request) (applicationS
 }
 
 func (a *settingsAPI) read() (applicationSettings, error) {
-	alertmanagerHost, err := a.cfg.GetConfig(config.AlertmanagerHostConfigKey)
-	if err != nil {
-		return applicationSettings{}, err
-	}
 	complete, err := a.cfg.GetConfig(config.SetupCompleteConfigKey)
 	if err != nil {
 		return applicationSettings{}, err
@@ -96,14 +90,7 @@ func (a *settingsAPI) read() (applicationSettings, error) {
 	if err != nil {
 		return applicationSettings{}, err
 	}
-	if alertmanagerURL == "" {
-		alertmanagerURL = alertmanagerHost
-	}
-	if alertmanagerURL != "" && !strings.Contains(alertmanagerURL, "://") {
-		alertmanagerURL = "http://" + alertmanagerURL
-	}
-	// Existing installations configured before onboarding already count as set up.
-	setupComplete := complete == "true" || alertmanagerHost != ""
+	setupComplete := complete == "true"
 	return applicationSettings{AlertmanagerURL: alertmanagerURL, SetupComplete: setupComplete}, nil
 }
 

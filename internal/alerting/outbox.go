@@ -34,7 +34,7 @@ type OutboxDispatcher struct {
 	emergencyMu           sync.Mutex
 	databaseUnavailable   bool
 	databaseOutageStarted time.Time
-	alertmanagerHost      string
+	alertmanagerEndpoint  string
 }
 
 func NewOutboxDispatcher(db *sql.DB, cfg config.Config, manager *Manager) *OutboxDispatcher {
@@ -43,13 +43,10 @@ func NewOutboxDispatcher(db *sql.DB, cfg config.Config, manager *Manager) *Outbo
 
 func newOutboxDispatcher(db *sql.DB, cfg config.Config, manager *Manager, send sendAlert) *OutboxDispatcher {
 	ctx, cancel := context.WithCancel(context.Background())
-	host, _ := cfg.GetConfig(config.AlertmanagerURLConfigKey)
-	if host == "" {
-		host, _ = cfg.GetConfig(config.AlertmanagerHostConfigKey)
-	}
+	endpoint, _ := cfg.GetConfig(config.AlertmanagerURLConfigKey)
 	dispatcher := &OutboxDispatcher{
 		db: db, cfg: cfg, manager: manager, send: send,
-		ctx: ctx, cancel: cancel, done: make(chan struct{}), alertmanagerHost: host,
+		ctx: ctx, cancel: cancel, done: make(chan struct{}), alertmanagerEndpoint: endpoint,
 	}
 	go dispatcher.run()
 	return dispatcher
@@ -107,13 +104,13 @@ func (d *OutboxDispatcher) reportDatabaseUnavailable(databaseErr error) {
 	}
 	d.databaseUnavailable = true
 	d.databaseOutageStarted = time.Now().UTC()
-	if d.alertmanagerHost == "" {
+	if d.alertmanagerEndpoint == "" {
 		slog.Error("PostgreSQL is unavailable and no cached Alertmanager host exists", "error", databaseErr)
 		return
 	}
 	options := databaseEmergencyOptions(d.databaseOutageStarted, time.Time{})
 	ctx, cancel := context.WithTimeout(d.ctx, outboxSendTimeout)
-	err := sendToAlertmanagerHost(ctx, d.alertmanagerHost, options)
+	err := sendToAlertmanagerEndpoint(ctx, d.alertmanagerEndpoint, options)
 	cancel()
 	if err != nil {
 		slog.Error("failed to send emergency database alert", "database_error", databaseErr, "alertmanager_error", err)
@@ -130,10 +127,10 @@ func (d *OutboxDispatcher) reportDatabaseRecovered() {
 	started := d.databaseOutageStarted
 	d.databaseUnavailable = false
 	d.databaseOutageStarted = time.Time{}
-	if d.alertmanagerHost != "" {
+	if d.alertmanagerEndpoint != "" {
 		options := databaseEmergencyOptions(started, now)
 		ctx, cancel := context.WithTimeout(d.ctx, outboxSendTimeout)
-		if err := sendToAlertmanagerHost(ctx, d.alertmanagerHost, options); err != nil {
+		if err := sendToAlertmanagerEndpoint(ctx, d.alertmanagerEndpoint, options); err != nil {
 			slog.Error("failed to resolve emergency database alert", "error", err)
 		}
 		cancel()
