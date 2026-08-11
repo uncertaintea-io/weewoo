@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-//go:embed sql/*.sql sqlite/*.sql
+//go:embed postgresql/*.sql sqlite/*.sql
 var migrationFS embed.FS
 
 // This lock ID is stable for WeeWoo migrations and prevents two replicas from
@@ -221,7 +221,7 @@ func loadFor(database string) ([]migration, error) {
 	var directory string
 	switch normalizedDatabase(database) {
 	case "postgresql":
-		directory = "sql"
+		directory = "postgresql"
 	case "sqlite":
 		directory = "sqlite"
 	default:
