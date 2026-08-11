@@ -236,7 +236,7 @@ func recordAnalysisResult(ctx context.Context, cfg config.Config, chunks ecdf.Ch
 
 	// Delegate the live primary result to the alert recorder, which persists its
 	// verdict and updates the service's alert condition as one operation.
-	generatorURL, _ := cfg.GetConfig("alert_generator_url")
+	generatorURL, _ := cfg.GetConfig(config.AlertGeneratorURLConfigKey)
 	if err := alerts.RecordAnalysis(ctx, alerting.AnalysisOutcome{ServiceID: service.Id, ServiceName: service.Name,
 		IndicatorID: indicatorID, Indicator: result.indicator, Timestamp: primary, Load: result.load,
 		PValue: result.pValue, Threshold: ksSignificanceLevel, Anomalous: result.anomalous,

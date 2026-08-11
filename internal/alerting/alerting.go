@@ -42,12 +42,12 @@ func SendIt(cfg config.Config, options AlertingOptions) error {
 }
 
 func SendItContext(ctx context.Context, cfg config.Config, options AlertingOptions) error {
-	alertmanagerEndpoint, err := cfg.GetConfig("alertmanager_url")
+	alertmanagerEndpoint, err := cfg.GetConfig(config.AlertmanagerURLConfigKey)
 	if err != nil {
 		return fmt.Errorf("failed to get alertmanager URL: %w", err)
 	}
 	if alertmanagerEndpoint == "" {
-		alertmanagerEndpoint, err = cfg.GetConfig("alertmanager_host")
+		alertmanagerEndpoint, err = cfg.GetConfig(config.AlertmanagerHostConfigKey)
 		if err != nil {
 			return fmt.Errorf("failed to get alertmanager host: %w", err)
 		}

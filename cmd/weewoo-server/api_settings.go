@@ -13,10 +13,7 @@ import (
 )
 
 const (
-	alertmanagerURLConfigKey  = "alertmanager_url"
-	alertmanagerHostConfigKey = "alertmanager_host"
-	setupCompleteConfigKey    = "setup_complete"
-	alertmanagerTestTimeout   = 5 * time.Second
+	alertmanagerTestTimeout = 5 * time.Second
 )
 
 type applicationSettings struct {
@@ -62,9 +59,9 @@ func (a *settingsAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		parsedAlertmanager, _ := url.Parse(alertmanagerURL)
 		if err := a.cfg.SetConfigs(map[string]string{
-			alertmanagerURLConfigKey:  alertmanagerURL,
-			alertmanagerHostConfigKey: parsedAlertmanager.Host,
-			setupCompleteConfigKey:    "true",
+			config.AlertmanagerURLConfigKey:  alertmanagerURL,
+			config.AlertmanagerHostConfigKey: parsedAlertmanager.Host,
+			config.SetupCompleteConfigKey:    "true",
 		}); err != nil {
 			http.Error(w, "failed to save settings", http.StatusInternalServerError)
 			return
@@ -87,15 +84,15 @@ func decodeSettingsRequest(w http.ResponseWriter, r *http.Request) (applicationS
 }
 
 func (a *settingsAPI) read() (applicationSettings, error) {
-	alertmanagerHost, err := a.cfg.GetConfig(alertmanagerHostConfigKey)
+	alertmanagerHost, err := a.cfg.GetConfig(config.AlertmanagerHostConfigKey)
 	if err != nil {
 		return applicationSettings{}, err
 	}
-	complete, err := a.cfg.GetConfig(setupCompleteConfigKey)
+	complete, err := a.cfg.GetConfig(config.SetupCompleteConfigKey)
 	if err != nil {
 		return applicationSettings{}, err
 	}
-	alertmanagerURL, err := a.cfg.GetConfig(alertmanagerURLConfigKey)
+	alertmanagerURL, err := a.cfg.GetConfig(config.AlertmanagerURLConfigKey)
 	if err != nil {
 		return applicationSettings{}, err
 	}

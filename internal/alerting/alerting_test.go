@@ -33,7 +33,7 @@ func TestSendItContextHonorsDeadline(t *testing.T) {
 	t.Cleanup(server.Close)
 
 	cfg := config.NewFakeConfig()
-	require.NoError(t, cfg.SetConfig("alertmanager_host", server.Listener.Addr().String()))
+	require.NoError(t, cfg.SetConfig(config.AlertmanagerHostConfigKey, server.Listener.Addr().String()))
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
@@ -62,7 +62,7 @@ func TestSendIt(t *testing.T) {
 	t.Cleanup(server.Close)
 
 	cfg := config.NewFakeConfig()
-	cfg.SetConfig("alertmanager_host", server.Listener.Addr().String())
+	cfg.SetConfig(config.AlertmanagerHostConfigKey, server.Listener.Addr().String())
 
 	err := SendIt(cfg, AlertingOptions{
 		Service:     "test",
