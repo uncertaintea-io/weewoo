@@ -29,7 +29,10 @@ type Collector interface {
 type ImportSummary struct {
 	TotalWindows    int
 	ImportedWindows int
-	GapWindows      int
+	// GapWindows is the number of historical collection intervals for which
+	// Prometheus returned no usable metrics. These monitoring gaps do not fail
+	// the import and do not contribute time chunks to the reference ECDF.
+	GapWindows int
 }
 
 type historicalImportWindowPolicy struct{}

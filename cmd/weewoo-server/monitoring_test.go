@@ -39,6 +39,10 @@ func (s *durableImportJobStore) create(_ context.Context, job *importJob) error 
 func (s *durableImportJobStore) update(_ context.Context, job importJob) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	stored, ok := s.jobs[job.ID]
+	if !ok || stored.OwnerID != job.OwnerID {
+		return fmt.Errorf("historical import job %d not found or no longer owned", job.ID)
+	}
 	job.cancel = nil
 	s.jobs[job.ID] = job
 	return nil
@@ -52,6 +56,27 @@ func (s *durableImportJobStore) list(context.Context) ([]importJob, error) {
 		jobs = append(jobs, job)
 	}
 	return jobs, nil
+}
+
+func (s *durableImportJobStore) markInterruptedIfStale(_ context.Context, id int64, cutoff time.Time) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	job, ok := s.jobs[id]
+	if !ok {
+		return false, fmt.Errorf("historical import job %d not found", id)
+	}
+	if job.State != "queued" && job.State != "running" && job.State != "building" {
+		return false, nil
+	}
+	if job.HeartbeatAt != nil && !job.HeartbeatAt.Before(cutoff) {
+		return false, nil
+	}
+	job.State = "failed"
+	job.Error = "Historical import interrupted by server restart"
+	job.EndedAt = interruptedImportEnd()
+	job.OwnerID = ""
+	s.jobs[id] = job
+	return true, nil
 }
 
 type cancellableImportCollector struct {
@@ -270,4 +295,24 @@ func TestRunningHistoricalImportIsMarkedInterruptedAfterRestart(t *testing.T) {
 	assert.Equal(t, "failed", loaded.State)
 	assert.Equal(t, "Historical import interrupted by server restart", loaded.Error)
 	assert.NotNil(t, loaded.EndedAt)
+}
+
+func TestRunningHistoricalImportOwnedByAnotherReplicaIsNotMarkedInterrupted(t *testing.T) {
+	store := newDurableImportJobStore()
+	service := &config.Service{Id: 42}
+	collector := &cancellableImportCollector{started: make(chan struct{})}
+	owner := newImportManager(collector, newTrackingMonitor(), nil, store)
+	job := owner.start(service, time.Now().UTC().Add(-time.Hour), time.Now().UTC())
+	<-collector.started
+	require.Eventually(t, func() bool {
+		return owner.get(job.ID).State == "running"
+	}, time.Second, time.Millisecond)
+
+	newImportManager(&gapImportCollector{}, newTrackingMonitor(), nil, store)
+	jobs, err := store.list(context.Background())
+	require.NoError(t, err)
+	require.Len(t, jobs, 1)
+	assert.Equal(t, "running", jobs[0].State)
+
+	require.NoError(t, owner.cancel(job.ID))
 }
