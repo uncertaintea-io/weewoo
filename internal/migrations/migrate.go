@@ -11,8 +11,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	databaseutil "github.com/uncertaintea-io/weewoo/internal/database"
 )
 
 //go:embed sql/*.sql sqlite/*.sql
@@ -44,9 +42,12 @@ type Status struct {
 
 // Apply applies every pending embedded migration in version order. Calls from
 // concurrent processes are serialized with a PostgreSQL advisory lock.
-func Apply(ctx context.Context, db *sql.DB) error {
-	if databaseutil.IsSQLite(db) {
+func Apply(ctx context.Context, db *sql.DB, database string) error {
+	if normalizedDatabase(database) == "sqlite" {
 		return applyWithoutAdvisoryLock(ctx, db)
+	}
+	if normalizedDatabase(database) != "postgresql" {
+		return fmt.Errorf("unsupported database %q", database)
 	}
 	conn, err := db.Conn(ctx)
 	if err != nil {
@@ -113,7 +114,7 @@ func applyWithoutAdvisoryLock(ctx context.Context, db *sql.DB) error {
 	if _, err := db.ExecContext(ctx, createSchemaMigrationsTableSQL); err != nil {
 		return fmt.Errorf("ensure schema_migrations table: %w", err)
 	}
-	items, err := loadFor(true)
+	items, err := loadFor("sqlite")
 	if err != nil {
 		return err
 	}
@@ -149,11 +150,11 @@ func applyWithoutAdvisoryLock(ctx context.Context, db *sql.DB) error {
 }
 
 // Statuses reports embedded migrations and whether each has been applied.
-func Statuses(ctx context.Context, db *sql.DB) ([]Status, error) {
+func Statuses(ctx context.Context, db *sql.DB, database string) ([]Status, error) {
 	if _, err := db.ExecContext(ctx, createSchemaMigrationsTableSQL); err != nil {
 		return nil, fmt.Errorf("ensure schema_migrations table: %w", err)
 	}
-	items, err := loadFor(databaseutil.IsSQLite(db))
+	items, err := loadFor(database)
 	if err != nil {
 		return nil, err
 	}
@@ -213,13 +214,18 @@ func appliedMigrations(ctx context.Context, db queryer) (map[int64]string, error
 }
 
 func load() ([]migration, error) {
-	return loadFor(false)
+	return loadFor("postgresql")
 }
 
-func loadFor(sqlite bool) ([]migration, error) {
-	directory := "sql"
-	if sqlite {
+func loadFor(database string) ([]migration, error) {
+	var directory string
+	switch normalizedDatabase(database) {
+	case "postgresql":
+		directory = "sql"
+	case "sqlite":
 		directory = "sqlite"
+	default:
+		return nil, fmt.Errorf("unsupported database %q", database)
 	}
 	entries, err := fs.ReadDir(migrationFS, directory)
 	if err != nil {
@@ -247,6 +253,10 @@ func loadFor(sqlite bool) ([]migration, error) {
 	}
 	sort.Slice(items, func(i, j int) bool { return items[i].Version < items[j].Version })
 	return items, nil
+}
+
+func normalizedDatabase(database string) string {
+	return strings.ToLower(strings.TrimSpace(database))
 }
 
 func parseFilename(filename string) (int64, string, error) {

@@ -21,11 +21,11 @@ func TestSQLiteMigrationsAndStores(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
 
-	require.NoError(t, Apply(context.Background(), db))
-	require.NoError(t, Apply(context.Background(), db), "migrations must be idempotent")
-	statuses, err := Statuses(context.Background(), db)
+	require.NoError(t, Apply(context.Background(), db, settings.Database))
+	require.NoError(t, Apply(context.Background(), db, settings.Database), "migrations must be idempotent")
+	statuses, err := Statuses(context.Background(), db, settings.Database)
 	require.NoError(t, err)
-	require.Len(t, statuses, 13)
+	require.Len(t, statuses, 14)
 	for _, status := range statuses {
 		require.True(t, status.Applied, "migration %d was not applied", status.Version)
 	}

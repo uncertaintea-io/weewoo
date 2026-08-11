@@ -254,7 +254,7 @@ func main() {
 		log.Fatalf("Failed to open database: %v", err)
 	}
 	migrationCtx, cancelMigrations := context.WithTimeout(context.Background(), startupMigrationTimeout)
-	err = migrations.Apply(migrationCtx, db)
+	err = migrations.Apply(migrationCtx, db, systemSettings.Database)
 	cancelMigrations()
 	if err != nil {
 		log.Fatalf("Failed to apply database migrations: %v", err)
