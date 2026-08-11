@@ -1,7 +1,9 @@
 package config
 
 import (
+	"database/sql"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strconv"
 	"testing"
@@ -173,6 +175,59 @@ func TestSystemSettingsOpenSQLiteDatabase(t *testing.T) {
 	var foreignKeys int
 	require.NoError(t, db.QueryRow(`PRAGMA foreign_keys`).Scan(&foreignKeys))
 	assert.Equal(t, 1, foreignKeys)
+}
+
+func TestSQLiteTimestampsRoundTripAsTheSameInstant(t *testing.T) {
+	settings := SystemSettings{
+		Database:    "sqlite",
+		DatabaseURL: filepath.Join(t.TempDir(), "timestamps.db"),
+	}
+	db, err := settings.OpenDatabase()
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, db.Close()) })
+
+	testTimestampRoundTrips(t, db, "TIMESTAMP")
+}
+
+func TestPostgreSQLTimestampsRoundTripAsTheSameInstant(t *testing.T) {
+	databaseURL := os.Getenv("WEEWOO_TEST_POSTGRES_URL")
+	if databaseURL == "" {
+		t.Skip("WEEWOO_TEST_POSTGRES_URL is not set")
+	}
+	settings := SystemSettings{Database: "postgresql", DatabaseURL: databaseURL}
+	db, err := settings.OpenDatabase()
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, db.Close()) })
+
+	var timezone string
+	require.NoError(t, db.QueryRow(`SHOW timezone`).Scan(&timezone))
+	assert.Equal(t, "UTC", timezone)
+	testTimestampRoundTrips(t, db, "TIMESTAMP WITH TIME ZONE")
+}
+
+func testTimestampRoundTrips(t *testing.T, db *sql.DB, timestampType string) {
+	t.Helper()
+	require.NoError(t, db.Ping())
+	_, err := db.Exec(`CREATE TEMPORARY TABLE timestamp_round_trip (value ` + timestampType + ` NOT NULL)`)
+	require.NoError(t, err)
+
+	springForward := time.Date(2026, time.March, 8, 2, 1, 0, 0, time.FixedZone("EST", -5*60*60))
+	for name, input := range map[string]time.Time{
+		"local now":      time.Now(),
+		"UTC now":        time.Now().UTC(),
+		"spring forward": springForward,
+	} {
+		t.Run(name, func(t *testing.T) {
+			var output time.Time
+			require.NoError(t, db.QueryRow(
+				`INSERT INTO timestamp_round_trip (value) VALUES ($1) RETURNING value`,
+				input,
+			).Scan(&output))
+			difference := input.Sub(output).Abs()
+			assert.Less(t, difference, time.Microsecond,
+				"timestamp changed instant: input=%s output=%s", input, output)
+		})
+	}
 }
 
 func TestSystemSettingsRejectsUnknownDatabase(t *testing.T) {

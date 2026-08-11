@@ -10,7 +10,8 @@ import (
 	"strings"
 	"time"
 
-	_ "github.com/jackc/pgx/v5/stdlib"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/stdlib"
 	"gopkg.in/yaml.v3"
 	_ "modernc.org/sqlite"
 )
@@ -31,23 +32,31 @@ type SystemSettings struct {
 }
 
 func (s *SystemSettings) OpenDatabase() (*sql.DB, error) {
-	var driver string
-	switch strings.ToLower(strings.TrimSpace(s.Database)) {
-	case "postgresql":
-		driver = "pgx"
-	case "sqlite":
-		driver = "sqlite"
-	default:
-		return nil, fmt.Errorf("database must be either postgresql or sqlite")
-	}
 	if strings.TrimSpace(s.DatabaseURL) == "" {
 		return nil, fmt.Errorf("database_url is required")
 	}
-	db, err := sql.Open(driver, s.DatabaseURL)
-	if err != nil {
-		return nil, err
+
+	var db *sql.DB
+	switch strings.ToLower(strings.TrimSpace(s.Database)) {
+	case "postgresql":
+		connectionConfig, err := pgx.ParseConfig(s.DatabaseURL)
+		if err != nil {
+			return nil, fmt.Errorf("parse postgresql database_url: %w", err)
+		}
+		db = stdlib.OpenDB(*connectionConfig, stdlib.OptionAfterConnect(func(ctx context.Context, conn *pgx.Conn) error {
+			_, err := conn.Exec(ctx, `SET timezone TO 'UTC'`)
+			return err
+		}))
+	case "sqlite":
+		var err error
+		db, err = sql.Open("sqlite", s.DatabaseURL)
+		if err != nil {
+			return nil, err
+		}
+	default:
+		return nil, fmt.Errorf("database must be either postgresql or sqlite")
 	}
-	if driver == "sqlite" {
+	if strings.EqualFold(strings.TrimSpace(s.Database), "sqlite") {
 		// A WeeWoo process owns its SQLite file. Keeping one connection makes
 		// multi-step publication and baseline changes serialize consistently.
 		db.SetMaxOpenConns(1)
