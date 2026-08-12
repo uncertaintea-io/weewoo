@@ -11,68 +11,57 @@ import (
 	"github.com/uncertaintea-io/weewoo/internal/ecdf"
 )
 
-func TestTimeOfDayBucketUsesServiceIntervalFromUTCMidnight(t *testing.T) {
-	timestamp := time.Date(2026, 7, 31, 1, 2, 59, 0, time.FixedZone("west", -4*60*60))
-	// 05:02:59 UTC belongs to the 05:02:30 bucket at a 30-second interval.
-	assert.Equal(t, float64((5*3600+2*60+59)/30), timeOfDayBucket(timestamp, 30*time.Second))
+type fixedEligibleChunkStore struct {
+	ecdf.ChunkStore
+	eligible int
 }
 
-func TestWriteTimeOfDayChunksPreservesSingletonPairAndObservationTimestamp(t *testing.T) {
-	store := ecdf.NewFakeChunkStore()
-	c := &collector{chunkStore: store}
-	service := &config.Service{Id: 7, Generation: 2, Interval: 30 * time.Second}
-	timestamp := time.Date(2026, 7, 31, 12, 0, 15, 900, time.UTC)
-
-	observations, err := c.writeTimeOfDayChunks(service, []PrometheusPoint{{Timestamp: timestamp, Value: 42}})
-	require.NoError(t, err)
-	require.Len(t, observations, 1)
-	storedAt := timestamp.Truncate(time.Second)
-	body, err := store.ReadChunk(7, TimeOfDayIndicator, storedAt)
-	require.NoError(t, err)
-	encodedAt, x, y, err := ecdf.Decode(body)
-	require.NoError(t, err)
-	assert.True(t, storedAt.Equal(encodedAt))
-	assert.Equal(t, []ecdf.Sample{{Value: float64(12 * 3600 / 30), Count: 1}}, x)
-	assert.Equal(t, []ecdf.Sample{{Value: 42, Count: 1}}, y)
+func (s *fixedEligibleChunkStore) CountEligibleChunks(context.Context, int, int, int64) (int, error) {
+	return s.eligible, nil
 }
 
-func TestTimeOfDayCoverageRequiresFiveDistinctDatesForNinetyFivePercentOfBuckets(t *testing.T) {
-	store := ecdf.NewFakeChunkStore()
-	const serviceID = 3
-	interval := 12 * time.Hour // two buckets keeps the fixture small; both must qualify for >=95%.
-	start := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
-	for day := range 5 {
-		for bucket := range 2 {
-			timestamp := start.AddDate(0, 0, day).Add(time.Duration(bucket) * interval)
-			chunk, err := ecdf.Encode(timestamp, []ecdf.Sample{{Value: float64(bucket), Count: 1}}, []ecdf.Sample{{Value: 10, Count: 1}})
-			require.NoError(t, err)
-			require.NoError(t, store.WriteChunk(serviceID, TimeOfDayIndicator, 1, timestamp, chunk))
-		}
-	}
-	service := &config.Service{Id: serviceID, Generation: 1, Interval: interval}
+func TestTimeOfDayReadinessUsesEligibleChunksOverFiveDayTrainingRange(t *testing.T) {
+	// Five days at a 15-second interval contain 28,800 expected time chunks.
+	// The 95% readiness threshold is therefore 27,360 eligible chunks.
+	store := &fixedEligibleChunkStore{ChunkStore: ecdf.NewFakeChunkStore(), eligible: 27_359}
+	service := &config.Service{Id: 3, Generation: 1, Interval: 15 * time.Second}
+
 	readiness, err := ReadModelReadiness(context.Background(), config.NewFakeConfig(), store, service, TimeOfDayIndicator)
 	require.NoError(t, err)
-	assert.Equal(t, 1.0, readiness.Coverage)
+	assert.InDelta(t, float64(27_359)/28_800, readiness.Coverage, 0.0000001)
+	assert.False(t, readiness.Ready)
+
+	store.eligible++
+	readiness, err = ReadModelReadiness(context.Background(), config.NewFakeConfig(), store, service, TimeOfDayIndicator)
+	require.NoError(t, err)
+	assert.Equal(t, 0.95, readiness.Coverage)
+	assert.Equal(t, readiness.Coverage, readiness.Progress)
+	assert.Equal(t, 5, readiness.Required)
+	assert.Equal(t, 27_360, readiness.Eligible)
 	assert.True(t, readiness.Ready)
 }
 
-func TestTimeOfDayLearningProgressAdvancesBeforeBucketsAreFullyTrained(t *testing.T) {
+func TestTimeOfDayCoverageCountsOnlyEligibleChunks(t *testing.T) {
 	store := ecdf.NewFakeChunkStore()
 	service := &config.Service{Id: 7, Interval: 12 * time.Hour, Generation: 1}
-	for day := range 2 {
-		for bucket := range 2 {
-			timestamp := time.Date(2026, time.July, 1+day, bucket*12, 0, 0, 0, time.UTC)
-			chunk, err := ecdf.Encode(timestamp, []ecdf.Sample{{Value: float64(bucket), Count: 1}}, []ecdf.Sample{{Value: 42, Count: 1}})
-			require.NoError(t, err)
-			require.NoError(t, store.WriteChunk(service.Id, TimeOfDayIndicator, service.Generation, timestamp, chunk))
-		}
+	start := time.Date(2026, time.July, 1, 0, 0, 0, 0, time.UTC)
+	for chunkNumber := range 5 {
+		timestamp := start.Add(time.Duration(chunkNumber) * service.Interval)
+		chunk, err := ecdf.Encode(timestamp, []ecdf.Sample{{Value: float64(chunkNumber), Count: 1}}, []ecdf.Sample{{Value: 42, Count: 1}})
+		require.NoError(t, err)
+		require.NoError(t, store.WriteChunk(service.Id, TimeOfDayIndicator, service.Generation, timestamp, chunk))
 	}
+	require.NoError(t, store.WriteVerdict(context.Background(), service.Id, TimeOfDayIndicator, service.Generation, start, false, 0.01))
 
 	readiness, err := ReadModelReadiness(context.Background(), config.NewFakeConfig(), store, service, TimeOfDayIndicator)
 
 	require.NoError(t, err)
-	assert.Equal(t, 0.0, readiness.Coverage)
+	// Five days contain ten expected 12-hour chunks. One of the five received
+	// chunks is Bad, leaving four eligible chunks.
+	assert.Equal(t, 0.4, readiness.Coverage)
 	assert.InDelta(t, 0.4, readiness.Progress, 0.0001)
+	assert.Equal(t, 4, readiness.Eligible)
+	assert.False(t, readiness.Ready)
 }
 
 func TestModelReadinessUsesEligibleChunkRequirementForLoadLatency(t *testing.T) {

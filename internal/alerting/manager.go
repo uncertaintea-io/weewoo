@@ -943,6 +943,7 @@ func (m *Manager) GetEvidence(ctx context.Context, occurrenceID int64) (AlertEvi
 
 func (m *Manager) readEvidenceSamples(ctx context.Context, serviceID, indicatorID int, generation int64, primary time.Time) ([][]ecdf.Sample, [][]ecdf.Sample, error) {
 	start := primary
+	// TODO: Should we have a per-indicator alert evidence window? A common one for all indicators?
 	if indicatorID == loadTimeOfDayIndicatorID {
 		start = primary.Add(-alertEvidenceWindow)
 	}

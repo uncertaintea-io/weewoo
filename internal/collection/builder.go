@@ -135,9 +135,6 @@ func BuildServiceECDFs(ctx context.Context, chunkStore ecdf.ChunkStore, jointSto
 		return fmt.Errorf("read service generation: %w", err)
 	}
 	for _, indicatorID := range indicatorIDs {
-		if indicatorID == TimeOfDayIndicator && service.Interval <= 0 {
-			continue
-		}
 		readiness, err := ReadModelReadiness(buildCtx, cfg, chunkStore, service, indicatorID)
 		if err != nil {
 			return fmt.Errorf("measure indicator %d readiness: %w", indicatorID, err)

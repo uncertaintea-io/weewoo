@@ -184,11 +184,11 @@ type backpressureAnalysisQueue struct {
 	contextSubmissions int
 }
 
-func (*backpressureAnalysisQueue) Submit(AnalysisRequest) error {
+func (*backpressureAnalysisQueue) Submit(*AnalysisRequest) error {
 	return ErrAnalysisQueueFull
 }
 
-func (q *backpressureAnalysisQueue) SubmitContext(_ context.Context, _ AnalysisRequest) error {
+func (q *backpressureAnalysisQueue) SubmitContext(_ context.Context, _ *AnalysisRequest) error {
 	q.contextSubmissions++
 	return nil
 }
