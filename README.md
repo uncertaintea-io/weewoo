@@ -19,6 +19,25 @@ database: sqlite
 connection_string: /var/lib/weewoo/weewoo.db
 ```
 
+The public container reserves `/var/lib/weewoo` for persistent data. Mount a
+Docker volume there when using SQLite.
+
+## Running the public container
+
+The container reads `config.yaml` from its `/app` working directory by default:
+
+```shell
+docker run --rm \
+  -p 8080:8080 \
+  -p 5000:5000 \
+  -v ./config.yaml:/app/config.yaml:ro \
+  -v weewoo-data:/var/lib/weewoo \
+  ghcr.io/uncertaintea-io/weewoo:latest
+```
+
+Set `WEEWOO_CONFIG` to use another path, or pass `-config` explicitly. The
+command-line flag takes precedence over the environment variable.
+
 Initialize or update either backend with the same migration command:
 
 ```shell

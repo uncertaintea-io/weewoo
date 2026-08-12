@@ -32,6 +32,18 @@ func (f serviceRoundTripFunc) RoundTrip(request *http.Request) (*http.Response, 
 	return f(request)
 }
 
+func TestDefaultConfigPath(t *testing.T) {
+	t.Run("uses local config by default", func(t *testing.T) {
+		t.Setenv("WEEWOO_CONFIG", "")
+		assert.Equal(t, "config.yaml", defaultConfigPath())
+	})
+
+	t.Run("uses environment override", func(t *testing.T) {
+		t.Setenv("WEEWOO_CONFIG", "/run/secrets/weewoo.yaml")
+		assert.Equal(t, "/run/secrets/weewoo.yaml", defaultConfigPath())
+	})
+}
+
 func (c *fakeServiceCollector) Stop() {}
 func (c *fakeServiceCollector) Unschedule(serviceID int) {
 	c.unscheduled = serviceID

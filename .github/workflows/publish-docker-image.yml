@@ -11,6 +11,7 @@ permissions:
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
+  SERVER_IMAGE_NAME: ${{ github.repository }}-server
 
 jobs:
   build-and-push:
@@ -51,8 +52,30 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Extract Docker metadata
-        id: meta
+      - name: Extract server image metadata
+        id: server-meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.SERVER_IMAGE_NAME }}
+          tags: |
+            type=raw,value=latest
+            type=ref,event=tag
+            type=sha,prefix=sha-
+
+      - name: Build and push server image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: cmd/weewoo-server/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.server-meta.outputs.tags }}
+          labels: ${{ steps.server-meta.outputs.labels }}
+          cache-from: type=gha,scope=server
+          cache-to: type=gha,mode=max,scope=server
+
+      - name: Extract public image metadata
+        id: public-meta
         uses: docker/metadata-action@v6
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
@@ -61,13 +84,16 @@ jobs:
             type=ref,event=tag
             type=sha,prefix=sha-
 
-      - name: Build and push Docker image
+      - name: Build and push public image
         uses: docker/build-push-action@v7
         with:
           context: .
+          file: Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          build-args: |
+            WEEWOO_SERVER_IMAGE=${{ env.REGISTRY }}/${{ env.SERVER_IMAGE_NAME }}:${{ github.event.release.tag_name }}
+          tags: ${{ steps.public-meta.outputs.tags }}
+          labels: ${{ steps.public-meta.outputs.labels }}
+          cache-from: type=gha,scope=public
+          cache-to: type=gha,mode=max,scope=public

@@ -243,7 +243,7 @@ func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	slog.SetDefault(logger)
 
-	configfile := flag.String("config", "config.yaml", "Config file")
+	configfile := flag.String("config", defaultConfigPath(), "Config file")
 	flag.Parse()
 	systemSettings, err := config.ReadSystemSettings(*configfile)
 	if err != nil {
@@ -382,4 +382,11 @@ func main() {
 			logger.Error("server shutdown", slog.Any("error", err))
 		}
 	}
+}
+
+func defaultConfigPath() string {
+	if path := os.Getenv("WEEWOO_CONFIG"); path != "" {
+		return path
+	}
+	return "config.yaml"
 }
