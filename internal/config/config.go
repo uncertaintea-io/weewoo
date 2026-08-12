@@ -4,12 +4,16 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"net/url"
 	"os"
+	"strings"
 	"time"
 
-	_ "github.com/jackc/pgx/v5/stdlib"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/stdlib"
 	"gopkg.in/yaml.v3"
+	_ "modernc.org/sqlite"
 )
 
 var (
@@ -23,13 +27,49 @@ var MinimumServiceInterval = 15 * time.Second
 
 // this struct tells config how to connect to the database using yaml files
 type SystemSettings struct {
-	DatabaseURL string `yaml:"database_url"`
+	Database         string `yaml:"database"`
+	ConnectionString string `yaml:"connection_string"`
 }
 
 func (s *SystemSettings) OpenDatabase() (*sql.DB, error) {
-	db, err := sql.Open("pgx", s.DatabaseURL)
-	if err != nil {
-		return nil, err
+	if strings.TrimSpace(s.ConnectionString) == "" {
+		return nil, fmt.Errorf("connection_string is required")
+	}
+
+	var db *sql.DB
+	switch strings.ToLower(strings.TrimSpace(s.Database)) {
+	case "postgresql":
+		connectionConfig, err := pgx.ParseConfig(s.ConnectionString)
+		if err != nil {
+			return nil, fmt.Errorf("parse postgresql connection_string: %w", err)
+		}
+		db = stdlib.OpenDB(*connectionConfig, stdlib.OptionAfterConnect(func(ctx context.Context, conn *pgx.Conn) error {
+			_, err := conn.Exec(ctx, `SET timezone TO 'UTC'`)
+			return err
+		}))
+	case "sqlite":
+		var err error
+		db, err = sql.Open("sqlite", s.ConnectionString)
+		if err != nil {
+			return nil, err
+		}
+	default:
+		return nil, fmt.Errorf("database must be either postgresql or sqlite")
+	}
+	if strings.EqualFold(strings.TrimSpace(s.Database), "sqlite") {
+		// A WeeWoo process owns its SQLite file. Keeping one connection makes
+		// multi-step publication and baseline changes serialize consistently.
+		db.SetMaxOpenConns(1)
+		for _, pragma := range []string{
+			`PRAGMA foreign_keys = ON`,
+			`PRAGMA busy_timeout = 5000`,
+			`PRAGMA journal_mode = WAL`,
+		} {
+			if _, err := db.Exec(pragma); err != nil {
+				_ = db.Close()
+				return nil, fmt.Errorf("configure sqlite database: %w", err)
+			}
+		}
 	}
 	return db, nil
 }

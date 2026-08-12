@@ -1,14 +1,23 @@
 package alerting
 
 import (
+	"database/sql"
 	"errors"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/uncertaintea-io/weewoo/internal/config"
 	"github.com/uncertaintea-io/weewoo/internal/ecdf"
 )
+
+func TestNewManagerUsesConfiguredDatabaseForLockClause(t *testing.T) {
+	db := &sql.DB{}
+
+	assert.Empty(t, NewManager(db, config.NewFakeConfig(), " SQLite ").lockClause)
+	assert.Equal(t, " FOR UPDATE", NewManager(db, config.NewFakeConfig(), "postgresql").lockClause)
+}
 
 func TestSeverityForCount(t *testing.T) {
 	assert.Equal(t, SeverityWarning, severityForCount(1, 3))

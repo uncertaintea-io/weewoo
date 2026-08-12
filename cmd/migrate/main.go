@@ -45,13 +45,13 @@ func main() {
 
 	switch flag.Arg(0) {
 	case "up":
-		if err := migrations.Apply(context.Background(), db); err != nil {
+		if err := migrations.Apply(context.Background(), db, systemSettings.Database); err != nil {
 			slog.Error("failed to apply migrations", slog.Any("error", err))
 			os.Exit(1)
 		}
 		slog.Info("migrations applied")
 	case "status":
-		statuses, err := migrations.Statuses(context.Background(), db)
+		statuses, err := migrations.Statuses(context.Background(), db, systemSettings.Database)
 		if err != nil {
 			slog.Error("failed to list migrations", slog.Any("error", err))
 			os.Exit(1)

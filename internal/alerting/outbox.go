@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/uncertaintea-io/weewoo/internal/config"
+	databaseutil "github.com/uncertaintea-io/weewoo/internal/database"
 )
 
 const (
@@ -35,6 +36,7 @@ type OutboxDispatcher struct {
 	databaseUnavailable   bool
 	databaseOutageStarted time.Time
 	alertmanagerEndpoint  string
+	sqlite                bool
 }
 
 func NewOutboxDispatcher(db *sql.DB, cfg config.Config, manager *Manager) *OutboxDispatcher {
@@ -47,6 +49,7 @@ func newOutboxDispatcher(db *sql.DB, cfg config.Config, manager *Manager, send s
 	dispatcher := &OutboxDispatcher{
 		db: db, cfg: cfg, manager: manager, send: send,
 		ctx: ctx, cancel: cancel, done: make(chan struct{}), alertmanagerEndpoint: endpoint,
+		sqlite: databaseutil.IsSQLite(db),
 	}
 	go dispatcher.run()
 	return dispatcher
@@ -137,26 +140,26 @@ func (d *OutboxDispatcher) reportDatabaseRecovered() {
 	}
 	historyCtx, cancel := context.WithTimeout(d.ctx, outboxSendTimeout)
 	err := d.manager.RecordMonitoringFailure(historyCtx, MonitoringFailure{
-		ServiceName: "WeeWoo", OccurredAt: started, Operation: "postgresql",
-		Description:      "WeeWoo could not persist monitoring state while PostgreSQL was unavailable.",
-		TechnicalDetails: fmt.Sprintf("PostgreSQL recovered at %s.", now.Format(time.RFC3339)),
+		ServiceName: "WeeWoo", OccurredAt: started, Operation: "database",
+		Description:      "WeeWoo could not persist monitoring state while its database was unavailable.",
+		TechnicalDetails: fmt.Sprintf("Database recovered at %s.", now.Format(time.RFC3339)),
 	})
 	if err == nil {
-		err = d.manager.ResolveMonitoring(historyCtx, 0, "postgresql", now)
+		err = d.manager.ResolveMonitoring(historyCtx, 0, "database", now)
 	}
 	cancel()
 	if err != nil {
-		slog.Error("failed to reconcile PostgreSQL outage history", "error", err)
+		slog.Error("failed to reconcile database outage history", "error", err)
 	}
 }
 
 func databaseEmergencyOptions(started, ended time.Time) AlertingOptions {
 	return AlertingOptions{
-		Service: "WeeWoo", Serverity: SeverityCritical, Indicator: "PostgreSQL",
+		Service: "WeeWoo", Serverity: SeverityCritical, Indicator: "Database",
 		AlertName: "weewoo_database_unavailable", Summary: "WeeWoo database unavailable",
 		Description:     "WeeWoo cannot persist alert history, Verdicts, or collection recovery state.",
-		Impact:          "Monitoring results may be delayed or incomplete until PostgreSQL recovers.",
-		SuggestedAction: "Restore PostgreSQL connectivity and inspect WeeWoo health.",
+		Impact:          "Monitoring results may be delayed or incomplete until the database recovers.",
+		SuggestedAction: "Restore database connectivity and inspect WeeWoo health.",
 		StartsAt:        started, EndsAt: ended,
 		Labels: map[string]string{"weewoo_alert_id": "database-unavailable", "alert_type": "monitoring_impaired"},
 	}
@@ -169,7 +172,7 @@ func (d *OutboxDispatcher) deliverOne() error {
 		body    []byte
 		attempt int
 	)
-	err := d.db.QueryRowContext(d.ctx, `
+	claimQuery := `
 		UPDATE alert_outbox
 		SET attempts=attempts+1,
 		    next_attempt_at=NOW() + INTERVAL '30 seconds'
@@ -181,7 +184,22 @@ func (d *OutboxDispatcher) deliverOne() error {
 			LIMIT 1
 		)
 		RETURNING id, alert_id, payload, attempts
-	`).Scan(&id, &alertID, &body, &attempt)
+	`
+	if d.sqlite {
+		claimQuery = `
+			UPDATE alert_outbox
+			SET attempts=attempts+1,
+			    next_attempt_at=datetime(CURRENT_TIMESTAMP, '+30 seconds')
+			WHERE id = (
+				SELECT id FROM alert_outbox
+				WHERE state='pending' AND next_attempt_at <= CURRENT_TIMESTAMP
+				ORDER BY id
+				LIMIT 1
+			)
+			RETURNING id, alert_id, payload, attempts
+		`
+	}
+	err := d.db.QueryRowContext(d.ctx, claimQuery).Scan(&id, &alertID, &body, &attempt)
 	if err != nil {
 		return err
 	}
@@ -250,15 +268,28 @@ func (d *OutboxDispatcher) deliverOne() error {
 
 func (d *OutboxDispatcher) markFailed(id, alertID int64, attempt int, deliveryErr error) error {
 	delay := time.Duration(math.Min(math.Pow(2, float64(attempt)), 300)) * time.Second
-	_, err := d.db.ExecContext(d.ctx, `
-		WITH updated_outbox AS (
-			UPDATE alert_outbox
-			SET next_attempt_at=$3, last_error=$4
-			WHERE id=$1
-		)
-		UPDATE alert SET alertmanager_state='failed', alertmanager_error=$4, updated_at=NOW()
-		WHERE id=$2
-	`, id, alertID, time.Now().UTC().Add(delay), sanitizeDetails(deliveryErr.Error()))
+	now := time.Now().UTC()
+	nextAttempt := now.Add(delay)
+	nextAttemptAt := any(nextAttempt)
+	if d.sqlite {
+		nextAttemptAt = nextAttempt.Format(time.DateTime)
+	}
+	tx, err := d.db.BeginTx(d.ctx, nil)
+	if err == nil {
+		_, err = tx.ExecContext(d.ctx, `
+			UPDATE alert_outbox SET next_attempt_at=$2, last_error=$3 WHERE id=$1
+		`, id, nextAttemptAt, sanitizeDetails(deliveryErr.Error()))
+	}
+	if err == nil {
+		_, err = tx.ExecContext(d.ctx, `
+			UPDATE alert SET alertmanager_state='failed', alertmanager_error=$2, updated_at=$3 WHERE id=$1
+		`, alertID, sanitizeDetails(deliveryErr.Error()), now)
+	}
+	if err == nil {
+		err = tx.Commit()
+	} else if tx != nil {
+		_ = tx.Rollback()
+	}
 	if err != nil {
 		return errors.Join(deliveryErr, err)
 	}
@@ -268,14 +299,14 @@ func (d *OutboxDispatcher) markFailed(id, alertID int64, attempt int, deliveryEr
 func (d *OutboxDispatcher) enqueueRefreshes() error {
 	_, err := d.db.ExecContext(d.ctx, `
 		INSERT INTO alert_outbox (alert_id, operation, payload)
-		SELECT a.id, 'firing', previous.payload
+		SELECT a.id, 'firing', (
+			SELECT payload FROM alert_outbox previous
+			WHERE previous.alert_id=a.id AND previous.operation='firing'
+			ORDER BY previous.id DESC LIMIT 1
+		)
 		FROM alert AS a
-		JOIN LATERAL (
-			SELECT payload FROM alert_outbox
-			WHERE alert_id=a.id AND operation='firing'
-			ORDER BY id DESC LIMIT 1
-		) AS previous ON true
 		WHERE a.status='firing'
+		  AND EXISTS (SELECT 1 FROM alert_outbox previous WHERE previous.alert_id=a.id AND previous.operation='firing')
 		  AND (a.last_handoff_at IS NULL OR a.last_handoff_at < $1)
 		  AND NOT EXISTS (
 			SELECT 1 FROM alert_outbox pending

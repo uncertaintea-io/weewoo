@@ -17,30 +17,39 @@ func NewDatabaseChunkStore(db *sql.DB) ChunkStore {
 
 // WriteChunk writes a time chunk to the database.
 func (c *database) WriteChunk(serviceID, indicatorID int, generation int64, timestamp time.Time, chunk []byte) error {
+	timestamp = timestamp.Truncate(time.Second)
 	tx, err := c.db.Begin()
 	if err != nil {
 		return fmt.Errorf("begin chunk write: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
+	result, err := tx.Exec(`
+		INSERT INTO time_chunk (service_id, indicator_id, "timestamp", chunk, generation)
+		VALUES ($2, $3, $4, $1, $5)
+		ON CONFLICT (service_id, indicator_id, "timestamp")
+		DO UPDATE SET chunk=EXCLUDED.chunk, collected_at=CURRENT_TIMESTAMP,
+		              generation=EXCLUDED.generation
+		WHERE time_chunk.generation <= EXCLUDED.generation
+	`, chunk, serviceID, indicatorID, timestamp, generation)
+	if err != nil {
+		return fmt.Errorf("failed to write chunk: %w", err)
+	}
+	written, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("inspect chunk write: %w", err)
+	}
+	if written == 0 {
+		return tx.Commit()
+	}
 	_, err = tx.Exec(`
-		WITH written AS (
-			INSERT INTO time_chunk (service_id, indicator_id, "timestamp", chunk, generation)
-			VALUES ($2, $3, $4::timestamptz(0), $1, $5)
-			ON CONFLICT (service_id, indicator_id, "timestamp")
-			DO UPDATE SET chunk=EXCLUDED.chunk, collected_at=CURRENT_TIMESTAMP,
-			              generation=EXCLUDED.generation
-			WHERE time_chunk.generation <= EXCLUDED.generation
-			RETURNING service_id, indicator_id, "timestamp", generation
-		)
 		INSERT INTO verdict (service_id, indicator_id, "timestamp", automated_good, pvalue, analysis_state, generation)
-		SELECT service_id, indicator_id, "timestamp", NULL, NULL, 'pending', generation
-		FROM written
+		VALUES ($1, $2, $3, NULL, NULL, 'pending', $4)
 		ON CONFLICT (service_id, indicator_id, "timestamp")
 		DO UPDATE SET automated_good=NULL, pvalue=NULL, analysis_state='pending',
 		              review_override=NULL, reviewed_at=NULL, review_reason=NULL,
 		              generation=EXCLUDED.generation
 		WHERE verdict.generation < EXCLUDED.generation
-	`, chunk, serviceID, indicatorID, timestamp, generation)
+	`, serviceID, indicatorID, timestamp, generation)
 	if err != nil {
 		return fmt.Errorf("failed to write chunk: %w", err)
 	}
@@ -52,13 +61,14 @@ func (c *database) WriteChunk(serviceID, indicatorID int, generation int64, time
 
 // ReadChunk reads a time chunk from the database.
 func (c *database) ReadChunk(serviceId int, indicatorId int, timestamp time.Time) ([]byte, error) {
+	timestamp = timestamp.Truncate(time.Second)
 	var chunk []byte
 	err := c.db.QueryRow(`
 		SELECT chunk
 		FROM time_chunk
 		WHERE service_id = $1
 		  AND indicator_id = $2
-		  AND "timestamp" = $3::timestamptz(0)
+		  AND "timestamp" = $3
   	`, serviceId, indicatorId, timestamp).Scan(&chunk)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read chunk: %w", err)
@@ -69,11 +79,12 @@ func (c *database) ReadChunk(serviceId int, indicatorId int, timestamp time.Time
 // WriteVerdict records the latest verdict for a time chunk. The upsert permits
 // a later review workflow to reverse a verdict without changing this API.
 func (c *database) WriteVerdict(ctx context.Context, serviceID, indicatorID int, generation int64, timestamp time.Time, good bool, pValue float64) error {
+	timestamp = timestamp.Truncate(time.Second)
 	_, err := c.db.ExecContext(ctx, `
 		UPDATE verdict
 		SET automated_good=$5, pvalue=$6, analysis_state=CASE WHEN $5 THEN 'good' ELSE 'bad' END
 		WHERE service_id=$1 AND indicator_id=$2 AND generation=$3
-		  AND "timestamp"=$4::timestamptz(0)
+		  AND "timestamp"=$4
 	`, serviceID, indicatorID, generation, timestamp, good, pValue)
 	if err != nil {
 		return fmt.Errorf("failed to write verdict: %w", err)

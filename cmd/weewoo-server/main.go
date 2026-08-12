@@ -254,7 +254,7 @@ func main() {
 		log.Fatalf("Failed to open database: %v", err)
 	}
 	migrationCtx, cancelMigrations := context.WithTimeout(context.Background(), startupMigrationTimeout)
-	err = migrations.Apply(migrationCtx, db)
+	err = migrations.Apply(migrationCtx, db, systemSettings.Database)
 	cancelMigrations()
 	if err != nil {
 		log.Fatalf("Failed to apply database migrations: %v", err)
@@ -272,7 +272,7 @@ func main() {
 	defer scheduler.Stop()
 	chunkStore := ecdf.NewDatabaseChunkStore(db)
 	jointStore := ecdf.NewDatabaseJointStore(db)
-	alertManager := alerting.NewManager(db, cfg)
+	alertManager := alerting.NewManager(db, cfg, systemSettings.Database)
 	alertDispatcher := alerting.NewOutboxDispatcher(db, cfg, alertManager)
 	defer alertDispatcher.Stop()
 	analysisWorker := collection.NewAnalysisWorker(cfg, jointStore, chunkStore, alertManager, collection.DefaultAnalysisQueueCapacity)

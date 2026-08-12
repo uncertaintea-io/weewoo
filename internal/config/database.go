@@ -10,10 +10,12 @@ import (
 	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
+	databaseutil "github.com/uncertaintea-io/weewoo/internal/database"
 )
 
 type database struct {
-	db *sql.DB
+	db     *sql.DB
+	sqlite bool
 }
 
 // These keys must match the collection indicator IDs. Taking every publication
@@ -86,7 +88,7 @@ func (c *database) SetConfigs(values map[string]string) error {
 
 // opens connection to the database for the functions below to use
 func NewDatabaseConfig(db *sql.DB) Config {
-	return &database{db: db}
+	return &database{db: db, sqlite: databaseutil.IsSQLite(db)}
 }
 
 func (c *database) ReadDataSource(id int) (*DataSource, error) {
@@ -164,11 +166,15 @@ func (c *database) updateService(ctx context.Context, service *Service, expected
 	var previous Service
 	var intervalSeconds int64
 	var baselineResetAt sql.NullTime
+	lockClause := " FOR UPDATE"
+	if c.sqlite {
+		lockClause = ""
+	}
 	err = tx.QueryRowContext(ctx, `
 		SELECT id, name, prometheus_url, load_query, latency_query, interval_seconds,
 		       paused, revision, generation, baseline_reset_at
-		FROM service WHERE id=$1 FOR UPDATE
-	`, service.Id).Scan(&previous.Id, &previous.Name, &previous.PrometheusURL, &previous.LoadQuery,
+		FROM service WHERE id=$1`+lockClause,
+		service.Id).Scan(&previous.Id, &previous.Name, &previous.PrometheusURL, &previous.LoadQuery,
 		&previous.LatencyQuery, &intervalSeconds, &previous.Paused, &previous.Revision,
 		&previous.Generation, &baselineResetAt)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -214,9 +220,11 @@ func (c *database) updateService(ctx context.Context, service *Service, expected
 		return fmt.Errorf("insert service revision: %w", err)
 	}
 	if material {
-		for _, indicatorID := range baselinePublicationIndicatorIDs {
-			if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1, $2)`, service.Id, indicatorID); err != nil {
-				return fmt.Errorf("lock service baseline indicator %d: %w", indicatorID, err)
+		if !c.sqlite {
+			for _, indicatorID := range baselinePublicationIndicatorIDs {
+				if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1, $2)`, service.Id, indicatorID); err != nil {
+					return fmt.Errorf("lock service baseline indicator %d: %w", indicatorID, err)
+				}
 			}
 		}
 		if _, err := tx.ExecContext(ctx, `DELETE FROM ecdf WHERE service_id=$1`, service.Id); err != nil {

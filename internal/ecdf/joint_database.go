@@ -11,16 +11,19 @@ import (
 	"io"
 	"log/slog"
 	"time"
+
+	databaseutil "github.com/uncertaintea-io/weewoo/internal/database"
 )
 
 const retainedJointECDFVersions = 5
 
 type databaseJointStore struct {
-	db *sql.DB
+	db     *sql.DB
+	sqlite bool
 }
 
 func NewDatabaseJointStore(db *sql.DB) JointStore {
-	return &databaseJointStore{db: db}
+	return &databaseJointStore{db: db, sqlite: databaseutil.IsSQLite(db)}
 }
 
 func (s *databaseJointStore) Publish(ctx context.Context, serviceID, indicatorID int, intervalEnd time.Time, build func(io.Writer) error) (bytesWritten int64, published bool, err error) {
@@ -34,43 +37,56 @@ func (s *databaseJointStore) Publish(ctx context.Context, serviceID, indicatorID
 	if err != nil {
 		return 0, false, fmt.Errorf("acquire ECDF database connection: %w", err)
 	}
-	defer conn.Close()
-
-	var acquired bool
-	if err := conn.QueryRowContext(ctx, `SELECT pg_try_advisory_lock($1, $2)`, serviceID, indicatorID).Scan(&acquired); err != nil {
-		return 0, false, fmt.Errorf("acquire ECDF publication lock: %w", err)
-	}
-	if !acquired {
-		slog.Info(
-			"ECDF publication skipped because PostgreSQL advisory lock is held",
-			"service_id", serviceID,
-			"indicator_id", indicatorID,
-			"coordination_mode", "postgres_advisory_lock",
-		)
-		return 0, false, nil
-	}
 	defer func() {
-		var unlocked bool
-		unlockErr := conn.QueryRowContext(context.Background(), `SELECT pg_advisory_unlock($1, $2)`, serviceID, indicatorID).Scan(&unlocked)
-		if unlockErr != nil || !unlocked {
-			if unlockErr == nil {
-				unlockErr = errors.New("database reported lock was not held")
-			}
-			err = errors.Join(err, fmt.Errorf("release ECDF publication lock: %w", unlockErr))
+		if conn != nil {
+			_ = conn.Close()
 		}
 	}()
 
-	var alreadyPublished bool
-	if err := conn.QueryRowContext(ctx, `
+	if !s.sqlite {
+		var acquired bool
+		if err := conn.QueryRowContext(ctx, `SELECT pg_try_advisory_lock($1, $2)`, serviceID, indicatorID).Scan(&acquired); err != nil {
+			return 0, false, fmt.Errorf("acquire ECDF publication lock: %w", err)
+		}
+		if !acquired {
+			slog.Info(
+				"ECDF publication skipped because PostgreSQL advisory lock is held",
+				"service_id", serviceID,
+				"indicator_id", indicatorID,
+				"coordination_mode", "postgres_advisory_lock",
+			)
+			return 0, false, nil
+		}
+		defer func() {
+			var unlocked bool
+			unlockErr := conn.QueryRowContext(context.Background(), `SELECT pg_advisory_unlock($1, $2)`, serviceID, indicatorID).Scan(&unlocked)
+			if unlockErr != nil || !unlocked {
+				if unlockErr == nil {
+					unlockErr = errors.New("database reported lock was not held")
+				}
+				err = errors.Join(err, fmt.Errorf("release ECDF publication lock: %w", unlockErr))
+			}
+		}()
+	}
+
+	const alreadyPublishedQuery = `
 		SELECT EXISTS (
 			SELECT 1 FROM ecdf
 			WHERE service_id = $1 AND indicator_id = $2 AND interval_end = $3
 		)
-	`, serviceID, indicatorID, intervalEnd).Scan(&alreadyPublished); err != nil {
+	`
+	var alreadyPublished bool
+	if err := conn.QueryRowContext(ctx, alreadyPublishedQuery, serviceID, indicatorID, intervalEnd).Scan(&alreadyPublished); err != nil {
 		return 0, false, fmt.Errorf("check ECDF build interval: %w", err)
 	}
 	if alreadyPublished {
 		return 0, false, nil
+	}
+	if s.sqlite {
+		if err := conn.Close(); err != nil {
+			return 0, false, fmt.Errorf("release ECDF database connection for build: %w", err)
+		}
+		conn = nil
 	}
 
 	var body bytes.Buffer
@@ -80,12 +96,26 @@ func (s *databaseJointStore) Publish(ctx context.Context, serviceID, indicatorID
 	if body.Len() == 0 {
 		return 0, false, errors.New("built ECDF is empty")
 	}
+	if s.sqlite {
+		conn, err = s.db.Conn(ctx)
+		if err != nil {
+			return 0, false, fmt.Errorf("reacquire ECDF database connection after build: %w", err)
+		}
+	}
 
 	tx, err := conn.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, false, fmt.Errorf("begin ECDF publication: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
+	if s.sqlite {
+		if err := tx.QueryRowContext(ctx, alreadyPublishedQuery, serviceID, indicatorID, intervalEnd).Scan(&alreadyPublished); err != nil {
+			return 0, false, fmt.Errorf("recheck ECDF build interval: %w", err)
+		}
+		if alreadyPublished {
+			return 0, false, nil
+		}
+	}
 
 	var version int64
 	if err := tx.QueryRowContext(ctx, `
