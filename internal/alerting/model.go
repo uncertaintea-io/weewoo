@@ -34,16 +34,13 @@ type AnalysisOutcome struct {
 	ServiceID        int
 	ServiceName      string
 	IndicatorID      int
-	Indicator        string
 	Timestamp        time.Time
-	Load             float64
+	IndependentValue float64
 	PValue           float64
 	Threshold        float64
 	Anomalous        bool
 	Historical       bool
 	GeneratorURL     string
-	Description      string
-	TechnicalDetails string
 }
 
 type CollectionFailure struct {

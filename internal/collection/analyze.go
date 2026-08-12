@@ -22,7 +22,7 @@ const (
 
 // analyzeSample evaluates collected samples against the current published joint
 // ECDF. It returns true when the samples appear anomalous.
-func analyzeSample(ctx context.Context, cfg config.Config, jointStore ecdf.JointStore, chunks ecdf.ChunkStore, alerts alerting.AnalysisRecorder, service *config.Service, indicatorID int, timestamp time.Time, loads, latencies []ecdf.Sample, historical ...bool) (bool, error) {
+func analyzeSample(ctx context.Context, cfg config.Config, jointStore ecdf.JointStore, chunks ecdf.ChunkStore, alerts alerting.AnalysisRecorder, service *config.Service, indicatorID int, timestamp time.Time, independentSamples, dependentSamples []ecdf.Sample, historical ...bool) (bool, error) {
 	if cfg == nil {
 		return false, fmt.Errorf("nil config")
 	}
@@ -37,25 +37,19 @@ func analyzeSample(ctx context.Context, cfg config.Config, jointStore ecdf.Joint
 		return false, nil
 	}
 
-	if len(loads) == 0 {
-		return false, fmt.Errorf("chunk has no load samples")
-	}
-	if len(latencies) == 0 {
-		return false, fmt.Errorf("chunk has no latency samples")
-	}
-	loadCount, err := checkedSampleCount(loads)
+	count, err := checkedSampleCount(independentSamples)
 	if err != nil {
-		return false, fmt.Errorf("invalid load samples: %w", err)
+		return false, fmt.Errorf("invalid independent samples: %w", err)
 	}
-	if loadCount == 0 {
-		return false, fmt.Errorf("chunk has no load observations")
+	if count == 0 {
+		return false, fmt.Errorf("chunk has no independent observations")
 	}
-	latencyCount, err := checkedSampleCount(latencies)
+	count, err = checkedSampleCount(dependentSamples)
 	if err != nil {
-		return false, fmt.Errorf("invalid latency samples: %w", err)
+		return false, fmt.Errorf("invalid dependent samples: %w", err)
 	}
-	if latencyCount == 0 {
-		return false, fmt.Errorf("chunk has no latency observations")
+	if count == 0 {
+		return false, fmt.Errorf("chunk has no dependent observations")
 	}
 
 	jointECDF, baseline, err := readReference(ctx, jointStore, chunks, alerts, service, indicatorID, []time.Time{timestamp})
@@ -66,8 +60,8 @@ func analyzeSample(ctx context.Context, cfg config.Config, jointStore ecdf.Joint
 		return false, nil
 	}
 
-	loadValue := weightedMean(loads)
-	cdf, available, err := queryJointECDF(ctx, jointECDF, loadValue)
+	independentValue := weightedMean(independentSamples)
+	cdf, available, err := queryJointECDF(ctx, jointECDF, independentValue)
 	if err != nil {
 		return false, fmt.Errorf("failed to query joint ECDF: %w", err)
 	}
@@ -84,17 +78,16 @@ func analyzeSample(ctx context.Context, cfg config.Config, jointStore ecdf.Joint
 		return false, nil
 	}
 
-	ksResult := kstests.OneSample(cdf, latencies)
-	latencyBucketCount := nonEmptySampleCount(latencies)
+	ksResult := kstests.OneSample(cdf, dependentSamples)
+	bucketCount := nonEmptySampleCount(dependentSamples)
 	anomalous := isStatisticallySignificant(ksResult.PValue)
-	description := fmt.Sprintf(
-		"Current latency distribution differs from the reference at load %f (KS p-value %g; threshold %g).",
-		loadValue, ksResult.PValue, ksSignificanceLevel,
-	)
 	isHistorical := len(historical) > 0 && historical[0]
-	if err := recordAnalysisResult(ctx, cfg, chunks, alerts, service, indicatorID, []time.Time{timestamp}, isHistorical, analysisResult{
-		indicator: "Load vs. Latency", load: loadValue, pValue: ksResult.PValue, anomalous: anomalous, description: description,
-	}); err != nil {
+	if err := recordAnalysisResult(ctx, cfg, chunks, alerts, service, indicatorID, []time.Time{timestamp}, isHistorical,
+		analysisResult{
+			independentValue: independentValue,
+			pValue:           ksResult.PValue,
+			anomalous:        anomalous,
+		}); err != nil {
 		return false, err
 	}
 
@@ -104,9 +97,9 @@ func analyzeSample(ctx context.Context, cfg config.Config, jointStore ecdf.Joint
 		"ks_statistic", ksResult.Statistic,
 		"p_value", ksResult.PValue,
 		"significance_level", ksSignificanceLevel,
-		"buckets", latencyBucketCount,
-		"observations", latencyCount,
-		"load", loadValue,
+		"buckets", bucketCount,
+		"observations", count,
+		"load", independentValue,
 	)
 
 	return anomalous, nil
@@ -138,11 +131,9 @@ func nonEmptySampleCount(samples []ecdf.Sample) uint64 {
 }
 
 type analysisResult struct {
-	indicator   string
-	load        float64
-	pValue      float64
-	anomalous   bool
-	description string
+	independentValue float64
+	pValue           float64
+	anomalous        bool
 }
 
 func isActiveGeneration(cfg config.Config, service *config.Service) (bool, error) {
@@ -237,10 +228,17 @@ func recordAnalysisResult(ctx context.Context, cfg config.Config, chunks ecdf.Ch
 	// Delegate the live primary result to the alert recorder, which persists its
 	// verdict and updates the service's alert condition as one operation.
 	generatorURL, _ := cfg.GetConfig(config.AlertGeneratorURLConfigKey)
-	if err := alerts.RecordAnalysis(ctx, alerting.AnalysisOutcome{ServiceID: service.Id, ServiceName: service.Name,
-		IndicatorID: indicatorID, Indicator: result.indicator, Timestamp: primary, Load: result.load,
-		PValue: result.pValue, Threshold: ksSignificanceLevel, Anomalous: result.anomalous,
-		GeneratorURL: generatorURL, Description: result.description, TechnicalDetails: result.description}); err != nil {
+	if err := alerts.RecordAnalysis(ctx, alerting.AnalysisOutcome{
+		ServiceID:        service.Id,
+		ServiceName:      service.Name,
+		IndicatorID:      indicatorID,
+		Timestamp:        primary,
+		IndependentValue: result.independentValue,
+		PValue:           result.pValue,
+		Threshold:        ksSignificanceLevel,
+		Anomalous:        result.anomalous,
+		GeneratorURL:     generatorURL,
+	}); err != nil {
 		return fmt.Errorf("%w: %w", errVerdictPersistence, err)
 	}
 	return nil

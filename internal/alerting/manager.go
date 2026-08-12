@@ -164,34 +164,44 @@ func (m *Manager) recordAnomaly(ctx context.Context, outcome AnalysisOutcome) er
 		return nil
 	}
 
+	copy := anomalyCopyForOutcome(outcome)
 	conditionKey := anomalyConditionKey(outcome.ServiceID, outcome.IndicatorID, outcome.Historical)
-	alertID, count, severity, created, err := m.ensureAnomalyAlert(ctx, tx, conditionKey, outcome)
+	alertID, count, severity, created, err := m.ensureAnomalyAlert(ctx, tx, conditionKey, outcome, copy)
 	if err != nil {
 		return err
 	}
 	evidence, _ := json.Marshal(map[string]any{
-		"load": outcome.Load, "pValue": outcome.PValue, "threshold": outcome.Threshold,
-		"indicator": outcome.Indicator, "historical": outcome.Historical,
+		"independentValue": outcome.IndependentValue,
+		"pValue":           outcome.PValue,
+		"threshold":        outcome.Threshold,
+		"historical":       outcome.Historical,
 	})
-	summary := fmt.Sprintf("Anomalous time chunk detected at %s", outcome.Timestamp.UTC().Format(time.RFC3339))
+	summary := fmt.Sprintf("%s at %s", copy.title, outcome.Timestamp.Format(time.RFC3339))
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO alert_occurrence (
 			alert_id, occurrence_key, kind, occurred_at, detected_at,
-			service_id, indicator_id, chunk_timestamp, summary, technical_details, evidence
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $4, $8, $9, $10)
+			service_id, indicator_id, chunk_timestamp, summary, evidence
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $4, $8, $9)
 	`, alertID, occurrenceKey, anomalyKind(outcome.Historical), outcome.Timestamp, m.now(),
-		outcome.ServiceID, outcome.IndicatorID, summary, sanitizeDetails(outcome.TechnicalDetails), evidence); err != nil {
+		outcome.ServiceID, outcome.IndicatorID, summary, evidence); err != nil {
 		return fmt.Errorf("insert anomaly occurrence: %w", err)
 	}
 
-	description := anomalyDescription(outcome.ServiceName, count, outcome.Historical)
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE alert
-		SET severity = $2, description = $3, last_occurred_at = $4,
-		    occurrence_count = $5, consecutive_count = $5,
-		    revision = revision + 1, updated_at = $6
+		SET severity = $2,
+		    title = $3,
+			description = $4,
+			impact = $5,
+		    suggested_action = $6,
+			last_occurred_at = $7,
+			occurrence_count = $8,
+			consecutive_count = $8,
+		    revision = revision + 1,
+			updated_at = $9
 		WHERE id = $1
-	`, alertID, severity, description, outcome.Timestamp, count, m.now()); err != nil {
+	`, alertID, severity, copy.title, copy.description, copy.impact, copy.suggestedAction,
+		outcome.Timestamp, count, m.now()); err != nil {
 		return fmt.Errorf("update anomaly alert: %w", err)
 	}
 
@@ -228,7 +238,7 @@ func (m *Manager) recordAnomaly(ctx context.Context, outcome AnalysisOutcome) er
 	return nil
 }
 
-func (m *Manager) ensureAnomalyAlert(ctx context.Context, tx *sql.Tx, conditionKey string, outcome AnalysisOutcome) (int64, int, string, bool, error) {
+func (m *Manager) ensureAnomalyAlert(ctx context.Context, tx *sql.Tx, conditionKey string, outcome AnalysisOutcome, copy anomalyAlertCopy) (int64, int, string, bool, error) {
 	var id int64
 	var count int
 	err := tx.QueryRowContext(ctx, `
@@ -245,23 +255,16 @@ func (m *Manager) ensureAnomalyAlert(ctx context.Context, tx *sql.Tx, conditionK
 	}
 
 	kind := anomalyKind(outcome.Historical)
-	title := "Anomalous service behavior detected"
-	impact := "The observed latency distribution differed significantly from the learned reference."
-	action := "Inspect the service and the affected time chunks. Accept a chunk as normal only when it represents expected behavior."
-	if outcome.Historical {
-		title = "Historical anomaly detected after collection recovery"
-		impact = "Recovered metrics show unusual past behavior; this does not by itself mean the service is currently unhealthy."
-	}
 	err = tx.QueryRowContext(ctx, `
 		INSERT INTO alert (
 			condition_key, service_id, service_name, indicator_id, kind,
 			severity, status, title, description, impact, suggested_action,
-			technical_details, started_at, last_occurred_at
-		) VALUES ($1, $2, $3, $4, $5, 'warning', 'firing', $6, $7, $8, $9, $10, $11, $11)
+			started_at, last_occurred_at
+		) VALUES ($1, $2, $3, $4, $5, 'warning', 'firing', $6, $7, $8, $9, $10, $10)
 		RETURNING id
 	`, conditionKey, outcome.ServiceID, outcome.ServiceName, outcome.IndicatorID, kind,
-		title, anomalyDescription(outcome.ServiceName, 1, outcome.Historical), impact, action,
-		sanitizeDetails(outcome.TechnicalDetails), outcome.Timestamp).Scan(&id)
+		copy.title, copy.description, copy.impact, copy.suggestedAction,
+		outcome.Timestamp).Scan(&id)
 	if err != nil {
 		return 0, 0, "", false, fmt.Errorf("insert anomaly alert: %w", err)
 	}
@@ -297,10 +300,14 @@ func (m *Manager) RecordAnalysisFailure(ctx context.Context, outcome AnalysisOut
 		return fmt.Errorf("record failed analysis state: %w", verdictErr)
 	}
 	if err := m.recordMonitoringFailureTx(ctx, tx, &events, MonitoringFailure{
-		ServiceID: outcome.ServiceID, ServiceName: outcome.ServiceName, IndicatorID: outcome.IndicatorID,
-		OccurredAt: outcome.Timestamp, Operation: "anomaly_analysis",
+		ServiceID:        outcome.ServiceID,
+		ServiceName:      outcome.ServiceName,
+		IndicatorID:      outcome.IndicatorID,
+		OccurredAt:       outcome.Timestamp,
+		Operation:        "anomaly_analysis",
 		Description:      "WeeWoo collected metrics but could not complete anomaly analysis. Service behavior for this interval is unknown.",
-		TechnicalDetails: sanitizeDetails(failure.Error()), GeneratorURL: outcome.GeneratorURL,
+		TechnicalDetails: sanitizeError(failure),
+		GeneratorURL:     outcome.GeneratorURL,
 	}); err != nil {
 		return err
 	}
@@ -1308,11 +1315,43 @@ func severityForCount(count, threshold int) string {
 	return SeverityWarning
 }
 
-func anomalyDescription(service string, count int, historical bool) string {
-	if historical {
-		return fmt.Sprintf("WeeWoo recovered metrics and detected %d anomalous time chunk(s) for %s. These observations occurred in the past and do not by themselves describe current health.", count, service)
+type anomalyAlertCopy struct {
+	title           string
+	description     string
+	impact          string
+	suggestedAction string
+}
+
+func anomalyCopyForOutcome(outcome AnalysisOutcome) anomalyAlertCopy {
+	copy := anomalyAlertCopy{}
+	switch outcome.IndicatorID {
+	case ecdf.LoadLatencyIndicator:
+		copy.title = "Load vs. Latency anomaly detected"
+		copy.description = fmt.Sprintf(
+			"Latency distribution differs from the reference at load %f (KS p-value %g; threshold %g).",
+			outcome.IndependentValue, outcome.PValue, outcome.Threshold,
+		)
+		copy.impact = "The observed latency distribution differed significantly from the learned reference at the current load."
+	case ecdf.TimeOfDayIndicator:
+		copy.title = "Load vs. Time-of-Day anomaly detected"
+		copy.description = fmt.Sprintf(
+			"Load distribution differs from the time-of-day reference at %g seconds after UTC midnight (KS p-value %g; threshold %g).",
+			outcome.IndependentValue, outcome.PValue, outcome.Threshold,
+		)
+		copy.impact = "The recent load distribution differed significantly from what the service normally observes at this time of day."
+	default:
+		if outcome.Historical {
+			copy.title = "Historical anomaly detected after collection recovery"
+			copy.description = fmt.Sprintf("Imported historical metrics include anomalous time chunks for %s. These observations occurred in the past and do not by themselves describe current health.", outcome.ServiceName)
+			copy.impact = "Recovered metrics show unusual past behavior; this does not by itself mean the service is currently unhealthy."
+		} else {
+			copy.title = "Anomalous service behavior detected"
+			copy.description = fmt.Sprintf("Observed behavior differed significantly from the learned reference for %s.", outcome.ServiceName)
+			copy.impact = "The observed service behavior differed significantly from the learned reference."
+		}
 	}
-	return fmt.Sprintf("WeeWoo detected %d consecutive time chunk(s) whose latency distribution differed significantly from the learned reference for %s.", count, service)
+	copy.suggestedAction = "Inspect the service and the affected time chunks. Accept a chunk as normal only when it represents expected behavior."
+	return copy
 }
 
 func collectionDescription(service string, count int, retryAt time.Time) string {

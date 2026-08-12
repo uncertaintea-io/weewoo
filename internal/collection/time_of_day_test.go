@@ -26,13 +26,13 @@ func TestTimeOfDayReadinessUsesEligibleChunksOverFiveDayTrainingRange(t *testing
 	store := &fixedEligibleChunkStore{ChunkStore: ecdf.NewFakeChunkStore(), eligible: 27_359}
 	service := &config.Service{Id: 3, Generation: 1, Interval: 15 * time.Second}
 
-	readiness, err := ReadModelReadiness(context.Background(), config.NewFakeConfig(), store, service, TimeOfDayIndicator)
+	readiness, err := ReadModelReadiness(context.Background(), config.NewFakeConfig(), store, service, ecdf.TimeOfDayIndicator)
 	require.NoError(t, err)
 	assert.InDelta(t, float64(27_359)/28_800, readiness.Coverage, 0.0000001)
 	assert.False(t, readiness.Ready)
 
 	store.eligible++
-	readiness, err = ReadModelReadiness(context.Background(), config.NewFakeConfig(), store, service, TimeOfDayIndicator)
+	readiness, err = ReadModelReadiness(context.Background(), config.NewFakeConfig(), store, service, ecdf.TimeOfDayIndicator)
 	require.NoError(t, err)
 	assert.Equal(t, 0.95, readiness.Coverage)
 	assert.Equal(t, readiness.Coverage, readiness.Progress)
@@ -49,11 +49,11 @@ func TestTimeOfDayCoverageCountsOnlyEligibleChunks(t *testing.T) {
 		timestamp := start.Add(time.Duration(chunkNumber) * service.Interval)
 		chunk, err := ecdf.Encode(timestamp, []ecdf.Sample{{Value: float64(chunkNumber), Count: 1}}, []ecdf.Sample{{Value: 42, Count: 1}})
 		require.NoError(t, err)
-		require.NoError(t, store.WriteChunk(service.Id, TimeOfDayIndicator, service.Generation, timestamp, chunk))
+		require.NoError(t, store.WriteChunk(service.Id, ecdf.TimeOfDayIndicator, service.Generation, timestamp, chunk))
 	}
-	require.NoError(t, store.WriteVerdict(context.Background(), service.Id, TimeOfDayIndicator, service.Generation, start, false, 0.01))
+	require.NoError(t, store.WriteVerdict(context.Background(), service.Id, ecdf.TimeOfDayIndicator, service.Generation, start, false, 0.01))
 
-	readiness, err := ReadModelReadiness(context.Background(), config.NewFakeConfig(), store, service, TimeOfDayIndicator)
+	readiness, err := ReadModelReadiness(context.Background(), config.NewFakeConfig(), store, service, ecdf.TimeOfDayIndicator)
 
 	require.NoError(t, err)
 	// Five days contain ten expected 12-hour chunks. One of the five received
@@ -72,9 +72,9 @@ func TestModelReadinessUsesEligibleChunkRequirementForLoadLatency(t *testing.T) 
 	timestamp := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
 	chunk, err := ecdf.Encode(timestamp, []ecdf.Sample{{Value: 1, Count: 1}}, []ecdf.Sample{{Value: 10, Count: 1}})
 	require.NoError(t, err)
-	require.NoError(t, store.WriteChunk(service.Id, LoadLatencyIndicator, service.Generation, timestamp, chunk))
+	require.NoError(t, store.WriteChunk(service.Id, ecdf.LoadLatencyIndicator, service.Generation, timestamp, chunk))
 
-	readiness, err := ReadModelReadiness(context.Background(), cfg, store, service, LoadLatencyIndicator)
+	readiness, err := ReadModelReadiness(context.Background(), cfg, store, service, ecdf.LoadLatencyIndicator)
 	require.NoError(t, err)
 	assert.Equal(t, 0.5, readiness.Coverage)
 	assert.Equal(t, 1, readiness.Eligible)

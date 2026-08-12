@@ -106,7 +106,7 @@ func TestAnalyseSampleRejectsOverflowingSampleCount(t *testing.T) {
 	latencies := []ecdf.Sample{{Value: 30, Count: math.MaxUint64}, {Value: 31, Count: 1}}
 
 	_, err := analyzeSample(context.Background(), config.NewFakeConfig(), unreadJointStore{}, nil, nil, &config.Service{Id: serviceID, Name: "test"}, indicatorID, timestamp, loads, latencies)
-	require.EqualError(t, err, "invalid latency samples: observation count overflows uint64")
+	require.EqualError(t, err, "invalid dependent samples: observation count overflows uint64")
 }
 
 func TestAnalyseSampleRejectsOverflowingLoadCount(t *testing.T) {
@@ -116,7 +116,7 @@ func TestAnalyseSampleRejectsOverflowingLoadCount(t *testing.T) {
 	latencies := []ecdf.Sample{{Value: 30, Count: 1}}
 
 	_, err := analyzeSample(context.Background(), config.NewFakeConfig(), unreadJointStore{}, nil, nil, &config.Service{Id: serviceID, Name: "test"}, indicatorID, timestamp, loads, latencies)
-	require.EqualError(t, err, "invalid load samples: observation count overflows uint64")
+	require.EqualError(t, err, "invalid independent samples: observation count overflows uint64")
 }
 
 func TestAnalyseSampleRejectsZeroTotalSampleCount(t *testing.T) {
@@ -129,8 +129,8 @@ func TestAnalyseSampleRejectsZeroTotalSampleCount(t *testing.T) {
 		latencies []ecdf.Sample
 		wantError string
 	}{
-		{"load", []ecdf.Sample{{Value: 12, Count: 0}}, []ecdf.Sample{{Value: 30, Count: 1}}, "chunk has no load observations"},
-		{"latency", []ecdf.Sample{{Value: 12, Count: 1}}, []ecdf.Sample{{Value: 30, Count: 0}}, "chunk has no latency observations"},
+		{"load", []ecdf.Sample{{Value: 12, Count: 0}}, []ecdf.Sample{{Value: 30, Count: 1}}, "chunk has no independent observations"},
+		{"latency", []ecdf.Sample{{Value: 12, Count: 1}}, []ecdf.Sample{{Value: 30, Count: 0}}, "chunk has no dependent observations"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			_, err := analyzeSample(context.Background(), config.NewFakeConfig(), unreadJointStore{}, nil, nil, &config.Service{Id: serviceID, Name: "test"}, indicatorID, timestamp, test.loads, test.latencies)
@@ -176,7 +176,7 @@ printf '\000'
 		nil,
 		alerts,
 		&config.Service{Id: 1, Name: "test"},
-		LoadLatencyIndicator,
+		ecdf.LoadLatencyIndicator,
 		time.Unix(1_700_000_000, 0),
 		[]ecdf.Sample{{Value: 0, Count: 1}},
 		[]ecdf.Sample{{Value: 0, Count: 1}},
@@ -199,7 +199,7 @@ func TestAnalyzeSampleSkipsSupersededServiceGeneration(t *testing.T) {
 		nil,
 		alerts,
 		&config.Service{Id: 7, Name: "checkout", Generation: 1},
-		LoadLatencyIndicator,
+		ecdf.LoadLatencyIndicator,
 		time.Unix(1_700_000_000, 0),
 		[]ecdf.Sample{{Value: 1, Count: 1}},
 		[]ecdf.Sample{{Value: 1, Count: 1}},
@@ -229,7 +229,7 @@ printf '\002\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\077
 		verdicts,
 		alerts,
 		&config.Service{Id: 7, Name: "checkout"},
-		LoadLatencyIndicator,
+		ecdf.LoadLatencyIndicator,
 		timestamp,
 		[]ecdf.Sample{{Value: 0.5, Count: 10}},
 		anomalousLatencyBuckets(),
@@ -241,7 +241,7 @@ printf '\002\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\077
 	require.Equal(t, 1, alerts.Count())
 	require.Len(t, alerts.outcomes, 1)
 	require.Equal(t, 7, alerts.outcomes[0].ServiceID)
-	require.Equal(t, LoadLatencyIndicator, alerts.outcomes[0].IndicatorID)
+	require.Equal(t, ecdf.LoadLatencyIndicator, alerts.outcomes[0].IndicatorID)
 	require.Equal(t, timestamp, alerts.outcomes[0].Timestamp)
 	require.True(t, alerts.outcomes[0].Anomalous)
 	require.Less(t, alerts.outcomes[0].PValue, ksSignificanceLevel)
@@ -266,7 +266,7 @@ printf '\002\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\077
 		verdicts,
 		alerts,
 		&config.Service{Id: 7, Name: "checkout"},
-		LoadLatencyIndicator,
+		ecdf.LoadLatencyIndicator,
 		timestamp,
 		[]ecdf.Sample{{Value: 0.5, Count: 10}},
 		anomalousLatencyBuckets(),
@@ -302,7 +302,7 @@ printf '\002\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\077
 	verdicts := &recordingChunkStore{
 		verdicts: []recordedVerdict{{
 			serviceID:   7,
-			indicatorID: LoadLatencyIndicator,
+			indicatorID: ecdf.LoadLatencyIndicator,
 			timestamp:   timestamp,
 			good:        false,
 			pValue:      0,
@@ -316,7 +316,7 @@ printf '\002\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\077
 		verdicts,
 		nil,
 		&config.Service{Id: 7, Name: "checkout"},
-		LoadLatencyIndicator,
+		ecdf.LoadLatencyIndicator,
 		timestamp,
 		[]ecdf.Sample{{Value: 0.5, Count: 10}},
 		[]ecdf.Sample{
@@ -338,7 +338,7 @@ printf '\002\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\077
 	require.Len(t, verdicts.verdicts, 2)
 	replacement := verdicts.verdicts[1]
 	require.Equal(t, 7, replacement.serviceID)
-	require.Equal(t, LoadLatencyIndicator, replacement.indicatorID)
+	require.Equal(t, ecdf.LoadLatencyIndicator, replacement.indicatorID)
 	require.Equal(t, timestamp, replacement.timestamp)
 	require.True(t, replacement.good)
 	require.GreaterOrEqual(t, replacement.pValue, ksSignificanceLevel)

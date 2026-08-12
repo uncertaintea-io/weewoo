@@ -39,7 +39,7 @@ func (s *panicThenFailJointStore) ReadCurrent(context.Context, int, int) ([]byte
 func validAnalysisRequest() *AnalysisRequest {
 	return &AnalysisRequest{
 		Service:     config.Service{Id: 1, Name: "checkout"},
-		IndicatorID: LoadLatencyIndicator,
+		IndicatorID: ecdf.LoadLatencyIndicator,
 		Timestamp:   time.Unix(1_710_000_060, 0),
 		Independent: []ecdf.Sample{{Value: 1, Count: 1}},
 		Dependent:   []ecdf.Sample{{Value: 1, Count: 1}},

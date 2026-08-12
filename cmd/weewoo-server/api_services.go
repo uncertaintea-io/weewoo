@@ -258,7 +258,7 @@ func (a *serviceAPI) response(service *config.Service) serviceResponse {
 	response.Tracking = a.monitor.status(service.Id)
 	response.Imports = a.imports.listForService(service.Id)
 	if a.models != nil {
-		if status, err := a.models.ModelStatus(context.Background(), service, collection.TimeOfDayIndicator); err == nil {
+		if status, err := a.models.ModelStatus(context.Background(), service, ecdf.TimeOfDayIndicator); err == nil {
 			response.TimeOfDayModel = status
 		}
 	}

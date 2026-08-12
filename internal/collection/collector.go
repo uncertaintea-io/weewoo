@@ -14,11 +14,6 @@ import (
 	"github.com/uncertaintea-io/weewoo/internal/ecdf"
 )
 
-const (
-	LoadLatencyIndicator = 1
-	TimeOfDayIndicator   = 2
-)
-
 type Collector interface {
 	Stop()
 	Schedule(service *config.Service) error
@@ -232,24 +227,24 @@ func (c *collector) collectSamples(ctx context.Context, service *config.Service,
 	if len(loadSamples) == 0 || len(latencySamples) == 0 {
 		return errWindowHasNoMetrics
 	}
-	if err := c.writeIndicatorChunk(service, LoadLatencyIndicator, end, loadSamples, latencySamples); err != nil {
+	if err := c.writeIndicatorChunk(service, ecdf.LoadLatencyIndicator, end, loadSamples, latencySamples); err != nil {
 		return err
 	}
 	todSamples := []ecdf.Sample{{Value: utcTimeOfDay(end), Count: 1}}
-	if err := c.writeIndicatorChunk(service, TimeOfDayIndicator, end, todSamples, loadSamples); err != nil {
+	if err := c.writeIndicatorChunk(service, ecdf.TimeOfDayIndicator, end, todSamples, loadSamples); err != nil {
 		return err
 	}
 	if c.analyzer != nil {
 		requests := []*AnalysisRequest{{
 			Service:     *service,
-			IndicatorID: LoadLatencyIndicator,
+			IndicatorID: ecdf.LoadLatencyIndicator,
 			Timestamp:   end,
 			Independent: loadSamples,
 			Dependent:   latencySamples,
 			Historical:  historical,
 		}, {
 			Service:     *service,
-			IndicatorID: TimeOfDayIndicator,
+			IndicatorID: ecdf.TimeOfDayIndicator,
 			Timestamp:   end,
 			Independent: todSamples,
 			Dependent:   loadSamples,

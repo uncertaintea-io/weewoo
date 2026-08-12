@@ -15,7 +15,7 @@ const (
 	timeOfDayRequiredCoverage = 0.95
 )
 
-var indicatorIDs = []int{LoadLatencyIndicator, TimeOfDayIndicator}
+var indicatorIDs = []int{ecdf.LoadLatencyIndicator, ecdf.TimeOfDayIndicator}
 
 // ModelReadiness describes whether an indicator has enough eligible reference
 // data to publish and analyze. Coverage is normalized to [0, 1].
@@ -34,7 +34,7 @@ func ReadModelReadiness(ctx context.Context, cfg config.Config, store ecdf.Chunk
 		return ModelReadiness{}, fmt.Errorf("model readiness dependencies must not be nil")
 	}
 	switch indicatorID {
-	case LoadLatencyIndicator:
+	case ecdf.LoadLatencyIndicator:
 		required, err := configuredPositiveInt(cfg, ECDFBaselineChunksConfigKey, defaultECDFBaselineChunks)
 		if err != nil {
 			return ModelReadiness{}, err
@@ -45,7 +45,7 @@ func ReadModelReadiness(ctx context.Context, cfg config.Config, store ecdf.Chunk
 		}
 		coverage := min(float64(eligible)/float64(required), 1)
 		return ModelReadiness{Ready: eligible >= required, Coverage: coverage, Progress: coverage, Required: required, Eligible: eligible}, nil
-	case TimeOfDayIndicator:
+	case ecdf.TimeOfDayIndicator:
 		return readTimeOfDayReadiness(ctx, store, service, indicatorID)
 	default:
 		return ModelReadiness{}, fmt.Errorf("unknown indicator %d", indicatorID)
