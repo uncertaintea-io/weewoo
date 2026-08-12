@@ -46,7 +46,7 @@ func TestTimeOfDayAnalysisMetadataReachesAlertAndNotification(t *testing.T) {
 		PValue:           0.001,
 		Threshold:        0.01, Anomalous: true,
 	}
-	require.NoError(t, NewManager(db, config.NewFakeConfig()).RecordAnalysis(ctx, outcome))
+	require.NoError(t, NewManager(db, config.NewFakeConfig(), "postgres").RecordAnalysis(ctx, outcome))
 
 	var alertID int64
 	var title, description, impact, action string

@@ -58,8 +58,7 @@ func TestSQLiteMigrationsAndStores(t *testing.T) {
 	manager := alerting.NewManager(db, cfg, settings.Database)
 	outcome := alerting.AnalysisOutcome{
 		ServiceID: service.Id, ServiceName: service.Name, IndicatorID: 1,
-		Indicator: "load", Timestamp: timestamp, PValue: 0.001, Threshold: 0.01,
-		Anomalous: true, Description: "SQLite anomaly test",
+		Timestamp: timestamp, PValue: 0.001, Threshold: 0.01, Anomalous: true,
 	}
 	require.NoError(t, manager.RecordAnalysis(context.Background(), outcome))
 	alerts, err := manager.List(context.Background(), false, 10)
