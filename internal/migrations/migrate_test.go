@@ -3,12 +3,12 @@ package migrations
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/uncertaintea-io/weewoo/internal/alerting"
 	"github.com/uncertaintea-io/weewoo/internal/config"
@@ -82,23 +82,7 @@ func TestParseFilenameRejectsInvalidNames(t *testing.T) {
 	}
 }
 
-func TestSystemSettingsOpenSQLiteDatabase(t *testing.T) {
-	settings := config.SystemSettings{
-		Database:         "SQLite",
-		ConnectionString: filepath.Join(t.TempDir(), "weewoo.db"),
-	}
-	db, err := settings.OpenDatabase()
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, db.Close()) })
-	require.NoError(t, db.Ping())
-	assert.Equal(t, 1, db.Stats().MaxOpenConnections)
-
-	var foreignKeys int
-	require.NoError(t, db.QueryRow(`PRAGMA foreign_keys`).Scan(&foreignKeys))
-	assert.Equal(t, 1, foreignKeys)
-}
-
-func TestSQLiteTimestampsRoundTripAsTheSameInstant(t *testing.T) {
+func TestSQLiteSchemaTimestampsRoundTripAsTheSameInstant(t *testing.T) {
 	settings := config.SystemSettings{
 		Database:         "sqlite",
 		ConnectionString: filepath.Join(t.TempDir(), "timestamps.db"),
@@ -107,10 +91,11 @@ func TestSQLiteTimestampsRoundTripAsTheSameInstant(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
 
-	testTimestampRoundTrips(t, db)
+	require.NoError(t, Apply(context.Background(), db, settings.Database))
+	testSchemaTimestampRoundTrips(t, db)
 }
 
-func TestPostgreSQLTimestampsRoundTripAsTheSameInstant(t *testing.T) {
+func TestPostgreSQLSchemaTimestampsRoundTripAsTheSameInstant(t *testing.T) {
 	databaseURL := os.Getenv("WEEWOO_TEST_POSTGRES_URL")
 	if databaseURL == "" {
 		t.Skip("WEEWOO_TEST_POSTGRES_URL is not set")
@@ -119,18 +104,28 @@ func TestPostgreSQLTimestampsRoundTripAsTheSameInstant(t *testing.T) {
 	db, err := settings.OpenDatabase()
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
+	db.SetMaxOpenConns(1)
 
 	var timezone string
 	require.NoError(t, db.QueryRow(`SHOW timezone`).Scan(&timezone))
-	assert.Equal(t, "UTC", timezone)
-	testTimestampRoundTrips(t, db)
+	require.Equal(t, "UTC", timezone)
+
+	schema := fmt.Sprintf("weewoo_migrations_test_%d", time.Now().UnixNano())
+	_, err = db.Exec(`CREATE SCHEMA ` + schema)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, dropErr := db.Exec(`DROP SCHEMA ` + schema + ` CASCADE`)
+		require.NoError(t, dropErr)
+	})
+	_, err = db.Exec(`SET search_path TO ` + schema)
+	require.NoError(t, err)
+	require.NoError(t, Apply(context.Background(), db, settings.Database))
+	testSchemaTimestampRoundTrips(t, db)
 }
 
-func testTimestampRoundTrips(t *testing.T, db *sql.DB) {
+func testSchemaTimestampRoundTrips(t *testing.T, db *sql.DB) {
 	t.Helper()
 	require.NoError(t, db.Ping())
-	_, err := db.Exec(`CREATE TEMPORARY TABLE timestamp_round_trip (value TIMESTAMP NOT NULL)`)
-	require.NoError(t, err)
 
 	springForward := time.Date(2026, time.March, 8, 2, 1, 0, 0, time.FixedZone("EST", -5*60*60))
 	for name, input := range map[string]time.Time{
@@ -139,19 +134,23 @@ func testTimestampRoundTrips(t *testing.T, db *sql.DB) {
 		"spring forward": springForward,
 	} {
 		t.Run(name, func(t *testing.T) {
+			store := ecdf.NewDatabaseChunkStore(db)
+			require.NoError(t, store.WriteChunk(1, 1, 1, input, []byte("chunk")))
+
 			var output time.Time
-			require.NoError(t, db.QueryRow(
-				`INSERT INTO timestamp_round_trip (value) VALUES ($1) RETURNING value`,
-				input,
-			).Scan(&output))
-			difference := input.Sub(output).Abs()
-			assert.Less(t, difference, time.Microsecond,
+			require.NoError(t, db.QueryRow(`SELECT "timestamp" FROM time_chunk`).Scan(&output))
+			require.True(t, input.Truncate(time.Second).Equal(output),
 				"timestamp changed instant: input=%s output=%s", input, output)
+			chunk, err := store.ReadChunk(1, 1, input)
+			require.NoError(t, err)
+			require.Equal(t, []byte("chunk"), chunk)
+			require.NoError(t, store.WriteVerdict(context.Background(), 1, 1, 1, input, true, 0.5))
+
+			var state string
+			require.NoError(t, db.QueryRow(`SELECT analysis_state FROM verdict`).Scan(&state))
+			require.Equal(t, "good", state)
+			_, err = db.Exec(`DELETE FROM time_chunk WHERE service_id = $1 AND indicator_id = $2`, 1, 1)
+			require.NoError(t, err)
 		})
 	}
-}
-
-func TestSystemSettingsRejectsUnknownDatabase(t *testing.T) {
-	_, err := (&config.SystemSettings{Database: "mysql", ConnectionString: "ignored"}).OpenDatabase()
-	assert.EqualError(t, err, "database must be either postgresql or sqlite")
 }

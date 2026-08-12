@@ -1,9 +1,7 @@
 package config
 
 import (
-	"database/sql"
 	"net/url"
-	"os"
 	"path/filepath"
 	"strconv"
 	"testing"
@@ -159,4 +157,25 @@ func TestReadingYamlFile(t *testing.T) {
 	assert.NotNil(t, systemSettings)
 	assert.Equal(t, "postgresql", systemSettings.Database)
 	assert.Equal(t, "example", systemSettings.ConnectionString)
+}
+
+func TestSystemSettingsOpenSQLiteDatabase(t *testing.T) {
+	settings := SystemSettings{
+		Database:         "SQLite",
+		ConnectionString: filepath.Join(t.TempDir(), "weewoo.db"),
+	}
+	db, err := settings.OpenDatabase()
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, db.Close()) })
+	require.NoError(t, db.Ping())
+	assert.Equal(t, 1, db.Stats().MaxOpenConnections)
+
+	var foreignKeys int
+	require.NoError(t, db.QueryRow(`PRAGMA foreign_keys`).Scan(&foreignKeys))
+	assert.Equal(t, 1, foreignKeys)
+}
+
+func TestSystemSettingsRejectsUnknownDatabase(t *testing.T) {
+	_, err := (&SystemSettings{Database: "mysql", ConnectionString: "ignored"}).OpenDatabase()
+	assert.EqualError(t, err, "database must be either postgresql or sqlite")
 }
