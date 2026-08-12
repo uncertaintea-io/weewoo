@@ -216,11 +216,11 @@ func (c *collector) collectSamples(ctx context.Context, service *config.Service,
 	if windowDuration := end.Sub(start); windowDuration < step {
 		step = windowDuration
 	}
-	loadSamples, err := QueryPrometheusRangeSamples(ctx, c.client, service.PrometheusURL, service.LoadQuery, start, end, step)
+	loadSamples, err := QueryPrometheusSamples(ctx, c.client, service.PrometheusURL, service.LoadQuery, start, end, step)
 	if err != nil {
 		return prometheusQueryFailure("load", service.LoadQuery, err)
 	}
-	latencySamples, err := QueryPrometheusRangeSamples(ctx, c.client, service.PrometheusURL, service.LatencyQuery, start, end, step)
+	latencySamples, err := QueryPrometheusSamples(ctx, c.client, service.PrometheusURL, service.LatencyQuery, start, end, step)
 	if err != nil {
 		return prometheusQueryFailure("latency", service.LatencyQuery, err)
 	}

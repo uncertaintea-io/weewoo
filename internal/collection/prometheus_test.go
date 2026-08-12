@@ -38,21 +38,20 @@ var (
 )
 
 type prometheusGolden struct {
-	Query        string            `json:"query"`
-	Start        time.Time         `json:"start"`
-	End          time.Time         `json:"end"`
-	StepSeconds  int64             `json:"step_seconds"`
-	StatusCode   int               `json:"status_code"`
-	ContentType  string            `json:"content_type"`
-	ResponseBody json.RawMessage   `json:"response_body"`
-	WantSamples  []ecdf.Sample     `json:"want_samples,omitempty"`
-	WantPoints   []PrometheusPoint `json:"want_points,omitempty"`
+	Query        string          `json:"query"`
+	Start        time.Time       `json:"start"`
+	End          time.Time       `json:"end"`
+	StepSeconds  int64           `json:"step_seconds"`
+	StatusCode   int             `json:"status_code"`
+	ContentType  string          `json:"content_type"`
+	ResponseBody json.RawMessage `json:"response_body"`
+	WantSamples  []ecdf.Sample   `json:"want_samples,omitempty"`
 }
 
 func TestPrometheusLatencySamplesGolden(t *testing.T) {
 	golden := loadPrometheusGolden(t, "latency-range.json", liveLatencyQuery)
 
-	samples, err := QueryPrometheusRangeSamples(
+	samples, err := QueryPrometheusSamples(
 		context.Background(),
 		golden.httpClient(t),
 		prometheusGoldenBaseURL,
@@ -70,7 +69,7 @@ func TestPrometheusLatencySamplesGolden(t *testing.T) {
 func TestPrometheusLoadSamplesGolden(t *testing.T) {
 	golden := loadPrometheusGolden(t, "load-range.json", liveLoadQuery)
 
-	samples, err := QueryPrometheusRangeSamples(
+	samples, err := QueryPrometheusSamples(
 		context.Background(),
 		golden.httpClient(t),
 		prometheusGoldenBaseURL,
@@ -85,28 +84,6 @@ func TestPrometheusLoadSamplesGolden(t *testing.T) {
 	assertSamplesValid(t, samples)
 }
 
-func TestPrometheusLoadPointsGolden(t *testing.T) {
-	golden := loadPrometheusGolden(t, "load-range.json", liveLoadQuery)
-
-	points, err := QueryPrometheusRangePoints(
-		context.Background(),
-		golden.httpClient(t),
-		prometheusGoldenBaseURL,
-		liveLoadQuery,
-		golden.Start,
-		golden.End,
-		golden.step(),
-	)
-
-	require.NoError(t, err)
-	assertPrometheusPointsEqual(t, golden.WantPoints, points)
-	require.NotEmpty(t, points)
-	assert.True(t, slices.IsSortedFunc(points, func(a, b PrometheusPoint) int {
-		return a.Timestamp.Compare(b.Timestamp)
-	}), "points are not sorted by timestamp")
-	assert.True(t, points[0].Timestamp.After(golden.Start), "first point overlaps with previous window")
-}
-
 func TestUpdatePrometheusGoldens(t *testing.T) {
 	if !*updatePrometheusGoldens {
 		t.Skip("pass -update-prometheus-goldens to regenerate Prometheus golden responses")
@@ -118,7 +95,7 @@ func TestUpdatePrometheusGoldens(t *testing.T) {
 
 	t.Run("latency", func(t *testing.T) {
 		recorder := &prometheusResponseRecorder{transport: http.DefaultTransport}
-		samples, err := QueryPrometheusRangeSamples(
+		samples, err := QueryPrometheusSamples(
 			context.Background(),
 			&http.Client{Transport: recorder},
 			*prometheusURL,
@@ -129,12 +106,12 @@ func TestUpdatePrometheusGoldens(t *testing.T) {
 		)
 		require.NoError(t, err)
 
-		writePrometheusGolden(t, "latency-range.json", recorder.golden(liveLatencyQuery, start, end, samples, nil))
+		writePrometheusGolden(t, "latency-range.json", recorder.golden(liveLatencyQuery, start, end, samples))
 	})
 
 	t.Run("load", func(t *testing.T) {
 		recorder := &prometheusResponseRecorder{transport: http.DefaultTransport}
-		points, err := QueryPrometheusRangePoints(
+		samples, err := QueryPrometheusSamples(
 			context.Background(),
 			&http.Client{Transport: recorder},
 			*prometheusURL,
@@ -145,20 +122,7 @@ func TestUpdatePrometheusGoldens(t *testing.T) {
 		)
 		require.NoError(t, err)
 
-		golden := recorder.golden(liveLoadQuery, start, end, nil, points)
-		samples, err := QueryPrometheusRangeSamples(
-			context.Background(),
-			golden.httpClient(t),
-			prometheusGoldenBaseURL,
-			liveLoadQuery,
-			start,
-			end,
-			prometheusGoldenStep,
-		)
-		require.NoError(t, err)
-		golden.WantSamples = samples
-
-		writePrometheusGolden(t, "load-range.json", golden)
+		writePrometheusGolden(t, "load-range.json", recorder.golden(liveLoadQuery, start, end, samples))
 	})
 }
 
@@ -170,15 +134,6 @@ func assertSamplesValid(t *testing.T, samples []ecdf.Sample) {
 	}), "samples are not sorted by value")
 	for _, sample := range samples {
 		assert.Greater(t, sample.Count, uint64(0), "value %g has a zero count", sample.Value)
-	}
-}
-
-func assertPrometheusPointsEqual(t *testing.T, want, got []PrometheusPoint) {
-	t.Helper()
-	require.Len(t, got, len(want))
-	for i := range want {
-		assert.True(t, want[i].Timestamp.Equal(got[i].Timestamp), "point %d timestamp: want %v, got %v", i, want[i].Timestamp, got[i].Timestamp)
-		assert.Equal(t, want[i].Value, got[i].Value, "point %d value", i)
 	}
 }
 
@@ -278,7 +233,7 @@ func (r *prometheusResponseRecorder) RoundTrip(request *http.Request) (*http.Res
 	return response, nil
 }
 
-func (r *prometheusResponseRecorder) golden(query string, start, end time.Time, samples []ecdf.Sample, points []PrometheusPoint) prometheusGolden {
+func (r *prometheusResponseRecorder) golden(query string, start, end time.Time, samples []ecdf.Sample) prometheusGolden {
 	return prometheusGolden{
 		Query:        query,
 		Start:        start,
@@ -288,6 +243,5 @@ func (r *prometheusResponseRecorder) golden(query string, start, end time.Time, 
 		ContentType:  r.contentType,
 		ResponseBody: json.RawMessage(r.responseBody),
 		WantSamples:  samples,
-		WantPoints:   points,
 	}
 }

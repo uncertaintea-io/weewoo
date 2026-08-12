@@ -401,21 +401,14 @@ func (a *serviceAPI) testConnection(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	end := time.Now().UTC().Truncate(time.Minute)
 	start := end.Add(-5 * time.Minute)
-	loadPoints, loadErr := collection.QueryPrometheusRangePoints(ctx, a.httpClient, request.PrometheusURL, request.LoadQuery, start, end, time.Minute)
-	latencySamples, latencyErr := collection.QueryPrometheusRangeSamples(ctx, a.httpClient, request.PrometheusURL, request.LatencyQuery, start, end, time.Minute)
+	loadSamples, loadErr := collection.QueryPrometheusSamples(ctx, a.httpClient, request.PrometheusURL, request.LoadQuery, start, end, time.Minute)
+	latencySamples, latencyErr := collection.QueryPrometheusSamples(ctx, a.httpClient, request.PrometheusURL, request.LatencyQuery, start, end, time.Minute)
 
 	type queryResult struct {
 		Valid   bool    `json:"valid"`
 		Samples int     `json:"samples"`
 		Latest  float64 `json:"latest,omitempty"`
 		Error   string  `json:"error,omitempty"`
-	}
-
-	resultForPoints := func(points []collection.PrometheusPoint, err error) queryResult {
-		if err != nil {
-			return queryResult{Error: err.Error()}
-		}
-		return queryResult{Valid: true, Samples: len(points), Latest: points[len(points)-1].Value}
 	}
 
 	resultForSamples := func(samples []ecdf.Sample, err error) queryResult {
@@ -439,7 +432,7 @@ func (a *serviceAPI) testConnection(w http.ResponseWriter, r *http.Request) {
 		LatencyQuery queryResult `json:"latencyQuery"`
 	}{
 		Message:      "Connection and queries succeeded",
-		LoadQuery:    resultForPoints(loadPoints, loadErr),
+		LoadQuery:    resultForSamples(loadSamples, loadErr),
 		LatencyQuery: resultForSamples(latencySamples, latencyErr),
 	}
 	if loadErr != nil || latencyErr != nil {
