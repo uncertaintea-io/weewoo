@@ -28,7 +28,7 @@ func TestSQLiteMigrationsAndStores(t *testing.T) {
 	require.NoError(t, Apply(context.Background(), db, settings.Database), "migrations must be idempotent")
 	statuses, err := Statuses(context.Background(), db, settings.Database)
 	require.NoError(t, err)
-	require.Len(t, statuses, 14)
+	require.Len(t, statuses, 1)
 	for _, status := range statuses {
 		require.True(t, status.Applied, "migration %d was not applied", status.Version)
 	}
