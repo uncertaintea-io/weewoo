@@ -42,7 +42,48 @@ func TestDatabaseChunkStoreUsesWholeSecondTimestamps(t *testing.T) {
 		)
 	`)
 	require.NoError(t, err)
+	testDatabaseChunkStoreUsesWholeSecondTimestamps(t, db)
+}
 
+func TestPostgreSQLDatabaseChunkStoreUsesWholeSecondTimestamps(t *testing.T) {
+	databaseURL := os.Getenv("WEEWOO_TEST_POSTGRES_URL")
+	if databaseURL == "" {
+		t.Skip("WEEWOO_TEST_POSTGRES_URL is not set")
+	}
+	db, err := sql.Open("pgx", databaseURL)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, db.Close()) })
+	db.SetMaxOpenConns(1)
+	_, err = db.Exec(`
+		CREATE TEMPORARY TABLE time_chunk (
+			service_id INTEGER NOT NULL,
+			indicator_id INTEGER NOT NULL,
+			"timestamp" TIMESTAMP(0) WITH TIME ZONE NOT NULL,
+			chunk BYTEA,
+			collected_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			generation BIGINT NOT NULL DEFAULT 1,
+			PRIMARY KEY (service_id, indicator_id, "timestamp")
+		);
+		CREATE TEMPORARY TABLE verdict (
+			service_id INTEGER,
+			indicator_id INTEGER,
+			"timestamp" TIMESTAMP(0) WITH TIME ZONE,
+			automated_good BOOLEAN,
+			pvalue DOUBLE PRECISION,
+			analysis_state TEXT NOT NULL DEFAULT 'pending',
+			review_override BOOLEAN,
+			reviewed_at TIMESTAMP WITH TIME ZONE,
+			review_reason TEXT,
+			generation BIGINT NOT NULL DEFAULT 1,
+			PRIMARY KEY (service_id, indicator_id, "timestamp")
+		)
+	`)
+	require.NoError(t, err)
+	testDatabaseChunkStoreUsesWholeSecondTimestamps(t, db)
+}
+
+func testDatabaseChunkStoreUsesWholeSecondTimestamps(t *testing.T, db *sql.DB) {
+	t.Helper()
 	store := NewDatabaseChunkStore(db)
 	timestamp := time.Date(2026, 8, 10, 12, 0, 0, 456789000, time.UTC)
 	require.NoError(t, store.WriteChunk(1, 1, 1, timestamp, []byte("chunk")))
