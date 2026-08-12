@@ -8,7 +8,7 @@ import {
   liveRefreshDelay,
 } from './live-refresh';
 import { searchValueForRender } from './navigation';
-import { 
+import {
   alertCardClasses,
   collectionUptime,
   groupAlertsByStatus,
