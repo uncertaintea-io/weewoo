@@ -272,7 +272,7 @@ func main() {
 	defer scheduler.Stop()
 	chunkStore := ecdf.NewDatabaseChunkStore(db)
 	jointStore := ecdf.NewDatabaseJointStore(db)
-	alertManager := alerting.NewManager(db, cfg)
+	alertManager := alerting.NewManager(db, cfg, systemSettings.Database)
 	alertDispatcher := alerting.NewOutboxDispatcher(db, cfg, alertManager)
 	defer alertDispatcher.Stop()
 	analysisWorker := collection.NewAnalysisWorker(cfg, jointStore, chunkStore, alertManager, collection.DefaultAnalysisQueueCapacity)

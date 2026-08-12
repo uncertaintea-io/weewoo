@@ -52,7 +52,7 @@ func TestSQLiteMigrationsAndStores(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, eligible)
 
-	manager := alerting.NewManager(db, cfg)
+	manager := alerting.NewManager(db, cfg, settings.Database)
 	outcome := alerting.AnalysisOutcome{
 		ServiceID: service.Id, ServiceName: service.Name, IndicatorID: 1,
 		Indicator: "load", Timestamp: timestamp, PValue: 0.001, Threshold: 0.01,

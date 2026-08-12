@@ -49,7 +49,7 @@ func TestSuccessfulAnalysisResolvesAnalysisMonitoringFailure(t *testing.T) {
 				require.NoError(t, err)
 			}
 
-			manager := NewManager(db, config.NewFakeConfig())
+			manager := NewManager(db, config.NewFakeConfig(), "postgresql")
 			outcome := AnalysisOutcome{
 				ServiceID:   serviceID,
 				ServiceName: "repro-service",
@@ -127,7 +127,7 @@ func TestHistoricalAnalysisPersistsVerdictWithoutChangingAlerts(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	manager := NewManager(db, config.NewFakeConfig())
+	manager := NewManager(db, config.NewFakeConfig(), "postgresql")
 	require.NoError(t, manager.RecordAnalysisFailure(ctx, AnalysisOutcome{
 		ServiceID: serviceID, ServiceName: "repro-service",
 		IndicatorID: indicatorID, Indicator: "latency", Timestamp: failedAt,
@@ -196,7 +196,7 @@ func TestOutboxRetiresLegacyHistoricalFiringWithoutDelivery(t *testing.T) {
 	`, serviceID, indicatorID, timestamp)
 	require.NoError(t, err)
 
-	manager := NewManager(db, config.NewFakeConfig())
+	manager := NewManager(db, config.NewFakeConfig(), "postgresql")
 	require.NoError(t, manager.recordAnomaly(ctx, AnalysisOutcome{
 		ServiceID: serviceID, ServiceName: "legacy-service",
 		IndicatorID: indicatorID, Indicator: "latency", Timestamp: timestamp,

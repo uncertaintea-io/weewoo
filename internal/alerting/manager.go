@@ -16,7 +16,6 @@ import (
 	"time"
 
 	"github.com/uncertaintea-io/weewoo/internal/config"
-	databaseutil "github.com/uncertaintea-io/weewoo/internal/database"
 	"github.com/uncertaintea-io/weewoo/internal/ecdf"
 )
 
@@ -34,9 +33,9 @@ type Manager struct {
 	lockClause string
 }
 
-func NewManager(db *sql.DB, cfg config.Config) *Manager {
+func NewManager(db *sql.DB, cfg config.Config, database string) *Manager {
 	lockClause := " FOR UPDATE"
-	if databaseutil.IsSQLite(db) {
+	if strings.EqualFold(strings.TrimSpace(database), "sqlite") {
 		lockClause = ""
 	}
 	return &Manager{db: db, cfg: cfg, now: func() time.Time { return time.Now().UTC() }, lockClause: lockClause}
