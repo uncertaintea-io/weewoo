@@ -2,10 +2,11 @@ package ecdf
 
 import (
 	"bytes"
-	"testing"
-	"time"
+	"context"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"testing"
+	"time"
 )
 
 func newTestChunk(t time.Time, x, y float64) ([]byte, error) {
@@ -38,7 +39,7 @@ func TestBuildWithRealTool(t *testing.T) {
 	require.NoError(t, err)
 
 	var out bytes.Buffer
-	err = BuildJointECDF(store, serviceId, indicatorId, &out)
+	err = BuildJointECDF(context.Background(), store, serviceId, indicatorId, 1, &out)
 	require.NoError(t, err)
 	assert.NotNil(t, out)
 	assert.Greater(t, out.Len(), 20)
@@ -72,7 +73,7 @@ echo -n 'fake-ecdf-output'
 	require.NoError(t, err)
 
 	var out bytes.Buffer
-	err = BuildJointECDF(store, serviceId, indicatorId, &out)
+	err = BuildJointECDF(context.Background(), store, serviceId, indicatorId, 1, &out)
 	require.NoError(t, err)
 	assert.NotNil(t, out)
 	assert.Equal(t, "fake-ecdf-output", out.String())
@@ -96,7 +97,7 @@ func TestBuildReturnsWhenToolStopsConsuming(t *testing.T) {
 	done := make(chan error, 1)
 	go func() {
 		var out bytes.Buffer
-		err := BuildJointECDF(store, serviceId, indicatorId, &out)
+		err := BuildJointECDF(context.Background(), store, serviceId, indicatorId, 1, &out)
 		done <- err
 	}()
 

@@ -161,7 +161,7 @@ func publishIndicator(ctx context.Context, cfg config.Config, chunks ecdf.ChunkS
 		if active.Generation != service.Generation {
 			return fmt.Errorf("%w: started generation %d, active generation %d", errServiceGenerationChanged, service.Generation, active.Generation)
 		}
-		if err := ecdf.BuildJointECDFContextGeneration(ctx, chunks, service.Id, indicatorID, service.Generation, out); err != nil {
+		if err := ecdf.BuildJointECDF(ctx, chunks, service.Id, indicatorID, service.Generation, out); err != nil {
 			return fmt.Errorf("ECDF generation failed: %w", err)
 		}
 		return nil

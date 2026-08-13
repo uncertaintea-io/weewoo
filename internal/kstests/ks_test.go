@@ -52,7 +52,7 @@ func TestOneSampleAgainstJointECDF(t *testing.T) {
 	}
 
 	var jointECDF bytes.Buffer
-	require.NoError(t, ecdf.BuildJointECDF(chunkStore, serviceID, indicatorID, &jointECDF))
+	require.NoError(t, ecdf.BuildJointECDF(ctx, chunkStore, serviceID, indicatorID, 1, &jointECDF))
 
 	xs, ps, err := ecdf.Query(ctx, jointECDF.Bytes(), fixedLoad)
 	require.NoError(t, err)

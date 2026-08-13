@@ -28,45 +28,10 @@ const (
 	appServerWriteTimeout   = 20 * time.Second
 	startupMigrationTimeout = 2 * time.Minute
 )
-const (
-	sleep_duration = 1 * time.Second
-	sleep_message  = "zzz\n"
-)
-
 func NewMetricshandler() http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", promhttp.Handler())
 	return mux
-}
-
-// SleepHandler returns a successful ping after the configured delay.
-func SleepHandler(sleepTime time.Duration) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			w.Header().Set("Allow", http.MethodGet)
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-
-		timer := time.NewTimer(sleepTime)
-		defer timer.Stop()
-
-		select {
-		case <-timer.C:
-		case <-r.Context().Done():
-			slog.Error("request canceled", "error", r.Context().Err())
-			return
-		}
-
-		if r.Context().Err() != nil {
-			slog.Error("request context error", "error", r.Context().Err())
-			return
-		}
-
-		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(sleep_message))
-	})
 }
 
 type serviceResponse struct {
@@ -333,8 +298,6 @@ func main() {
 	settingsHandler := observeRequestDuration(NewSettingsAPIHandler(cfg))
 	appMux.Handle("/api/settings", settingsHandler)
 	appMux.Handle("/api/settings/test", settingsHandler)
-	//edit this to change the sleep time
-	appMux.Handle("/sleep", observeRequestDuration(SleepHandler(sleep_duration)))
 	//Serve files from static folder
 	appMux.Handle("/", observeRequestDuration(http.FileServer(http.Dir("./ui/dist"))))
 

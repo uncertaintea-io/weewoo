@@ -1,5 +1,4 @@
 const Path = require('path');
-const Webpack = require('webpack');
 const CopyWebpackPlugin = require('copy-webpack-plugin');
 const MiniCssExtractPlugin = require('mini-css-extract-plugin');
 
@@ -25,11 +24,6 @@ module.exports = {
       filename: '[name].min.css',
     }),
   ],
-  resolve: {
-    alias: {
-      '~': Path.resolve(__dirname, './src'),
-    },
-  },
   module: {
     rules: [
       {

@@ -40,7 +40,7 @@ type OutboxDispatcher struct {
 }
 
 func NewOutboxDispatcher(db *sql.DB, cfg config.Config, manager *Manager) *OutboxDispatcher {
-	return newOutboxDispatcher(db, cfg, manager, SendItContext)
+	return newOutboxDispatcher(db, cfg, manager, SendIt)
 }
 
 func newOutboxDispatcher(db *sql.DB, cfg config.Config, manager *Manager, send sendAlert) *OutboxDispatcher {

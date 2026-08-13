@@ -34,7 +34,7 @@ func TestQueryWithRealTool(t *testing.T) {
 	}
 
 	var jointECDF bytes.Buffer
-	require.NoError(t, BuildJointECDFContext(ctx, store, 1, 1, &jointECDF))
+	require.NoError(t, BuildJointECDF(ctx, store, 1, 1, 1, &jointECDF))
 
 	const value = 1.5
 	xs, ps, err := Query(ctx, jointECDF.Bytes(), value)

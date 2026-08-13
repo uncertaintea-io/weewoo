@@ -30,7 +30,7 @@ func buildActiveGeneration(ctx context.Context, services serviceReader, chunks e
 	if err != nil {
 		return 0, service.Generation, fmt.Errorf("count eligible chunks: %w", err)
 	}
-	if err := ecdf.BuildJointECDFContextGeneration(ctx, chunks, serviceID, indicatorID, service.Generation, out); err != nil {
+	if err := ecdf.BuildJointECDF(ctx, chunks, serviceID, indicatorID, service.Generation, out); err != nil {
 		return eligible, service.Generation, fmt.Errorf("build service %d indicator %d generation %d from %d eligible chunks: %w",
 			serviceID, indicatorID, service.Generation, eligible, err)
 	}

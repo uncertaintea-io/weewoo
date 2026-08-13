@@ -212,7 +212,7 @@ type callbackCompletion struct {
 
 func NewIntervalScheduler(options ...SchedulerOption) *IntervalScheduler {
 	opts := schedulerOptions{
-		clock:   realClock{},
+		clock:   newRealClock(),
 		backoff: ExponentialBackoffPolicy{},
 	}
 	for _, option := range options {

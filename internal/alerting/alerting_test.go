@@ -25,7 +25,7 @@ func TestAlertmanagerTransportUsesConfiguredURL(t *testing.T) {
 	require.Equal(t, "/proxy/api/v2/", transport.BasePath)
 }
 
-func TestSendItContextHonorsDeadline(t *testing.T) {
+func TestSendItHonorsDeadline(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(250 * time.Millisecond)
 		w.WriteHeader(http.StatusOK)
@@ -38,7 +38,7 @@ func TestSendItContextHonorsDeadline(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
 	start := time.Now()
-	err := SendItContext(ctx, cfg, AlertingOptions{AlertName: "test"})
+	err := SendIt(ctx, cfg, AlertingOptions{AlertName: "test"})
 	require.Error(t, err)
 	require.True(t, errors.Is(err, context.DeadlineExceeded), "expected deadline error, got %v", err)
 	require.Less(t, time.Since(start), 200*time.Millisecond)
@@ -64,7 +64,7 @@ func TestSendIt(t *testing.T) {
 	cfg := config.NewFakeConfig()
 	cfg.SetConfig(config.AlertmanagerURLConfigKey, server.URL)
 
-	err := SendIt(cfg, AlertingOptions{
+	err := SendIt(context.Background(), cfg, AlertingOptions{
 		Service:     "test",
 		Indicator:   "test",
 		AlertName:   "test",
