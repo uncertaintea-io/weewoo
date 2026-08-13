@@ -1,6 +1,10 @@
 # WeeWoo
 
-![Wee Woo Wee Woo](minion.gif)
+![Flashing alarm](docs/Emergency_Light.gif)
+<!--
+The Emergency Light is licensed under Creative Commons Attribution-Share Alike 3.0 Unported.
+See NOTICE.md for details.
+-->
 
 ## Database
 
