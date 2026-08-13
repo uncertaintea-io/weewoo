@@ -3,6 +3,7 @@ import { anomalyOccurrence, resolveAlertPDFState, type AlertPDFState } from './a
 import { CancelImport, CreateService, DeleteService, GetAlertEvidence, GetService, GetServiceDetail, GetSettings, ListAlerts, ListAllServices, ResetServiceBaseline, ReviewAlertOccurrence, SaveSettings, ServicesApiError, SetServicePaused, TestAlertmanager, TestService, UpdateService, type AlertOccurrence, type AlertRecord, type ApplicationSettings, type CreateServiceInput, type Service, type ServiceChange } from './api';
 import { renderAlertPDFComparison } from './alert-pdf';
 import { AppShell, type Theme } from './app-shell';
+import { confirmAction, promptAction, showMessage } from './confirmation-dialog';
 import { historicalRangeToUtc } from './datetime';
 import { renderJECDF } from './jecdf';
 import { liveRefreshDelay } from './live-refresh';
@@ -302,9 +303,18 @@ async function loadOccurrenceEvidence(occurrenceId: number, result: HTMLElement)
 async function acceptServiceAnomalies(button: HTMLButtonElement, serviceName: string, targets: AlertReviewTarget[]): Promise<void> {
   const count = targets.length;
   if (count === 0) return;
-  if (!window.confirm(`Accept ${String(count)} Bad chunks for ${serviceName} as normal and make them eligible for future ECDF builds?`)) return;
-  const reason = window.prompt(`Optional reason applied to every accepted ${serviceName} chunk:`, '');
-  if (reason === null) return;
+  const confirmed = await confirmAction({
+    title: 'Accept Bad chunks?',
+    message: `Accept ${String(count)} Bad chunks for ${serviceName} as normal and make them eligible for future ECDF builds?`,
+    confirmLabel: 'Accept chunks',
+  });
+  if (!confirmed) return;
+  const reason = await promptAction({
+    title: 'Add a review reason',
+    message: `Optional reason applied to every accepted ${serviceName} chunk:`,
+    confirmLabel: 'Continue',
+  });
+  if (reason === undefined) return;
   button.disabled = true;
   button.textContent = `Accepting 0 of ${String(count)}…`;
   try {
@@ -315,15 +325,26 @@ async function acceptServiceAnomalies(button: HTMLButtonElement, serviceName: st
     await loadAlerts();
   } catch (error) {
     await loadAlerts(false);
-    window.alert(error instanceof Error ? error.message : 'Unable to accept every anomalous occurrence.');
+    await showMessage('Unable to accept chunks', error instanceof Error ? error.message : 'Unable to accept every anomalous occurrence.');
   }
 }
 
 async function reviewOccurrence(button: HTMLButtonElement): Promise<void> {
   const accepted = button.dataset.reviewAccepted === 'true';
-  if (accepted && !window.confirm('Accept this Bad chunk as normal and make it eligible for future ECDF builds?')) return;
-  const reason = window.prompt(accepted ? 'Optional reason for accepting this chunk:' : 'Optional reason for restoring the automated Verdict:', '');
-  if (reason === null) return;
+  if (accepted) {
+    const confirmed = await confirmAction({
+      title: 'Accept Bad chunk?',
+      message: 'Accept this Bad chunk as normal and make it eligible for future ECDF builds?',
+      confirmLabel: 'Accept chunk',
+    });
+    if (!confirmed) return;
+  }
+  const reason = await promptAction({
+    title: 'Add a review reason',
+    message: accepted ? 'Optional reason for accepting this chunk:' : 'Optional reason for restoring the automated Verdict:',
+    confirmLabel: 'Continue',
+  });
+  if (reason === undefined) return;
   button.disabled = true;
   try {
     await ReviewAlertOccurrence(
@@ -334,7 +355,7 @@ async function reviewOccurrence(button: HTMLButtonElement): Promise<void> {
     );
     await loadAlerts();
   } catch (error) {
-    window.alert(error instanceof Error ? error.message : 'Unable to review this occurrence.');
+    await showMessage('Unable to review occurrence', error instanceof Error ? error.message : 'Unable to review this occurrence.');
     button.disabled = false;
   }
 }
@@ -845,13 +866,24 @@ function renderServiceDetail(service: Service, history: ServiceChange[] = [], hi
 }
 
 async function resetBaselineFromDetail(service: Service): Promise<void> {
-  if (!window.confirm(`Reset the performance baseline for ${service.name}? The current Joint ECDF will be discarded and anomaly detection will learn from newly collected data.`)) return;
+  const confirmed = await confirmAction({
+    title: 'Start a new service version?',
+    message: `Reset the performance baseline for ${service.name}? The current Joint ECDF will be discarded and anomaly detection will learn from newly collected data.`,
+    confirmLabel: 'Start new version',
+  });
+  if (!confirmed) return;
   await ResetServiceBaseline(service.id);
   await loadServiceDetail(service.id);
 }
 
 async function deleteServiceFromDetail(service: Service): Promise<void> {
-  if (!window.confirm(`Delete ${service.name}? Historical data will be retained.`)) return;
+  const confirmed = await confirmAction({
+    title: 'Delete service?',
+    message: `Delete ${service.name}? Historical data will be retained.`,
+    confirmLabel: 'Delete service',
+    dangerous: true,
+  });
+  if (!confirmed) return;
   await DeleteService(service.id);
   window.location.hash = 'services';
 }
