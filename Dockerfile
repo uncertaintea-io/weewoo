@@ -1,23 +1,21 @@
 # syntax=docker/dockerfile:1
 
-# Use the jecdf image matching the target platform.
-FROM ghcr.io/uncertaintea-io/jecdf:latest AS jecdf-stage
+# The release workflow supplies the version-matched, multi-platform server
+# image. BuildKit selects the server image for the current target platform.
+# The placeholder keeps the Dockerfile syntactically valid while ensuring a
+# build that omits the versioned image argument cannot silently use "latest".
+ARG WEEWOO_SERVER_IMAGE=invalid.invalid/weewoo-server:release-tag-required
+FROM ${WEEWOO_SERVER_IMAGE} AS weewoo-server
 
-# Build the application from source
-FROM golang:1.26 AS build-stage
+# Define the public runtime independently from the server build image.
+FROM gcr.io/distroless/base-debian11 AS public-release
 WORKDIR /app
-COPY . .
-RUN go mod download
-RUN CGO_ENABLED=0 GOOS=linux go build ./cmd/weewoo-server
+COPY --from=weewoo-server --chown=nonroot:nonroot /app/weewoo-server ./weewoo-server
+COPY --from=weewoo-server --chown=nonroot:nonroot /app/jecdf ./jecdf
+COPY --from=weewoo-server --chown=nonroot:nonroot /app/ui/dist ./ui/dist
+COPY --from=weewoo-server --chown=nonroot:nonroot /var/lib/weewoo /var/lib/weewoo
 
-# Deploy the application binary into a lean image
-FROM gcr.io/distroless/base-debian11 AS release-stage
-WORKDIR /app
-COPY --from=build-stage /app/weewoo-server ./weewoo-server
-COPY --from=build-stage /app/ui/dist ./ui/dist
-COPY --from=jecdf-stage /jecdf ./jecdf
-
-# run it!
-EXPOSE 8080
+EXPOSE 8080 5000
+VOLUME ["/var/lib/weewoo"]
 USER nonroot:nonroot
-CMD ["./weewoo-server"]
+ENTRYPOINT ["./weewoo-server"]
