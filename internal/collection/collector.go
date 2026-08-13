@@ -14,11 +14,6 @@ import (
 	"github.com/uncertaintea-io/weewoo/internal/ecdf"
 )
 
-const (
-	LoadLatencyIndicator = 1
-	TimeOfDayIndicator   = 2
-)
-
 type Collector interface {
 	Stop()
 	Schedule(service *config.Service) error
@@ -221,65 +216,40 @@ func (c *collector) collectSamples(ctx context.Context, service *config.Service,
 	if windowDuration := end.Sub(start); windowDuration < step {
 		step = windowDuration
 	}
-	loadPoints, err := QueryPrometheusRangePoints(ctx, c.client, service.PrometheusURL, service.LoadQuery, start, end, step)
+	loadSamples, err := QueryPrometheusSamples(ctx, c.client, service.PrometheusURL, service.LoadQuery, start, end, step)
 	if err != nil {
 		return prometheusQueryFailure("load", service.LoadQuery, err)
 	}
-	loadPoints = pointsInWindow(loadPoints, start, end)
-	latencySamples, err := QueryPrometheusRangeSamples(ctx, c.client, service.PrometheusURL, service.LatencyQuery, start, end, step)
+	latencySamples, err := QueryPrometheusSamples(ctx, c.client, service.PrometheusURL, service.LatencyQuery, start, end, step)
 	if err != nil {
 		return prometheusQueryFailure("latency", service.LatencyQuery, err)
 	}
-	if len(loadPoints) == 0 || len(latencySamples) == 0 {
+	if len(loadSamples) == 0 || len(latencySamples) == 0 {
 		return errWindowHasNoMetrics
 	}
-	return c.writeCollectedIndicators(ctx, service, end, loadPoints, latencySamples, historical)
-}
-
-func prometheusQueryFailure(metric, query string, err error) error {
-	return fmt.Errorf("Prometheus %s query %q failed: %w", metric, query, err)
-}
-
-func pointsInWindow(points []PrometheusPoint, start, end time.Time) []PrometheusPoint {
-	filtered := points[:0]
-	for _, point := range points {
-		if point.Timestamp.After(start) && !point.Timestamp.After(end) {
-			filtered = append(filtered, point)
-		}
-	}
-	return filtered
-}
-
-func (c *collector) writeCollectedIndicators(ctx context.Context, service *config.Service, end time.Time, loadPoints []PrometheusPoint, latencies []ecdf.Sample, historical bool) error {
-	loadValues := make([]float64, len(loadPoints))
-	for i, point := range loadPoints {
-		loadValues[i] = point.Value
-	}
-	loads := ecdf.CountSamples(loadValues)
-	if err := c.writeIndicatorChunk(service, LoadLatencyIndicator, end, loads, latencies); err != nil {
+	if err := c.writeIndicatorChunk(service, ecdf.LoadLatencyIndicator, end, loadSamples, latencySamples); err != nil {
 		return err
 	}
-	observations, err := c.writeTimeOfDayChunks(service, loadPoints)
-	if err != nil {
+	todSamples := []ecdf.Sample{{Value: utcTimeOfDay(end), Count: 1}}
+	if err := c.writeIndicatorChunk(service, ecdf.TimeOfDayIndicator, end, todSamples, loadSamples); err != nil {
 		return err
 	}
 	if c.analyzer != nil {
-		requests := []AnalysisRequest{{
+		requests := []*AnalysisRequest{{
 			Service:     *service,
-			IndicatorID: LoadLatencyIndicator,
+			IndicatorID: ecdf.LoadLatencyIndicator,
 			Timestamp:   end,
-			Loads:       loads,
-			Latencies:   latencies,
+			Independent: loadSamples,
+			Dependent:   latencySamples,
+			Historical:  historical,
+		}, {
+			Service:     *service,
+			IndicatorID: ecdf.TimeOfDayIndicator,
+			Timestamp:   end,
+			Independent: todSamples,
+			Dependent:   loadSamples,
 			Historical:  historical,
 		}}
-		if len(observations) > 0 {
-			timestamps := make([]time.Time, len(observations))
-			for i := range observations {
-				timestamps[i] = observations[i].Timestamp
-			}
-			requests = append(requests, AnalysisRequest{Service: *service, IndicatorID: TimeOfDayIndicator, Timestamp: end,
-				Observations: observations, ChunkTimestamps: timestamps, Historical: historical})
-		}
 		for _, request := range requests {
 			if submitErr := c.submitAnalysis(ctx, request); submitErr != nil {
 				if historical {
@@ -293,7 +263,11 @@ func (c *collector) writeCollectedIndicators(ctx context.Context, service *confi
 	return nil
 }
 
-func (c *collector) submitAnalysis(ctx context.Context, request AnalysisRequest) error {
+func prometheusQueryFailure(metric, query string, err error) error {
+	return fmt.Errorf("Prometheus %s query %q failed: %w", metric, query, err)
+}
+
+func (c *collector) submitAnalysis(ctx context.Context, request *AnalysisRequest) error {
 	if request.Historical {
 		if queue, ok := c.analyzer.(contextualAnalysisQueue); ok {
 			return queue.SubmitContext(ctx, request)
@@ -302,26 +276,12 @@ func (c *collector) submitAnalysis(ctx context.Context, request AnalysisRequest)
 	return c.analyzer.Submit(request)
 }
 
-func (c *collector) writeTimeOfDayChunks(service *config.Service, points []PrometheusPoint) ([]Observation, error) {
-	if service.Interval <= 0 {
-		return nil, fmt.Errorf("invalid service interval")
+func utcTimeOfDay(t time.Time) float64 {
+	sec := t.Unix() % 86400
+	if sec < 0 {
+		sec += 86400
 	}
-	observations := make([]Observation, 0, len(points))
-	seen := make(map[time.Time]struct{}, len(points))
-	for _, point := range points {
-		timestamp := point.Timestamp.UTC().Truncate(time.Second)
-		if _, duplicate := seen[timestamp]; duplicate {
-			return nil, fmt.Errorf("duplicate load observation at %s", timestamp.Format(time.RFC3339))
-		}
-		seen[timestamp] = struct{}{}
-		x := timeOfDayBucket(timestamp, service.Interval)
-		if err := c.writeIndicatorChunk(service, TimeOfDayIndicator, timestamp,
-			[]ecdf.Sample{{Value: x, Count: 1}}, []ecdf.Sample{{Value: point.Value, Count: 1}}); err != nil {
-			return nil, err
-		}
-		observations = append(observations, Observation{Timestamp: timestamp, Value: point.Value})
-	}
-	return observations, nil
+	return float64(sec)
 }
 
 func (c *collector) writeIndicatorChunk(service *config.Service, indicatorID int, timestamp time.Time, x, y []ecdf.Sample) error {
@@ -330,12 +290,6 @@ func (c *collector) writeIndicatorChunk(service *config.Service, indicatorID int
 		return err
 	}
 	return c.chunkStore.WriteChunk(service.Id, indicatorID, service.Generation, timestamp, chunk)
-}
-
-func timeOfDayBucket(timestamp time.Time, interval time.Duration) float64 {
-	u := timestamp.UTC()
-	seconds := time.Duration(u.Hour())*time.Hour + time.Duration(u.Minute())*time.Minute + time.Duration(u.Second())*time.Second
-	return float64(seconds / interval)
 }
 
 func (c *collector) emit(serviceID int, kind, message string) {

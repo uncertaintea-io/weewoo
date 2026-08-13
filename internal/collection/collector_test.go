@@ -184,11 +184,11 @@ type backpressureAnalysisQueue struct {
 	contextSubmissions int
 }
 
-func (*backpressureAnalysisQueue) Submit(AnalysisRequest) error {
+func (*backpressureAnalysisQueue) Submit(*AnalysisRequest) error {
 	return ErrAnalysisQueueFull
 }
 
-func (q *backpressureAnalysisQueue) SubmitContext(_ context.Context, _ AnalysisRequest) error {
+func (q *backpressureAnalysisQueue) SubmitContext(_ context.Context, _ *AnalysisRequest) error {
 	q.contextSubmissions++
 	return nil
 }
@@ -220,8 +220,8 @@ func TestHistoricalImportWritesOneTimeChunkPerServiceInterval(t *testing.T) {
 	_, err := collector.Import(context.Background(), service, start, start.Add(2*time.Hour), nil)
 
 	require.NoError(t, err)
-	require.Equal(t, []time.Time{start.Add(time.Hour), start.Add(2 * time.Hour)}, chunks.timestamps[LoadLatencyIndicator])
-	require.Equal(t, []time.Time{start.Add(time.Hour), start.Add(2 * time.Hour)}, chunks.timestamps[TimeOfDayIndicator])
+	require.Equal(t, []time.Time{start.Add(time.Hour), start.Add(2 * time.Hour)}, chunks.timestamps[ecdf.LoadLatencyIndicator])
+	require.Equal(t, []time.Time{start.Add(time.Hour), start.Add(2 * time.Hour)}, chunks.timestamps[ecdf.TimeOfDayIndicator])
 }
 
 func TestHistoricalImportWritesHistogramIncreaseWithoutBucketTimestamps(t *testing.T) {
@@ -261,7 +261,7 @@ func TestHistoricalImportWritesHistogramIncreaseWithoutBucketTimestamps(t *testi
 
 	require.NoError(t, err)
 	require.Equal(t, ImportSummary{TotalWindows: 1, ImportedWindows: 1}, summary)
-	chunk, err := chunks.ReadChunk(service.Id, LoadLatencyIndicator, end)
+	chunk, err := chunks.ReadChunk(service.Id, ecdf.LoadLatencyIndicator, end)
 	require.NoError(t, err)
 	_, _, latencies, err := ecdf.Decode(chunk)
 	require.NoError(t, err)

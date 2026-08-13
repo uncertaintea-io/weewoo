@@ -9,9 +9,13 @@ A service's collected load and latency observations for one sampling interval.
 _Avoid_: Sample
 
 **Time-of-day chunk**:
-An observation used by the Load vs. UTC Time of Day indicator. Its X
-value is the service-interval bucket since UTC midnight and its Y value is load.
-Its durable timestamp is the original UTC Prometheus observation time.
+A Time chunk used by the Load vs. UTC Time of Day indicator. Its X values are
+whole seconds since UTC midnight and its Y values are observed loads.
+
+**Training range**:
+The reference-sized span used to calculate how many Time chunks a model needs.
+Load vs. UTC Time of Day uses a five-day Training range.
+_Avoid_: Readiness position, trained slot
 
 **Load vs. UTC Time of Day**:
 The indicator that compares recent load with load historically observed in the

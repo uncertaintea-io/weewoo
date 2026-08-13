@@ -28,13 +28,14 @@ chunks and count toward learning, but never emit live historical alerts.
 
 ## Learning and publication
 
-A time-of-day position is trained after it contains eligible observations from
-five distinct UTC dates. The model is ready when at least 95% of the
-`ceil(86,400 / interval_seconds)` expected daily sampling positions are trained.
-The interval determines the expected sampling positions for this readiness
-calculation; their X coordinates remain seconds since midnight. Counts use
-eligible Baseline and Good chunks plus reviewed Bad chunks accepted as normal; raw
-observation counts cannot satisfy the distinct-day requirement.
+The Training range is five days. The expected number of chunks is
+`ceil(5 * 86,400 / interval_seconds)`. Coverage is the number of eligible
+indicator-2 chunks in the current service generation divided by that expected
+count, capped at 100%. The model is ready when coverage reaches 95%.
+
+Eligible chunks are Baseline and Good chunks plus reviewed Bad chunks accepted
+as normal. A chunk counts once even when it contains several load observations.
+Historical imports count toward coverage in the same way as live collection.
 
 The hourly ECDF publisher defers indicator 2 until it is ready, then publishes
 it using the existing immutable database publication path. It uses all eligible
@@ -64,7 +65,7 @@ reviews, eligibility, and alerts remain separate from indicator 1.
 ## Status and known limits
 
 The service detail API and UI expose the **Load vs. UTC Time of Day** state,
-coverage, five-day requirement, and latest publication time.
+eligible-chunk coverage, five-day Training range, and latest publication time.
 
 The MVP pools every UTC date. It does not distinguish weekdays, weekends, or
 holidays. That seasonality can be modeled separately later.

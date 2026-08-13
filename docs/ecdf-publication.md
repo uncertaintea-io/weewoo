@@ -26,9 +26,10 @@ deferred by pending collection recovery. Subsequent builds incorporate
 recovered eligible chunks.
 
 The hourly publisher also builds **Load vs. UTC Time of Day** under indicator
-ID 2. Its first publication waits until five distinct UTC dates cover at least
-95% of the service's time-of-day buckets. It uses all eligible chunks in the
-active service generation. See [the time-of-day design](design/load-time-of-day.md).
+ID 2. Its first publication waits until eligible chunks cover at least 95% of
+the expected chunks in its five-day Training range. It uses all eligible chunks
+in the active service generation. See
+[the time-of-day design](design/load-time-of-day.md).
 
 Configuration:
 

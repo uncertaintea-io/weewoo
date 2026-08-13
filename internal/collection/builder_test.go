@@ -108,7 +108,7 @@ func TestStartECDFBuilderBuildsIntervalOnceAcrossReplicas(t *testing.T) {
 	chunkTime := time.Now().Add(-30 * time.Minute)
 	chunk, err := ecdf.Encode(chunkTime, []ecdf.Sample{{Value: 1, Count: 1}}, []ecdf.Sample{{Value: 2, Count: 1}})
 	require.NoError(t, err)
-	require.NoError(t, chunks.WriteChunk(7, LoadLatencyIndicator, 1, chunkTime, chunk))
+	require.NoError(t, chunks.WriteChunk(7, ecdf.LoadLatencyIndicator, 1, chunkTime, chunk))
 	joint := newRecordingJointStore()
 	schedulerA := NewIntervalScheduler(WithSchedulerEventHandler(nil))
 	schedulerB := NewIntervalScheduler(WithSchedulerEventHandler(nil))
@@ -145,10 +145,10 @@ func TestBuildJointECDF(t *testing.T) {
 	chunk, err := ecdf.Encode(timestamp, []ecdf.Sample{{Value: 1, Count: 1}}, []ecdf.Sample{{Value: 2, Count: 1}})
 	require.NoError(t, err)
 	chunks := ecdf.NewFakeChunkStore()
-	require.NoError(t, chunks.WriteChunk(1, LoadLatencyIndicator, 1, timestamp, chunk))
+	require.NoError(t, chunks.WriteChunk(1, ecdf.LoadLatencyIndicator, 1, timestamp, chunk))
 
 	var out bytes.Buffer
-	require.NoError(t, ecdf.BuildJointECDFContext(context.Background(), chunks, 1, LoadLatencyIndicator, &out))
+	require.NoError(t, ecdf.BuildJointECDFContext(context.Background(), chunks, 1, ecdf.LoadLatencyIndicator, &out))
 	assert.Equal(t, "fake-ecdf-output", out.String())
 }
 
@@ -156,7 +156,7 @@ func TestBuildECDFUsesContext(t *testing.T) {
 	setFakeJECDF(t, "#!/bin/sh\nsleep 10\n")
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	err := ecdf.BuildJointECDFContext(ctx, ecdf.NewFakeChunkStore(), 1, LoadLatencyIndicator, &bytes.Buffer{})
+	err := ecdf.BuildJointECDFContext(ctx, ecdf.NewFakeChunkStore(), 1, ecdf.LoadLatencyIndicator, &bytes.Buffer{})
 	require.ErrorIs(t, err, context.Canceled)
 }
 
@@ -169,7 +169,7 @@ func TestStartECDFBuilderPublishesConfiguredServices(t *testing.T) {
 	chunkTime := time.Now().Add(-30 * time.Minute)
 	chunk, err := ecdf.Encode(chunkTime, []ecdf.Sample{{Value: 1, Count: 1}}, []ecdf.Sample{{Value: 2, Count: 1}})
 	require.NoError(t, err)
-	require.NoError(t, chunks.WriteChunk(7, LoadLatencyIndicator, 1, chunkTime, chunk))
+	require.NoError(t, chunks.WriteChunk(7, ecdf.LoadLatencyIndicator, 1, chunkTime, chunk))
 	joint := newRecordingJointStore()
 	scheduler := NewIntervalScheduler(WithSchedulerEventHandler(nil))
 	defer scheduler.Stop()
@@ -183,7 +183,7 @@ func TestStartECDFBuilderPublishesConfiguredServices(t *testing.T) {
 	joint.mu.Lock()
 	defer joint.mu.Unlock()
 	assert.Equal(t, 7, joint.serviceID)
-	assert.Equal(t, LoadLatencyIndicator, joint.indicatorID)
+	assert.Equal(t, ecdf.LoadLatencyIndicator, joint.indicatorID)
 	assert.Equal(t, "fake-ecdf-output", string(joint.body))
 	assert.Equal(t, joint.intervalEnd.Truncate(serviceInterval), joint.intervalEnd)
 }
@@ -197,7 +197,7 @@ func TestECDFBuilderDoesNotReuseChunksFromBeforeConfigurationChange(t *testing.T
 	oldTime := resetAt.Add(-time.Hour)
 	chunk, err := ecdf.Encode(oldTime, []ecdf.Sample{{Value: 1, Count: 1}}, []ecdf.Sample{{Value: 2, Count: 1}})
 	require.NoError(t, err)
-	require.NoError(t, chunks.WriteChunk(7, LoadLatencyIndicator, 1, oldTime, chunk))
+	require.NoError(t, chunks.WriteChunk(7, ecdf.LoadLatencyIndicator, 1, oldTime, chunk))
 	joint := newRecordingJointStore()
 	scheduler := NewIntervalScheduler(WithSchedulerEventHandler(nil))
 	defer scheduler.Stop()
@@ -221,7 +221,7 @@ func TestECDFBuilderDoesNotPublishAfterServiceGenerationChanges(t *testing.T) {
 	chunkTime := time.Now().Add(-30 * time.Minute)
 	chunk, err := ecdf.Encode(chunkTime, []ecdf.Sample{{Value: 1, Count: 1}}, []ecdf.Sample{{Value: 2, Count: 1}})
 	require.NoError(t, err)
-	require.NoError(t, chunks.WriteChunk(7, LoadLatencyIndicator, service.Generation, chunkTime, chunk))
+	require.NoError(t, chunks.WriteChunk(7, ecdf.LoadLatencyIndicator, service.Generation, chunkTime, chunk))
 	joint := &blockedJointStore{
 		entered:   make(chan struct{}),
 		release:   make(chan struct{}),
@@ -254,7 +254,7 @@ func TestECDFBuilderRetriesWhenServiceGenerationCannotBeRead(t *testing.T) {
 	chunkTime := time.Now().Add(-30 * time.Minute)
 	chunk, err := ecdf.Encode(chunkTime, []ecdf.Sample{{Value: 1, Count: 1}}, []ecdf.Sample{{Value: 2, Count: 1}})
 	require.NoError(t, err)
-	require.NoError(t, chunks.WriteChunk(7, LoadLatencyIndicator, 1, chunkTime, chunk))
+	require.NoError(t, chunks.WriteChunk(7, ecdf.LoadLatencyIndicator, 1, chunkTime, chunk))
 	joint := newRecordingJointStore()
 	events := make(chan SchedulerEvent, 8)
 	scheduler := NewIntervalScheduler(WithSchedulerEventHandler(func(event SchedulerEvent) {
