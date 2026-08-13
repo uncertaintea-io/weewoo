@@ -244,7 +244,7 @@ printf '\002\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\077
 	require.Equal(t, ecdf.LoadLatencyIndicator, alerts.outcomes[0].IndicatorID)
 	require.Equal(t, timestamp, alerts.outcomes[0].Timestamp)
 	require.True(t, alerts.outcomes[0].Anomalous)
-	require.Less(t, alerts.outcomes[0].PValue, ksSignificanceLevel)
+	require.Less(t, alerts.outcomes[0].PValueTest, ksSignificanceLevel)
 }
 
 func TestHistoricalAnomalyRecordsVerdictWithoutAlert(t *testing.T) {

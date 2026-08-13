@@ -234,8 +234,8 @@ func recordAnalysisResult(ctx context.Context, cfg config.Config, chunks ecdf.Ch
 		IndicatorID:      indicatorID,
 		Timestamp:        primary,
 		IndependentValue: result.independentValue,
-		PValue:           result.pValue,
-		Threshold:        ksSignificanceLevel,
+		PValueTest:       result.pValue,
+		PValueThreshold:  ksSignificanceLevel,
 		Anomalous:        result.anomalous,
 		GeneratorURL:     generatorURL,
 	}); err != nil {

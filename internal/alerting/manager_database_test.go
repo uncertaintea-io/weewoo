@@ -43,8 +43,9 @@ func TestTimeOfDayAnalysisMetadataReachesAlertAndNotification(t *testing.T) {
 		IndicatorID:      indicatorID,
 		Timestamp:        timestamp,
 		IndependentValue: 42,
-		PValue:           0.001,
-		Threshold:        0.01, Anomalous: true,
+		PValueTest:       0.001,
+		PValueThreshold:  0.01,
+		Anomalous: true,
 	}
 	require.NoError(t, NewManager(db, config.NewFakeConfig(), "postgres").RecordAnalysis(ctx, outcome))
 
@@ -145,7 +146,7 @@ func TestSuccessfulAnalysisResolvesAnalysisMonitoringFailure(t *testing.T) {
 			require.EqualValues(t, 1, delivered)
 
 			outcome.Timestamp = succeededAt
-			outcome.PValue = 0.8
+			outcome.PValueTest = 0.8
 			outcome.Anomalous = test.anomalous
 			require.NoError(t, manager.RecordAnalysis(ctx, outcome))
 
@@ -204,7 +205,7 @@ func TestHistoricalAnalysisPersistsVerdictWithoutChangingAlerts(t *testing.T) {
 	require.NoError(t, manager.RecordAnalysis(ctx, AnalysisOutcome{
 		ServiceID: serviceID, ServiceName: "repro-service",
 		IndicatorID: indicatorID, Timestamp: historicalAt,
-		PValue: 0.001, Anomalous: true, Historical: true,
+		PValueTest: 0.001, Anomalous: true, Historical: true,
 	}))
 	require.NoError(t, manager.RecordAnalysisFailure(ctx, AnalysisOutcome{
 		ServiceID: serviceID, ServiceName: "repro-service",
@@ -269,7 +270,7 @@ func TestOutboxRetiresLegacyHistoricalFiringWithoutDelivery(t *testing.T) {
 	require.NoError(t, manager.recordAnomaly(ctx, AnalysisOutcome{
 		ServiceID: serviceID, ServiceName: "legacy-service",
 		IndicatorID: indicatorID, Timestamp: timestamp,
-		PValue: 0.001, Anomalous: true, Historical: true,
+		PValueTest: 0.001, Anomalous: true, Historical: true,
 	}))
 	deliveries := 0
 	dispatcher := &OutboxDispatcher{

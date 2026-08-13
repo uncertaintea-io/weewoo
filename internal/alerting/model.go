@@ -36,8 +36,8 @@ type AnalysisOutcome struct {
 	IndicatorID      int
 	Timestamp        time.Time
 	IndependentValue float64
-	PValue           float64
-	Threshold        float64
+	PValueTest       float64
+	PValueThreshold  float64
 	Anomalous        bool
 	Historical       bool
 	GeneratorURL     string

@@ -77,7 +77,7 @@ func (m *Manager) recordHistoricalAnalysis(ctx context.Context, outcome Analysis
 		ON CONFLICT (service_id, indicator_id, "timestamp")
 		DO UPDATE SET automated_good = EXCLUDED.automated_good,
 			pvalue = EXCLUDED.pvalue, analysis_state = EXCLUDED.analysis_state
-	`, outcome.ServiceID, outcome.IndicatorID, outcome.Timestamp, !outcome.Anomalous, outcome.PValue, state)
+	`, outcome.ServiceID, outcome.IndicatorID, outcome.Timestamp, !outcome.Anomalous, outcome.PValueTest, state)
 	if err != nil {
 		return fmt.Errorf("record historical verdict: %w", err)
 	}
@@ -97,7 +97,7 @@ func (m *Manager) recordGoodAnalysis(ctx context.Context, outcome AnalysisOutcom
 		VALUES ($1, $2, $3, true, $4, 'good')
 		ON CONFLICT (service_id, indicator_id, "timestamp")
 		DO UPDATE SET automated_good = true, pvalue = EXCLUDED.pvalue, analysis_state = 'good'
-	`, outcome.ServiceID, outcome.IndicatorID, outcome.Timestamp, outcome.PValue); err != nil {
+	`, outcome.ServiceID, outcome.IndicatorID, outcome.Timestamp, outcome.PValueTest); err != nil {
 		return fmt.Errorf("record good verdict: %w", err)
 	}
 
@@ -137,7 +137,7 @@ func (m *Manager) recordAnomaly(ctx context.Context, outcome AnalysisOutcome) er
 		VALUES ($1, $2, $3, false, $4, 'bad')
 		ON CONFLICT (service_id, indicator_id, "timestamp")
 		DO UPDATE SET automated_good = false, pvalue = EXCLUDED.pvalue, analysis_state = 'bad'
-	`, outcome.ServiceID, outcome.IndicatorID, outcome.Timestamp, outcome.PValue); err != nil {
+	`, outcome.ServiceID, outcome.IndicatorID, outcome.Timestamp, outcome.PValueTest); err != nil {
 		return fmt.Errorf("record bad verdict: %w", err)
 	}
 
@@ -172,8 +172,8 @@ func (m *Manager) recordAnomaly(ctx context.Context, outcome AnalysisOutcome) er
 	}
 	evidence, _ := json.Marshal(map[string]any{
 		"independentValue": outcome.IndependentValue,
-		"pValue":           outcome.PValue,
-		"threshold":        outcome.Threshold,
+		"pValue":           outcome.PValueTest,
+		"threshold":        outcome.PValueThreshold,
 		"historical":       outcome.Historical,
 	})
 	summary := fmt.Sprintf("%s at %s", copy.title, outcome.Timestamp.Format(time.RFC3339))
@@ -1329,14 +1329,14 @@ func anomalyCopyForOutcome(outcome AnalysisOutcome) anomalyAlertCopy {
 		copy.title = "Load vs. Latency anomaly detected"
 		copy.description = fmt.Sprintf(
 			"Latency distribution differs from the reference at load %f (KS p-value %g; threshold %g).",
-			outcome.IndependentValue, outcome.PValue, outcome.Threshold,
+			outcome.IndependentValue, outcome.PValueTest, outcome.PValueThreshold,
 		)
 		copy.impact = "The observed latency distribution differed significantly from the learned reference at the current load."
 	case ecdf.TimeOfDayIndicator:
 		copy.title = "Load vs. Time-of-Day anomaly detected"
 		copy.description = fmt.Sprintf(
 			"Load distribution differs from the time-of-day reference at %g seconds after UTC midnight (KS p-value %g; threshold %g).",
-			outcome.IndependentValue, outcome.PValue, outcome.Threshold,
+			outcome.IndependentValue, outcome.PValueTest, outcome.PValueThreshold,
 		)
 		copy.impact = "The recent load distribution differed significantly from what the service normally observes at this time of day."
 	default:
