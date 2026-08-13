@@ -2,6 +2,7 @@ import './index.scss'
 import { anomalyOccurrence, resolveAlertPDFState, type AlertPDFState } from './alert-detail';
 import { CancelImport, CreateService, DeleteService, GetAlertEvidence, GetService, GetServiceDetail, GetSettings, ListAlerts, ListAllServices, ResetServiceBaseline, ReviewAlertOccurrence, SaveSettings, ServicesApiError, SetServicePaused, TestAlertmanager, TestService, UpdateService, type AlertOccurrence, type AlertRecord, type ApplicationSettings, type CreateServiceInput, type Service, type ServiceChange } from './api';
 import { renderAlertPDFComparison } from './alert-pdf';
+import { confirmAction, showMessage } from './confirmation-dialog';
 import { historicalRangeToUtc } from './datetime';
 import { renderJECDF } from './jecdf';
 import { liveRefreshDelay } from './live-refresh';
@@ -968,15 +969,34 @@ function renderServiceDetail(service: Service, history: ServiceChange[] = [], hi
 }
 
 async function resetBaselineFromDetail(service: Service): Promise<void> {
-  if (!window.confirm(`Reset the performance baseline for ${service.name}? The current Joint ECDF will be discarded and anomaly detection will learn from newly collected data.`)) return;
-  await ResetServiceBaseline(service.id);
-  await loadServiceDetail(service.id);
+  const confirmed = await confirmAction({
+    title: 'Start a new service version?',
+    message: `Reset the performance baseline for ${service.name}? The current Joint ECDF will be discarded and anomaly detection will learn from newly collected data.`,
+    confirmLabel: 'Start new version',
+  });
+  if (!confirmed) return;
+  try {
+    await ResetServiceBaseline(service.id);
+    await loadServiceDetail(service.id);
+  } catch (error) {
+    await showMessage('Unable to start a new service version', error instanceof Error ? error.message : 'The service version could not be started.');
+  }
 }
 
 async function deleteServiceFromDetail(service: Service): Promise<void> {
-  if (!window.confirm(`Delete ${service.name}? Historical data will be retained.`)) return;
-  await DeleteService(service.id);
-  window.location.hash = 'services';
+  const confirmed = await confirmAction({
+    title: 'Delete service?',
+    message: `Delete ${service.name}? Historical data will be retained.`,
+    confirmLabel: 'Delete service',
+    dangerous: true,
+  });
+  if (!confirmed) return;
+  try {
+    await DeleteService(service.id);
+    window.location.hash = 'services';
+  } catch (error) {
+    await showMessage('Unable to delete service', error instanceof Error ? error.message : 'The service could not be deleted.');
+  }
 }
 
 async function loadServiceDetail(id: number, showLoading = true): Promise<void> {
