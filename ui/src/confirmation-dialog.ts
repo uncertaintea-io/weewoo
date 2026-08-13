@@ -12,6 +12,8 @@ interface DialogOptions extends ConfirmationOptions {
 function openDialog(options: DialogOptions): Promise<boolean> {
   return new Promise((resolve) => {
     const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const app = document.querySelector<HTMLElement>('#app');
+    const appWasInert = app?.inert ?? false;
     const backdrop = document.createElement('div');
     backdrop.className = 'confirmation-backdrop';
 
@@ -43,14 +45,39 @@ function openDialog(options: DialogOptions): Promise<boolean> {
     confirm.type = 'button';
     confirm.textContent = options.confirmLabel;
 
+    let finished = false;
     const finish = (result: boolean): void => {
+      if (finished) return;
+      finished = true;
       document.removeEventListener('keydown', onKeyDown);
       backdrop.remove();
+      if (app !== null) app.inert = appWasInert;
       previouslyFocused?.focus();
       resolve(result);
     };
     const onKeyDown = (event: KeyboardEvent): void => {
-      if (event.key === 'Escape' && options.cancelable !== false) finish(false);
+      if (event.key === 'Escape' && options.cancelable !== false) {
+        event.preventDefault();
+        finish(false);
+        return;
+      }
+      if (event.key !== 'Tab') return;
+
+      const focusable = Array.from(dialog.querySelectorAll<HTMLElement>('button:not(:disabled)'));
+      if (focusable.length === 0) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+
+      if (!dialog.contains(document.activeElement)) {
+        event.preventDefault();
+        (event.shiftKey ? last : first).focus();
+      } else if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
     };
 
     cancel.addEventListener('click', () => { finish(false); });
@@ -64,6 +91,7 @@ function openDialog(options: DialogOptions): Promise<boolean> {
     actions.append(confirm);
     dialog.append(title, message, actions);
     backdrop.append(dialog);
+    if (app !== null) app.inert = true;
     document.body.append(backdrop);
     confirm.focus();
   });
