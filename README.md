@@ -101,3 +101,20 @@ receivers:
 The initial global alert and recovery defaults are inserted by the initial
 schema migration. The complete lifecycle and retention
 contract is documented in [`docs/design/alerts.md`](docs/design/alerts.md).
+
+## License
+
+The application source code is source-available under the
+PolyForm Internal Use License 1.0.0.
+
+You may use and modify the software for internal purposes, including
+within a business. The license does not permit offering the software
+to third parties as a product or service.
+
+Some components are licensed separately:
+
+- A proprietary runtime binary is distributed under separate terms.
+- Company logos and trademarks are not licensed for reuse.
+- Third-party dependencies remain subject to their respective licenses.
+
+See [NOTICE.md](NOTICE.md) for details.

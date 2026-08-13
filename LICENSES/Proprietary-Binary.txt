@@ -1,0 +1,11 @@
+Copyright © 2026 Uncertain Tea, Inc.
+
+Permission is granted to use this binary solely in connection with the
+software distributed in this repository and for uses permitted by the
+PolyForm Internal Use License applicable to that software.
+
+No permission is granted to modify, reverse engineer, redistribute,
+sublicense, sell, or separately commercialize this binary except as
+permitted by applicable law.
+
+All other rights are reserved.
