@@ -37,11 +37,7 @@ type AlertingOptions struct {
 	EndsAt           time.Time
 }
 
-func SendIt(cfg config.Config, options AlertingOptions) error {
-	return SendItContext(context.Background(), cfg, options)
-}
-
-func SendItContext(ctx context.Context, cfg config.Config, options AlertingOptions) error {
+func SendIt(ctx context.Context, cfg config.Config, options AlertingOptions) error {
 	alertmanagerEndpoint, err := cfg.GetConfig(config.AlertmanagerURLConfigKey)
 	if err != nil {
 		return fmt.Errorf("failed to get alertmanager URL: %w", err)

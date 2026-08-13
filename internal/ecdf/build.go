@@ -6,40 +6,19 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"time"
 
 	"golang.org/x/sync/errgroup"
 )
 
-var (
-	buildTimeout = 5 * time.Minute
-)
-
-// BuildJointECDF builds a joint ECDF from "good" chunks.
-func BuildJointECDF(store ChunkStore, serviceId, indicatorId int, writer io.Writer) error {
-	ctx, cancel := context.WithTimeout(context.Background(), buildTimeout)
-	defer cancel()
-
-	return BuildJointECDFContext(ctx, store, serviceId, indicatorId, writer)
-}
-
-// BuildJointECDFContext builds a joint ECDF using the supplied context.
-func BuildJointECDFContext(ctx context.Context, store ChunkStore, serviceId, indicatorId int, writer io.Writer) error {
-	return buildJointECDFContext(ctx, store, serviceId, indicatorId, 1, writer)
-}
-
-func BuildJointECDFContextGeneration(ctx context.Context, store ChunkStore, serviceID, indicatorID int, generation int64, writer io.Writer) error {
-	return buildJointECDFContext(ctx, store, serviceID, indicatorID, generation, writer)
-}
-
-func buildJointECDFContext(ctx context.Context, store ChunkStore, serviceId, indicatorId int, generation int64, writer io.Writer) error {
+// BuildJointECDF builds a joint ECDF from the good chunks in a generation.
+func BuildJointECDF(ctx context.Context, store ChunkStore, serviceID, indicatorID int, generation int64, writer io.Writer) error {
 	chunks := make(chan []byte, 2)
 
 	group, ctx := errgroup.WithContext(ctx)
 
 	group.Go(func() error {
 		defer close(chunks)
-		err := store.ScanGoodChunks(ctx, serviceId, indicatorId, generation, chunks)
+		err := store.ScanGoodChunks(ctx, serviceID, indicatorID, generation, chunks)
 		return buildError("failed to scan chunks", err)
 	})
 

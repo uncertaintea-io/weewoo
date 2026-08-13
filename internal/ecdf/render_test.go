@@ -29,7 +29,7 @@ func TestRenderJointECDFWithRealTool(t *testing.T) {
 	require.NoError(t, store.WriteChunk(serviceID, indicatorID, 1, timestamp, chunk))
 
 	var jointECDF bytes.Buffer
-	require.NoError(t, BuildJointECDFContext(context.Background(), store, serviceID, indicatorID, &jointECDF))
+	require.NoError(t, BuildJointECDF(context.Background(), store, serviceID, indicatorID, 1, &jointECDF))
 
 	response, err := Render(context.Background(), jointECDF.Bytes(), 2, 2, RenderOptionLogY)
 

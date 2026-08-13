@@ -17,7 +17,7 @@ type SchedulerTimer interface {
 
 type realClock struct{}
 
-func NewRealClock() SchedulerClock {
+func newRealClock() SchedulerClock {
 	return &realClock{}
 }
 

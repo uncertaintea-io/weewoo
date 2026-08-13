@@ -148,7 +148,7 @@ func TestBuildJointECDF(t *testing.T) {
 	require.NoError(t, chunks.WriteChunk(1, ecdf.LoadLatencyIndicator, 1, timestamp, chunk))
 
 	var out bytes.Buffer
-	require.NoError(t, ecdf.BuildJointECDFContext(context.Background(), chunks, 1, ecdf.LoadLatencyIndicator, &out))
+	require.NoError(t, ecdf.BuildJointECDF(context.Background(), chunks, 1, ecdf.LoadLatencyIndicator, 1, &out))
 	assert.Equal(t, "fake-ecdf-output", out.String())
 }
 
@@ -156,7 +156,7 @@ func TestBuildECDFUsesContext(t *testing.T) {
 	setFakeJECDF(t, "#!/bin/sh\nsleep 10\n")
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	err := ecdf.BuildJointECDFContext(ctx, ecdf.NewFakeChunkStore(), 1, ecdf.LoadLatencyIndicator, &bytes.Buffer{})
+	err := ecdf.BuildJointECDF(ctx, ecdf.NewFakeChunkStore(), 1, ecdf.LoadLatencyIndicator, 1, &bytes.Buffer{})
 	require.ErrorIs(t, err, context.Canceled)
 }
 

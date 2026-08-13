@@ -8,7 +8,7 @@ import (
 )
 
 func TestRealClock(t *testing.T) {
-	clock := realClock{}
+	clock := newRealClock()
 	now := clock.Now()
 	//this should be true because the clock is the real clock
 	assert.True(t, now.After(time.Now().Add(-time.Second)), "now should be after the current time minus one second")

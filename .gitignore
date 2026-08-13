@@ -1,7 +1,6 @@
 .gocache/
 .gomodcache/
 .venv/
-jecdf
 secrets/docker.token
 secrets/
 jecdf
