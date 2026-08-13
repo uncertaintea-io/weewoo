@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/uncertaintea-io/weewoo/internal/config"
 	"github.com/uncertaintea-io/weewoo/internal/ecdf"
@@ -37,13 +36,13 @@ func (s *panicThenFailJointStore) ReadCurrent(context.Context, int, int) ([]byte
 	return nil, "", errors.New("unavailable")
 }
 
-func validAnalysisRequest() AnalysisRequest {
-	return AnalysisRequest{
+func validAnalysisRequest() *AnalysisRequest {
+	return &AnalysisRequest{
 		Service:     config.Service{Id: 1, Name: "checkout"},
-		IndicatorID: LoadLatencyIndicator,
+		IndicatorID: ecdf.LoadLatencyIndicator,
 		Timestamp:   time.Unix(1_710_000_060, 0),
-		Loads:       []ecdf.Sample{{Value: 1, Count: 1}},
-		Latencies:   []ecdf.Sample{{Value: 1, Count: 1}},
+		Independent: []ecdf.Sample{{Value: 1, Count: 1}},
+		Dependent:   []ecdf.Sample{{Value: 1, Count: 1}},
 	}
 }
 
@@ -60,33 +59,6 @@ func TestAnalysisWorkerRecoversFromPanicAndContinues(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("analysis worker did not continue after panic")
 	}
-}
-
-func TestAnalysisWorkerDoesNotMixTimeOfDayObservationsAcrossGenerations(t *testing.T) {
-	cfg := config.NewFakeConfig()
-	service := &config.Service{Id: 7, Generation: 2, Interval: time.Minute}
-	require.NoError(t, cfg.WriteService(service))
-	worker := &AnalysisWorker{
-		cfg: cfg, ctx: context.Background(), observations: make(map[serviceGeneration][]Observation),
-	}
-	now := time.Now().UTC()
-
-	worker.analyze(AnalysisRequest{
-		Service:     config.Service{Id: service.Id, Generation: 1, Interval: time.Minute},
-		IndicatorID: TimeOfDayIndicator, Timestamp: now,
-		Observations:    []Observation{{Timestamp: now, Value: 1}},
-		ChunkTimestamps: []time.Time{now},
-	})
-	worker.analyze(AnalysisRequest{
-		Service: *service, IndicatorID: TimeOfDayIndicator, Timestamp: now,
-		Observations:    []Observation{{Timestamp: now, Value: 2}},
-		ChunkTimestamps: []time.Time{now},
-	})
-
-	key := serviceGeneration{serviceID: service.Id, generation: service.Generation}
-	require.Len(t, worker.observations[key], 1)
-	assert.Equal(t, 2.0, worker.observations[key][0].Value)
-	assert.NotContains(t, worker.observations, serviceGeneration{serviceID: service.Id, generation: 1})
 }
 
 type orderedJointStore struct {

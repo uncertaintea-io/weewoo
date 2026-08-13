@@ -919,7 +919,11 @@ function renderServiceDetail(service: Service, history: ServiceChange[] = [], hi
       <article class="detail-card"><span>Last collection error</span><strong>${escapeHtml(formatTimestamp(service.tracking.lastError))}</strong><p>${escapeHtml(service.tracking.error ?? 'No errors recorded')}</p></article>
     </section>
     <section class="detail-columns detail-overview-row">
-      <article class="detail-card"><span>Load vs. UTC Time of Day</span><strong>${escapeHtml(timeOfDay.state === 'ready' ? 'Ready' : timeOfDay.state === 'degraded' ? 'Degraded' : 'Learning')}</strong><p>${String(Math.round(timeOfDay.progress * 100))}% learning progress · ${String(Math.round(timeOfDay.coverage * 100))}% trained slot coverage · ${String(timeOfDay.requiredDays)} UTC days required · latest build ${escapeHtml(formatTimestamp(timeOfDay.latestBuild))}</p></article>
+      <article class="detail-card">
+        <span>Load vs. UTC Time of Day</span>
+        <strong>${escapeHtml(timeOfDay.state === 'ready' ? 'Ready' : timeOfDay.state === 'degraded' ? 'Degraded' : 'Learning')}</strong>
+        <p>${String(Math.round(timeOfDay.progress * 100))}% learning progress · ${String(Math.round(timeOfDay.coverage * 100))}% trained slot coverage · ${String(timeOfDay.requiredDays)} UTC days required · latest build ${escapeHtml(formatTimestamp(timeOfDay.latestBuild))}</p>
+      </article>
       <article class="detail-panel"><div class="panel-header"><h2>Collection activity</h2><span>Latest first</span></div>${renderActivity(service)}</article>
     </section>
     <section class="detail-panel jecdf-panel" aria-labelledby="joint-ecdf-heading">

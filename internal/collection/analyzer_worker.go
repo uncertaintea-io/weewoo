@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"log/slog"
-	"slices"
 	"sync"
 	"time"
 
@@ -29,46 +28,31 @@ type AnalysisRequest struct {
 	Service     config.Service
 	IndicatorID int
 	Timestamp   time.Time
-	Loads       []ecdf.Sample
-	Latencies   []ecdf.Sample
+	Independent []ecdf.Sample
+	Dependent   []ecdf.Sample
 	Historical  bool
-	// Observations preserves timestamped values when an indicator analyzes a rolling window.
-	Observations []Observation
-	// ChunkTimestamps are the chunks governed by this analysis result.
-	ChunkTimestamps []time.Time
-}
-
-type Observation struct {
-	Timestamp time.Time
-	Value     float64
-}
-
-type serviceGeneration struct {
-	serviceID  int
-	generation int64
 }
 
 type AnalysisQueue interface {
-	Submit(AnalysisRequest) error
+	Submit(*AnalysisRequest) error
 }
 
 type contextualAnalysisQueue interface {
-	SubmitContext(context.Context, AnalysisRequest) error
+	SubmitContext(context.Context, *AnalysisRequest) error
 }
 
 // AnalysisWorker evaluates samples from a bounded background queue.
 type AnalysisWorker struct {
-	cfg          config.Config
-	jointStore   ecdf.JointStore
-	chunks       ecdf.ChunkStore
-	alerts       alerting.AnalysisRecorder
-	liveJobs     chan AnalysisRequest
-	historyJobs  chan AnalysisRequest
-	ctx          context.Context
-	cancel       context.CancelFunc
-	done         chan struct{}
-	stopOnce     sync.Once
-	observations map[serviceGeneration][]Observation
+	cfg         config.Config
+	jointStore  ecdf.JointStore
+	chunks      ecdf.ChunkStore
+	alerts      alerting.AnalysisRecorder
+	liveJobs    chan *AnalysisRequest
+	historyJobs chan *AnalysisRequest
+	ctx         context.Context
+	cancel      context.CancelFunc
+	done        chan struct{}
+	stopOnce    sync.Once
 }
 
 func NewAnalysisWorker(cfg config.Config, jointStore ecdf.JointStore, chunks ecdf.ChunkStore, alerts alerting.AnalysisRecorder, capacity int) *AnalysisWorker {
@@ -77,30 +61,28 @@ func NewAnalysisWorker(cfg config.Config, jointStore ecdf.JointStore, chunks ecd
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	worker := &AnalysisWorker{
-		cfg:          cfg,
-		jointStore:   jointStore,
-		chunks:       chunks,
-		alerts:       alerts,
-		liveJobs:     make(chan AnalysisRequest, capacity),
-		historyJobs:  make(chan AnalysisRequest, capacity),
-		ctx:          ctx,
-		cancel:       cancel,
-		done:         make(chan struct{}),
-		observations: make(map[serviceGeneration][]Observation),
+		cfg:         cfg,
+		jointStore:  jointStore,
+		chunks:      chunks,
+		alerts:      alerts,
+		liveJobs:    make(chan *AnalysisRequest, capacity),
+		historyJobs: make(chan *AnalysisRequest, capacity),
+		ctx:         ctx,
+		cancel:      cancel,
+		done:        make(chan struct{}),
 	}
 	go worker.run()
 	return worker
 }
 
 // Submit queues analysis without waiting for it to finish.
-func (w *AnalysisWorker) Submit(request AnalysisRequest) error {
+func (w *AnalysisWorker) Submit(request *AnalysisRequest) error {
 	select {
 	case <-w.done:
 		return ErrAnalyzerStopped
 	default:
 	}
 
-	request = cloneAnalysisRequest(request)
 	jobs := w.liveJobs
 	if request.Historical {
 		jobs = w.historyJobs
@@ -117,8 +99,7 @@ func (w *AnalysisWorker) Submit(request AnalysisRequest) error {
 
 // SubmitContext applies backpressure until historical analysis capacity is
 // available, the caller cancels, or the worker stops.
-func (w *AnalysisWorker) SubmitContext(ctx context.Context, request AnalysisRequest) error {
-	request = cloneAnalysisRequest(request)
+func (w *AnalysisWorker) SubmitContext(ctx context.Context, request *AnalysisRequest) error {
 	jobs := w.liveJobs
 	if request.Historical {
 		jobs = w.historyJobs
@@ -131,14 +112,6 @@ func (w *AnalysisWorker) SubmitContext(ctx context.Context, request AnalysisRequ
 	case <-w.done:
 		return ErrAnalyzerStopped
 	}
-}
-
-func cloneAnalysisRequest(request AnalysisRequest) AnalysisRequest {
-	request.Loads = slices.Clone(request.Loads)
-	request.Latencies = slices.Clone(request.Latencies)
-	request.Observations = slices.Clone(request.Observations)
-	request.ChunkTimestamps = slices.Clone(request.ChunkTimestamps)
-	return request
 }
 
 func (w *AnalysisWorker) Stop() {
@@ -170,7 +143,7 @@ func (w *AnalysisWorker) run() {
 	}
 }
 
-func (w *AnalysisWorker) analyze(request AnalysisRequest) {
+func (w *AnalysisWorker) analyze(request *AnalysisRequest) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			slog.Error(
@@ -183,46 +156,22 @@ func (w *AnalysisWorker) analyze(request AnalysisRequest) {
 		}
 	}()
 
-	var windowObservations []Observation
-	if request.IndicatorID == TimeOfDayIndicator {
-		key := serviceGeneration{serviceID: request.Service.Id, generation: request.Service.Generation}
-		w.observations[key] = append(w.observations[key], request.Observations...)
-		cutoff := request.Timestamp.Add(-5 * time.Minute)
-		observations := w.observations[key]
-		first := 0
-		for first < len(observations) && observations[first].Timestamp.Before(cutoff) {
-			first++
-		}
-		w.observations[key] = slices.Clone(observations[first:])
-		windowObservations = w.observations[key]
-		for buffered := range w.observations {
-			if buffered.serviceID == key.serviceID && buffered.generation < key.generation {
-				delete(w.observations, buffered)
-			}
-		}
-	}
 	retryDelay := verdictRetryInitialDelay
 	for attempt := 1; attempt <= verdictMaxAttempts; attempt++ {
 		ctx, cancel := context.WithTimeout(w.ctx, analyzeSampleTimeout)
-		var err error
-		if request.IndicatorID == TimeOfDayIndicator {
-			_, err = analyzeTimeOfDay(ctx, w.cfg, w.jointStore, w.chunks, w.alerts, &request.Service,
-				request.Timestamp, windowObservations, request.ChunkTimestamps, request.Historical)
-		} else {
-			_, err = analyzeSample(
-				ctx,
-				w.cfg,
-				w.jointStore,
-				w.chunks,
-				w.alerts,
-				&request.Service,
-				request.IndicatorID,
-				request.Timestamp,
-				request.Loads,
-				request.Latencies,
-				request.Historical,
-			)
-		}
+		_, err := analyzeSample(
+			ctx,
+			w.cfg,
+			w.jointStore,
+			w.chunks,
+			w.alerts,
+			&request.Service,
+			request.IndicatorID,
+			request.Timestamp,
+			request.Independent,
+			request.Dependent,
+			request.Historical,
+		)
 		cancel()
 		if err == nil {
 			return

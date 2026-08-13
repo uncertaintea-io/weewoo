@@ -3,6 +3,7 @@ package alerting
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"os"
 	"testing"
@@ -11,6 +12,76 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/uncertaintea-io/weewoo/internal/config"
 )
+
+func TestTimeOfDayAnalysisMetadataReachesAlertAndNotification(t *testing.T) {
+	databaseURL := os.Getenv("DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("DATABASE_URL is not set")
+	}
+	db, err := sql.Open("pgx", databaseURL)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, db.Close()) })
+
+	ctx := context.Background()
+	serviceID := int(time.Now().UnixNano()%1_000_000_000) + 1_000_000_000
+	const indicatorID = loadTimeOfDayIndicatorID
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(ctx, `DELETE FROM alert WHERE service_id = $1`, serviceID)
+		_, _ = db.ExecContext(ctx, `DELETE FROM time_chunk WHERE service_id = $1`, serviceID)
+	})
+
+	timestamp := time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC)
+	_, err = db.ExecContext(ctx, `
+		INSERT INTO time_chunk (service_id, indicator_id, "timestamp", chunk)
+		VALUES ($1, $2, $3, '\x00')
+	`, serviceID, indicatorID, timestamp)
+	require.NoError(t, err)
+
+	outcome := AnalysisOutcome{
+		ServiceID:        serviceID,
+		ServiceName:      "checkout",
+		IndicatorID:      indicatorID,
+		Timestamp:        timestamp,
+		IndependentValue: 42,
+		PValueTest:       0.001,
+		PValueThreshold:  0.01,
+		Anomalous: true,
+	}
+	require.NoError(t, NewManager(db, config.NewFakeConfig(), "postgres").RecordAnalysis(ctx, outcome))
+
+	var alertID int64
+	var title, description, impact, action string
+	require.NoError(t, db.QueryRowContext(ctx, `
+		SELECT id, title, description, impact, suggested_action
+		FROM alert WHERE condition_key=$1
+	`, anomalyConditionKey(serviceID, indicatorID, false)).Scan(
+		&alertID, &title, &description, &impact, &action,
+	))
+	require.Contains(t, title, "Load vs. Time-of-Day")
+	require.Contains(t, description, "Load")
+	require.Contains(t, description, "time-of-day")
+
+	var occurrenceSummary string
+	var evidenceBody []byte
+	require.NoError(t, db.QueryRowContext(ctx, `
+		SELECT summary, evidence FROM alert_occurrence WHERE alert_id=$1
+	`, alertID).Scan(&occurrenceSummary, &evidenceBody))
+	require.Contains(t, occurrenceSummary, title)
+	var evidence map[string]any
+	require.NoError(t, json.Unmarshal(evidenceBody, &evidence))
+
+	var payloadBody []byte
+	require.NoError(t, db.QueryRowContext(ctx, `
+		SELECT payload FROM alert_outbox WHERE alert_id=$1 AND operation='firing'
+	`, alertID).Scan(&payloadBody))
+	var payload outboxPayload
+	require.NoError(t, json.Unmarshal(payloadBody, &payload))
+	require.Equal(t, title, payload.Summary)
+	require.Equal(t, description, payload.Description)
+	require.Equal(t, impact, payload.Impact)
+	require.Equal(t, action, payload.SuggestedAction)
+	require.Equal(t, "2", payload.Indicator)
+}
 
 func TestSuccessfulAnalysisResolvesAnalysisMonitoringFailure(t *testing.T) {
 	databaseURL := os.Getenv("DATABASE_URL")
@@ -54,7 +125,6 @@ func TestSuccessfulAnalysisResolvesAnalysisMonitoringFailure(t *testing.T) {
 				ServiceID:   serviceID,
 				ServiceName: "repro-service",
 				IndicatorID: indicatorID,
-				Indicator:   "latency",
 				Timestamp:   failedAt,
 			}
 			require.NoError(t, manager.RecordAnalysisFailure(
@@ -76,7 +146,7 @@ func TestSuccessfulAnalysisResolvesAnalysisMonitoringFailure(t *testing.T) {
 			require.EqualValues(t, 1, delivered)
 
 			outcome.Timestamp = succeededAt
-			outcome.PValue = 0.8
+			outcome.PValueTest = 0.8
 			outcome.Anomalous = test.anomalous
 			require.NoError(t, manager.RecordAnalysis(ctx, outcome))
 
@@ -130,16 +200,16 @@ func TestHistoricalAnalysisPersistsVerdictWithoutChangingAlerts(t *testing.T) {
 	manager := NewManager(db, config.NewFakeConfig(), "postgresql")
 	require.NoError(t, manager.RecordAnalysisFailure(ctx, AnalysisOutcome{
 		ServiceID: serviceID, ServiceName: "repro-service",
-		IndicatorID: indicatorID, Indicator: "latency", Timestamp: failedAt,
+		IndicatorID: indicatorID, Timestamp: failedAt,
 	}, errors.New("live analysis failed")))
 	require.NoError(t, manager.RecordAnalysis(ctx, AnalysisOutcome{
 		ServiceID: serviceID, ServiceName: "repro-service",
-		IndicatorID: indicatorID, Indicator: "latency", Timestamp: historicalAt,
-		PValue: 0.001, Anomalous: true, Historical: true,
+		IndicatorID: indicatorID, Timestamp: historicalAt,
+		PValueTest: 0.001, Anomalous: true, Historical: true,
 	}))
 	require.NoError(t, manager.RecordAnalysisFailure(ctx, AnalysisOutcome{
 		ServiceID: serviceID, ServiceName: "repro-service",
-		IndicatorID: indicatorID, Indicator: "latency", Timestamp: historicalFailureAt,
+		IndicatorID: indicatorID, Timestamp: historicalFailureAt,
 		Historical: true,
 	}, errors.New("historical analysis failed")))
 
@@ -199,8 +269,8 @@ func TestOutboxRetiresLegacyHistoricalFiringWithoutDelivery(t *testing.T) {
 	manager := NewManager(db, config.NewFakeConfig(), "postgresql")
 	require.NoError(t, manager.recordAnomaly(ctx, AnalysisOutcome{
 		ServiceID: serviceID, ServiceName: "legacy-service",
-		IndicatorID: indicatorID, Indicator: "latency", Timestamp: timestamp,
-		PValue: 0.001, Anomalous: true, Historical: true,
+		IndicatorID: indicatorID, Timestamp: timestamp,
+		PValueTest: 0.001, Anomalous: true, Historical: true,
 	}))
 	deliveries := 0
 	dispatcher := &OutboxDispatcher{
