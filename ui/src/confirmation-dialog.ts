@@ -1,0 +1,78 @@
+export interface ConfirmationOptions {
+  title: string;
+  message: string;
+  confirmLabel: string;
+  dangerous?: boolean;
+}
+
+interface DialogOptions extends ConfirmationOptions {
+  cancelable?: boolean;
+}
+
+function openDialog(options: DialogOptions): Promise<boolean> {
+  return new Promise((resolve) => {
+    const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const backdrop = document.createElement('div');
+    backdrop.className = 'confirmation-backdrop';
+
+    const dialog = document.createElement('section');
+    dialog.className = 'confirmation-dialog';
+    dialog.setAttribute('role', 'alertdialog');
+    dialog.setAttribute('aria-modal', 'true');
+    dialog.setAttribute('aria-labelledby', 'confirmation-title');
+    dialog.setAttribute('aria-describedby', 'confirmation-message');
+
+    const title = document.createElement('h2');
+    title.id = 'confirmation-title';
+    title.textContent = options.title;
+
+    const message = document.createElement('p');
+    message.id = 'confirmation-message';
+    message.textContent = options.message;
+
+    const actions = document.createElement('div');
+    actions.className = 'confirmation-actions';
+
+    const cancel = document.createElement('button');
+    cancel.className = 'secondary-button';
+    cancel.type = 'button';
+    cancel.textContent = 'Cancel';
+
+    const confirm = document.createElement('button');
+    confirm.className = options.dangerous === true ? 'danger-button' : 'primary-button';
+    confirm.type = 'button';
+    confirm.textContent = options.confirmLabel;
+
+    const finish = (result: boolean): void => {
+      document.removeEventListener('keydown', onKeyDown);
+      backdrop.remove();
+      previouslyFocused?.focus();
+      resolve(result);
+    };
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape' && options.cancelable !== false) finish(false);
+    };
+
+    cancel.addEventListener('click', () => { finish(false); });
+    confirm.addEventListener('click', () => { finish(true); });
+    backdrop.addEventListener('click', (event) => {
+      if (event.target === backdrop && options.cancelable !== false) finish(false);
+    });
+    document.addEventListener('keydown', onKeyDown);
+
+    if (options.cancelable !== false) actions.append(cancel);
+    actions.append(confirm);
+    dialog.append(title, message, actions);
+    backdrop.append(dialog);
+    document.body.append(backdrop);
+    confirm.focus();
+  });
+}
+
+export async function confirmAction(options: ConfirmationOptions): Promise<boolean> {
+  return await openDialog(options);
+}
+
+export async function showMessage(title: string, message: string): Promise<void> {
+  await openDialog({ title, message, confirmLabel: 'OK', cancelable: false });
+}
