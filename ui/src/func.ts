@@ -3,7 +3,7 @@ export interface Func {
   deriv: () => Func
 }
 
-export class ConstFunc implements Func {
+class ConstFunc implements Func {
   value: number
 
   constructor(value: number) {
@@ -20,7 +20,7 @@ export class ConstFunc implements Func {
   }
 }
 
-export class PolyFunc implements Func {
+class PolyFunc implements Func {
   coef: number[]
 
   constructor(coef: number[]) {
@@ -53,54 +53,11 @@ export class PolyFunc implements Func {
   }
 }
 
-export function linearFunction(x1: number, y1: number, x2: number, y2: number): PolyFunc {
-  const M = (y2 - y1) / (x2 - x1)
-  const B = y1 - M * x1
-  return new PolyFunc([M, B])
-}
-
-function solveCubic(x1: number, y1: number, dy1: number,
-  x2: number, y2: number, dy2: number): number[] {
-  const dx = x2 - x1
-  const xx1 = x1 * x1
-  const xx2 = x2 * x2
-
-  let a1 = (xx2 * x2) - (xx1 * x1)
-  let a2 = a1
-  a1 -= 3 * xx1 * dx
-  a2 -= 3 * xx2 * dx
-
-  let b1 = xx2 - xx1
-  let b2 = b1
-  b1 -= (2 * x1 * dx)
-  b2 -= (2 * x2 * dx)
-
-  let e1 = y2 - y1
-  let e2 = e1
-  e1 -= dy1 * dx
-  e2 -= dy2 * dx
-
-  const f = b1 / b2
-
-  const A = (e1 - f * e2) / (a1 - f * a2)
-  const B = (e1 - A * a1) / b1
-  const C = dy1 - (3 * A * xx1) - (2 * B * x1)
-  const D = y1 - (A * xx1 * x1) - (B * xx1) - (C * x1)
-
-  return [A, B, C, D]
-}
-
-export function cubicFunction(x1: number, y1: number, dy1: number,
-  x2: number, y2: number, dy2: number): PolyFunc {
-  return new PolyFunc(
-    solveCubic(x1, y1, dy1, x2, y2, dy2))
-}
-
 // TODO: Figure out if it's worth it to express Nomalize as a composite function.
 // d/dx(f(g(x))) = g'(x) f'(g(x))
 // d/dx(f(x) g(x)) = g(x) f'(x) + f(x) g'(x)
 
-export class Normalize {
+class Normalize {
   private x: number;
   private y: number;
   private dx: number;
@@ -247,61 +204,4 @@ export function interpolateMonotonic(xs: number[], ys: number[]): Func[] {
     fs[i] = new Quint(norm, new PolyFunc([A, B, C, 0, E, 0]))
   }
   return fs
-}
-
-/*
-FritschCarlsonTangents calculates tangents for a set of points
-that ensure monotonicity for a resulting Hermite spline.
-
-This function makes some important assumptions:
-  1. That the input arrays have the same length.
-  2. That the data points are monotonic.
-  3. That the input points are sorted on the x axis, ascending.
-These assumptions are not verified by the method.
-*/
-export function FritschCarlsonTangents(xs: number[], ys: number[]): number[] {
-  // For implementation details, see:
-  // https://en.wikipedia.org/wiki/Monotone_cubic_interpolation
-  const n = xs.length
-  if (n === 0) {
-    return []
-  }
-  if (n === 1) {
-    return [ys[0]]
-  }
-  // Compute the slopes of the secant lines between successive points
-  const d = new Array<number>(n - 1)
-  for (let i = 0; i < n - 1; i++) {
-    d[i] = (ys[i + 1] - ys[i]) / (xs[i + 1] - xs[i])
-  }
-  // Compute provisional tangents
-  const m = new Array<number>(n)
-  m[0] = d[0]
-  m[n - 1] = d[n - 2]
-  for (let i = 1; i < n - 1; i++) {
-    if (d[i] === 0.0) {
-      m[i] = 0.0
-      i += 1
-      m[i] = 0.0
-      continue
-    }
-    if (Math.sign(d[i - 1]) !== Math.sign(d[i])) {
-      m[i] = 0.0
-    } else {
-      m[i] = (d[i - 1] + d[i]) / 2
-    }
-  }
-  // Adjust tangents to keep monoticity.
-  for (let i = 0; i < n - 1; i++) {
-    const dk = d[i]
-    const ak = m[i] / dk
-    const bk = m[i + 1] / dk
-    const sqsum = ak * ak + bk * bk
-    if (sqsum > 9.0) {
-      const tk = 3.0 / Math.sqrt(sqsum)
-      m[i] = tk * ak * dk
-      m[i + 1] = tk * bk * dk
-    }
-  }
-  return m
 }

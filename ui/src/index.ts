@@ -2,33 +2,18 @@ import './index.scss'
 import { anomalyOccurrence, resolveAlertPDFState, type AlertPDFState } from './alert-detail';
 import { CancelImport, CreateService, DeleteService, GetAlertEvidence, GetService, GetServiceDetail, GetSettings, ListAlerts, ListAllServices, ResetServiceBaseline, ReviewAlertOccurrence, SaveSettings, ServicesApiError, SetServicePaused, TestAlertmanager, TestService, UpdateService, type AlertOccurrence, type AlertRecord, type ApplicationSettings, type CreateServiceInput, type Service, type ServiceChange } from './api';
 import { renderAlertPDFComparison } from './alert-pdf';
+import { AppShell, type Theme } from './app-shell';
 import { historicalRangeToUtc } from './datetime';
 import { renderJECDF } from './jecdf';
 import { liveRefreshDelay } from './live-refresh';
-import { searchValueForRender } from './navigation';
 import { alertCardClasses, collectionUptime, escapeHtml, groupAlertsByStatus, orderedAlertEvidence, renderServiceUrl, reviewableAnomalousOccurrencesByService, type AlertReviewTarget } from './rendering';
 
-const app = document.querySelector<HTMLDivElement>('#app');
+const shell = new AppShell(document.querySelector<HTMLDivElement>('#app'), currentRoute);
 let liveRefreshTimer: number | undefined;
-let lastRenderedRoute: string | undefined;
 let detailVisualizationCleanup: (() => void) | undefined;
 let applicationSettings: ApplicationSettings | undefined;
-type Theme = 'light' | 'dark' | 'system';
 
-function savedTheme(): Theme {
-  const theme = localStorage.getItem('weewoo-theme');
-  return theme === 'light' || theme === 'dark' ? theme : 'system';
-}
-
-function applyTheme(theme: Theme): void {
-  if (theme === 'system') {
-    document.documentElement.removeAttribute('data-theme');
-  } else {
-    document.documentElement.dataset.theme = theme;
-  }
-}
-
-applyTheme(savedTheme());
+shell.applyTheme(shell.savedTheme());
 
 function formatInterval(seconds: number): string {
   if (seconds < 60) {
@@ -54,107 +39,6 @@ function statusLabel(state: Service['tracking']['state']): string {
 function formatTimestamp(value?: string): string {
   if (value === undefined) return 'Not yet';
   return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value));
-}
-
-interface PageMeta {
-  eyebrow?: string;
-  title?: string;
-  description?: string;
-  endpoint?: string;
-}
-
-function renderShell(content: string, apiResponse = 'Ready', page: PageMeta = {}): void {
-  if (app === null) {
-    return;
-  }
-  const route = currentRoute();
-  const searchValue = searchValueForRender(
-    lastRenderedRoute,
-    route,
-    document.querySelector<HTMLInputElement>('.search-box input')?.value ?? '',
-  );
-  lastRenderedRoute = route;
-
-  app.innerHTML = `
-    <div class="app-frame">
-      <aside class="sidebar" aria-label="Primary navigation">
-        <div class="sidebar-brand">
-          <img class="brand-logo" src="/img/logo.svg" alt="" aria-hidden="true" />
-          <div>
-            <strong>WeeWoo Services</strong>
-            <span>Monitoring console</span>
-          </div>
-        </div>
-        <nav class="sidebar-nav">
-          <a class="${window.location.hash === '#services' || window.location.hash === '' || window.location.hash.startsWith('#service') ? 'is-active' : ''}" href="#services">Services</a>
-          <a class="${window.location.hash.startsWith('#alert') ? 'is-active' : ''}" href="#alerts">Alerts</a>
-          <a href="#incidents">Incidents</a>
-          <a href="#integrations">Integrations</a>
-          <a class="${window.location.hash === '#settings' ? 'is-active' : ''}" href="#settings">Settings</a>
-        </nav>
-        <article class="system-card">
-          <span>System Status</span>
-          <strong>Configuration API</strong>
-          <p>Endpoint monitored through WeeWoo Services.</p>
-        </article>
-      </aside>
-      <div class="workspace">
-        <header class="top-bar">
-          <label class="search-box">
-            <span aria-hidden="true"></span>
-            <input type="search" name="search" placeholder="Search services" />
-          </label>
-          <div class="top-actions">
-            <div class="last-updated">
-              <span class="status-dot status-dot--ok" aria-hidden="true"></span>
-              <span id="service-count">0 services monitored</span>
-              <small>Last updated: just now</small>
-            </div>
-            <a class="icon-button" href="#settings" aria-label="Settings">
-              <span aria-hidden="true"></span>
-            </a>
-            <a class="avatar" href="#profile" aria-label="User profile"></a>
-          </div>
-        </header>
-        <main class="page-shell">
-          <section class="page-header">
-            <div>
-              <p class="eyebrow">${escapeHtml(page.eyebrow ?? 'WeeWoo Services')}</p>
-              <h1>${escapeHtml(page.title ?? 'Service health dashboard')}</h1>
-              <p>${escapeHtml(page.description ?? 'Live from the WeeWoo server configuration API.')}</p>
-            </div>
-            <article class="api-status-card">
-              <div>
-                <span>API Endpoint</span>
-                <strong>${escapeHtml(page.endpoint ?? '/api/services')}</strong>
-              </div>
-              <div>
-                <span>Response</span>
-                <strong class="api-response${apiResponse === '200 OK' || apiResponse === 'Ready' ? ' is-success' : ''}">${escapeHtml(apiResponse)}</strong>
-              </div>
-            </article>
-          </section>
-          ${content}
-        </main>
-      </div>
-    </div>
-  `;
-  bindShellInteractions();
-  const search = document.querySelector<HTMLInputElement>('.search-box input');
-  if (search !== null && searchValue !== '') {
-    search.value = searchValue;
-    search.dispatchEvent(new Event('input'));
-  }
-}
-
-function bindShellInteractions(): void {
-  const search = document.querySelector<HTMLInputElement>('.search-box input');
-  search?.addEventListener('input', () => {
-    const term = search.value.trim().toLowerCase();
-    document.querySelectorAll<HTMLElement>('.service-dashboard, .alert-card').forEach((row) => {
-      row.hidden = term !== '' && !(row.dataset.serviceName ?? '').includes(term);
-    });
-  });
 }
 
 function alertmanagerLabel(state: AlertRecord['alertmanagerState']): string {
@@ -244,7 +128,7 @@ function renderAlertDetail(alert: AlertRecord, pdfState: AlertPDFState): void {
   const consecutiveLabel = alert.kind === 'anomaly'
     ? `Bad chunk${alert.consecutiveCount === 1 ? '' : 's'}`
     : `occurrence${alert.consecutiveCount === 1 ? '' : 's'}`;
-  renderShell(`
+  shell.render(`
     <section class="detail-header alert-detail-header">
       <div class="detail-identity">
         <a class="back-link" href="#alerts">← All alerts</a>
@@ -299,7 +183,7 @@ function renderAlertDetail(alert: AlertRecord, pdfState: AlertPDFState): void {
 async function loadAlertDetail(id: number): Promise<void> {
   detailVisualizationCleanup?.();
   detailVisualizationCleanup = undefined;
-  renderShell('<section class="alert-panel" aria-busy="true"><div class="skeleton-list"><div class="skeleton-row"></div><div class="skeleton-row"></div></div></section>', 'Loading', {
+  shell.render('<section class="alert-panel" aria-busy="true"><div class="skeleton-list"><div class="skeleton-row"></div><div class="skeleton-row"></div></div></section>', 'Loading', {
     eyebrow: 'WeeWoo Alert Detail', title: 'Loading alert', description: 'Loading alert evidence and occurrence CDF data.', endpoint: '/api/alerts',
   });
   try {
@@ -329,7 +213,7 @@ function renderAlerts(alerts: AlertRecord[]): void {
   const critical = active.filter((alert) => alert.severity === 'critical').length;
   const warning = active.filter((alert) => alert.severity === 'warning').length;
   const reviewGroups = reviewableAnomalousOccurrencesByService(active);
-  renderShell(`
+  shell.render(`
     <section class="summary-grid" aria-label="Alert summary">
       ${renderSummaryCard('Active alerts', active.length, 'unavailable')}
       ${renderSummaryCard('Critical', critical, 'unavailable')}
@@ -457,7 +341,7 @@ async function reviewOccurrence(button: HTMLButtonElement): Promise<void> {
 
 async function loadAlerts(showLoading = true): Promise<void> {
   if (showLoading) {
-    renderShell('<section class="alert-panel" aria-busy="true"><div class="skeleton-list"><div class="skeleton-row"></div><div class="skeleton-row"></div></div></section>', 'Loading', {
+    shell.render('<section class="alert-panel" aria-busy="true"><div class="skeleton-list"><div class="skeleton-row"></div><div class="skeleton-row"></div></div></section>', 'Loading', {
       eyebrow: 'WeeWoo Alerts', title: 'Alerts and anomaly history', description: 'Loading durable alert history.', endpoint: '/api/alerts',
     });
   }
@@ -467,7 +351,7 @@ async function loadAlerts(showLoading = true): Promise<void> {
   } catch (error) {
     if (!showLoading || currentRoute() !== 'alerts') return;
     const response = apiResponseForError(error);
-    renderShell(`<section class="error-panel"><strong class="error-code">${escapeHtml(response)}</strong><h2>Unable to load alerts</h2><p>Check the alert history database and retry.</p><button id="retry-alerts" class="retry-button" type="button">Retry</button></section>`, response, {
+    shell.render(`<section class="error-panel"><strong class="error-code">${escapeHtml(response)}</strong><h2>Unable to load alerts</h2><p>Check the alert history database and retry.</p><button id="retry-alerts" class="retry-button" type="button">Retry</button></section>`, response, {
       eyebrow: 'WeeWoo Alerts', title: 'Alerts and anomaly history', description: 'Durable alert history is unavailable.', endpoint: '/api/alerts',
     });
     document.querySelector('#retry-alerts')?.addEventListener('click', () => { void loadAlerts(); });
@@ -505,7 +389,7 @@ function renderQueryBox(label: string, query: string): string {
 }
 
 function renderLoading(): void {
-  renderShell(`
+  shell.render(`
     <section class="summary-grid" aria-label="Service summary">
       ${renderSummaryCard('Total Services', 0, 'total')}
       ${renderSummaryCard('Healthy', 0, 'healthy')}
@@ -526,7 +410,7 @@ function renderLoading(): void {
 }
 
 function renderEmpty(): void {
-  renderShell(`
+  shell.render(`
     <section class="summary-grid" aria-label="Service summary">
       ${renderSummaryCard('Total Services', 0, 'total')}
       ${renderSummaryCard('Healthy', 0, 'healthy')}
@@ -541,7 +425,7 @@ function renderEmpty(): void {
       </div>
     </section>
   `, '200 OK');
-  setServiceCount(0);
+  shell.setServiceCount(0);
 }
 
 function apiResponseForError(error: unknown): string {
@@ -554,7 +438,7 @@ function apiResponseForError(error: unknown): string {
 
 function renderError(error: unknown): void {
   const apiResponse = apiResponseForError(error);
-  renderShell(`
+  shell.render(`
     <section class="summary-grid" aria-label="Service summary">
       ${renderSummaryCard('Total Services', 0, 'total')}
       ${renderSummaryCard('Healthy', 0, 'healthy')}
@@ -572,11 +456,6 @@ function renderError(error: unknown): void {
   document.querySelector('#retry-services')?.addEventListener('click', () => {
     void boot();
   });
-}
-
-function setServiceCount(count: number): void {
-  const label = count === 1 ? '1 service monitored' : `${String(count)} services monitored`;
-  document.querySelector('#service-count')?.replaceChildren(label);
 }
 
 function renderServices(services: Service[]): void {
@@ -619,7 +498,7 @@ function renderServices(services: Service[]): void {
     </article>
   `).join('');
 
-  renderShell(`
+  shell.render(`
     <section class="summary-grid" aria-label="Service summary">
       ${renderSummaryCard('Total Services', services.length, 'total')}
       ${renderSummaryCard('Healthy', healthy, 'healthy')}
@@ -636,11 +515,11 @@ function renderServices(services: Service[]): void {
       </div>
     </section>
   `, '200 OK');
-  setServiceCount(services.length);
+  shell.setServiceCount(services.length);
 }
 
 function renderAddChoice(): void {
-  renderShell(`
+  shell.render(`
     <section class="form-panel">
       <a class="back-link" href="#services">← Back to services</a>
       <p class="eyebrow">Add service</p>
@@ -670,7 +549,7 @@ function serviceInputFromForm(form: HTMLFormElement): CreateServiceInput {
 }
 
 function renderServiceForm(importHistory: boolean): void {
-  renderShell(`
+  shell.render(`
     <section class="form-panel">
       <a class="back-link" href="#add">← Choose another option</a>
       <p class="eyebrow">${importHistory ? 'Import historical data' : 'New service'}</p>
@@ -755,13 +634,13 @@ async function submitServiceForm(form: HTMLFormElement, importHistory: boolean):
 
 function renderPlaceholder(route: string): void {
   const title = route.charAt(0).toUpperCase() + route.slice(1);
-  renderShell(`<section class="form-panel placeholder-panel"><p class="eyebrow">WeeWoo Services</p><h2>${escapeHtml(title)}</h2><p>This area is ready for its ${escapeHtml(route)} controls.</p><a class="primary-button" href="#services">Go to services</a></section>`);
+  shell.render(`<section class="form-panel placeholder-panel"><p class="eyebrow">WeeWoo Services</p><h2>${escapeHtml(title)}</h2><p>This area is ready for its ${escapeHtml(route)} controls.</p><a class="primary-button" href="#services">Go to services</a></section>`);
 }
 
 function renderSettings(): void {
-  const theme = savedTheme();
+  const theme = shell.savedTheme();
   const alertmanagerUrl = applicationSettings?.alertmanagerUrl ?? '';
-  renderShell(`
+  shell.render(`
     <section class="settings-panel">
       <div class="settings-heading">
         <div>
@@ -802,7 +681,7 @@ function renderSettings(): void {
     button.addEventListener('click', () => {
       const selected = button.dataset.themeOption as Theme;
       localStorage.setItem('weewoo-theme', selected);
-      applyTheme(selected);
+      shell.applyTheme(selected);
       renderSettings();
     });
   });
@@ -810,8 +689,7 @@ function renderSettings(): void {
 }
 
 function renderWelcome(): void {
-  if (app === null) return;
-  app.innerHTML = `
+  shell.renderStandalone(`
     <main class="welcome-shell">
       <section class="welcome-card">
         <div class="welcome-brand"><img src="/img/logo.svg" alt="" aria-hidden="true" /><span>WeeWoo Services</span></div>
@@ -825,7 +703,7 @@ function renderWelcome(): void {
         </form>
         <p class="welcome-note">The connection test is optional. A valid URL is required to finish setup.</p>
       </section>
-    </main>`;
+    </main>`);
   bindAlertmanagerForm('welcome-form', 'welcome-status', true);
 }
 
@@ -870,9 +748,8 @@ function bindAlertmanagerForm(formID: string, statusID: string, finishSetup: boo
 }
 
 function renderSettingsLoadError(error: unknown): void {
-  if (app === null) return;
   const message = error instanceof Error ? error.message : 'Unable to read application settings.';
-  app.innerHTML = `<main class="welcome-shell"><section class="welcome-card"><p class="eyebrow">WeeWoo Services</p><h1>Setup could not be loaded</h1><p class="welcome-copy">${escapeHtml(message)}</p><button id="retry-settings" class="primary-button" type="button">Try again</button></section></main>`;
+  shell.renderStandalone(`<main class="welcome-shell"><section class="welcome-card"><p class="eyebrow">WeeWoo Services</p><h1>Setup could not be loaded</h1><p class="welcome-copy">${escapeHtml(message)}</p><button id="retry-settings" class="primary-button" type="button">Try again</button></section></main>`);
   document.querySelector('#retry-settings')?.addEventListener('click', () => { applicationSettings = undefined; void boot(); });
 }
 
@@ -905,7 +782,7 @@ function renderServiceHistory(history: ServiceChange[]): string {
 
 function renderServiceDetail(service: Service, history: ServiceChange[] = [], historyUnavailable = false): void {
   const timeOfDay = service.timeOfDayModel ?? { state: 'learning' as const, coverage: 0, progress: 0, requiredDays: 5 };
-  renderShell(`
+  shell.render(`
     <section class="detail-header">
       <div class="detail-identity"><a class="back-link" href="#services">← All services</a><h2>${escapeHtml(service.name)}</h2><p class="eyebrow">Service #${String(service.id)}</p>${renderServiceUrl(service.prometheusUrl)}</div>
       <div class="detail-controls">
@@ -992,7 +869,7 @@ async function loadServiceDetail(id: number, showLoading = true): Promise<void> 
 }
 
 function renderEditServiceForm(service: Service): void {
-  renderShell(`
+  shell.render(`
     <section class="form-panel"><a class="back-link" href="#service/${String(service.id)}">← Back to service</a><p class="eyebrow">Service #${String(service.id)}</p><h2>Edit service</h2>
       <form id="service-form" class="service-form">
         <label><span>Service name</span><input name="name" required value="${escapeHtml(service.name)}" /></label>
