@@ -139,3 +139,12 @@ Some components are licensed separately:
 - Third-party dependencies remain subject to their respective licenses.
 
 See [NOTICE.md](NOTICE.md) for details.
+
+## Photo Shoot
+
+<img width="3447" height="1750" alt="image" src="https://github.com/user-attachments/assets/a1addce2-4d2a-49c3-896a-5c3741027f64" />
+<img width="3432" height="1669" alt="image" src="https://github.com/user-attachments/assets/c9abe6d1-26ab-4247-abf8-747d401efede" />
+<img width="3474" height="1781" alt="image" src="https://github.com/user-attachments/assets/9b841750-cbb7-4ad4-ae84-84e23eb04eda" />
+<img width="3438" height="1652" alt="image" src="https://github.com/user-attachments/assets/83119e45-f768-49a1-baec-b4c02441032c" />
+
+
