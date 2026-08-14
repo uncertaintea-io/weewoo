@@ -89,6 +89,7 @@ need to push images manually, build and push the server image first:
 docker buildx build \
   --file cmd/weewoo-server/Dockerfile \
   --platform linux/amd64,linux/arm64 \
+  -t ghcr.io/uncertaintea-io/weewoo:latest \
   -t ghcr.io/uncertaintea-io/weewoo:${TAG} \
   --push .
 ```
