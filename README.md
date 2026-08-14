@@ -1,6 +1,10 @@
 # WeeWoo
 
-![Wee Woo Wee Woo](minion.gif)
+![Flashing alarm](docs/Emergency_Light.gif)
+<!--
+The Emergency Light is licensed under Creative Commons Attribution-Share Alike 3.0 Unported.
+See NOTICE.md for details.
+-->
 
 ## Database
 
@@ -22,23 +26,40 @@ connection_string: /var/lib/weewoo/weewoo.db
 The public container reserves `/var/lib/weewoo` for persistent data. Mount a
 Docker volume there when using SQLite.
 
-## Running the public container
+## Running the server using Docker
 
-The container reads `config.yaml` from its `/app` working directory by default:
+By default, the Docker image will use a local SQLite database stored in a volume mounted
+at `/var/lib/weewoo/`. If you don't create a volume yourself, Docker will create a temprary
+one for you and store the files there. This volume is ephemeral, so you will lose your data
+between restarts. To persist the data, create a data directory with:
+
+```shell
+mkdir data
+chmod 777 data # so it is readable by the nonroot Docker image
+```
+
+Then:
+
+```shell
+docker run --rm \
+  -p 8080:8080 \
+  -p 5000:5000 \
+  -v ./data:/var/lib/weewoo \
+  ghcr.io/uncertaintea-io/weewoo:latest
+```
+
+To specify a different configuration, you can override it:
 
 ```shell
 docker run --rm \
   -p 8080:8080 \
   -p 5000:5000 \
   -v ./config.yaml:/app/config.yaml:ro \
-  -v weewoo-data:/var/lib/weewoo \
+  -v ./data:/var/lib/weewoo \
   ghcr.io/uncertaintea-io/weewoo:latest
 ```
 
-Set `WEEWOO_CONFIG` to use another path, or pass `-config` explicitly. The
-command-line flag takes precedence over the environment variable.
-
-Initialize or update either backend with the same migration command:
+You can initialize or update a remote database using the migration command:
 
 ```shell
 go run ./cmd/migrate -config config.yaml up
@@ -101,3 +122,20 @@ receivers:
 The initial global alert and recovery defaults are inserted by the initial
 schema migration. The complete lifecycle and retention
 contract is documented in [`docs/design/alerts.md`](docs/design/alerts.md).
+
+## License
+
+The application source code is source-available under the
+PolyForm Internal Use License 1.0.0.
+
+You may use and modify the software for internal purposes, including
+within a business. The license does not permit offering the software
+to third parties as a product or service.
+
+Some components are licensed separately:
+
+- A proprietary runtime binary is distributed under separate terms.
+- Company logos and trademarks are not licensed for reuse.
+- Third-party dependencies remain subject to their respective licenses.
+
+See [NOTICE.md](NOTICE.md) for details.

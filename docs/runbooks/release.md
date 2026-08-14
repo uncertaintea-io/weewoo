@@ -80,7 +80,7 @@ docker buildx create --name multiarch --driver docker-container --use
 docker buildx inspect --bootstrap
 ```
 
-### Building the Docker Images
+### Building the Docker Image
 
 The GitHub Action normally handles this after a release is published. If you
 need to push images manually, build and push the server image first:
@@ -89,17 +89,6 @@ need to push images manually, build and push the server image first:
 docker buildx build \
   --file cmd/weewoo-server/Dockerfile \
   --platform linux/amd64,linux/arm64 \
-  -t ghcr.io/uncertaintea-io/weewoo-server:${TAG} \
-  --push .
-```
-
-Then build the public image from that exact server version:
-
-```shell
-docker buildx build \
-  --file Dockerfile \
-  --platform linux/amd64,linux/arm64 \
-  --build-arg WEEWOO_SERVER_IMAGE=ghcr.io/uncertaintea-io/weewoo-server:${TAG} \
   -t ghcr.io/uncertaintea-io/weewoo:latest \
   -t ghcr.io/uncertaintea-io/weewoo:${TAG} \
   --push .
