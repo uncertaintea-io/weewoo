@@ -1,7 +1,10 @@
-// Prometheus golden responses can be regenerated against a live server with:
-//
-//	go test ./internal/collection -run '^TestUpdatePrometheusGoldens$' -count=1 -args -update-prometheus-goldens -prometheus-url=http://your-server:9090
+// SPDX-FileCopyrightText: 2026 Uncertain Tea Inc.
+// SPDX-License-Identifier: LicenseRef-PolyForm-Internal-Use-1.0.0
+
 package collection
+
+// Prometheus golden responses can be regenerated against a live server with:
+//	go test ./internal/collection -run '^TestUpdatePrometheusGoldens$' -count=1 -args -update-prometheus-goldens -prometheus-url=http://your-server:9090
 
 import (
 	"bytes"

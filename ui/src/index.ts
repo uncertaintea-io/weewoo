@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Uncertain Tea Inc.
+// SPDX-License-Identifier: LicenseRef-PolyForm-Internal-Use-1.0.0
+
 import './index.scss'
 import { anomalyOccurrence, resolveAlertPDFState, type AlertPDFState } from './alert-detail';
 import { CancelImport, CreateService, DeleteService, GetAlertEvidence, GetService, GetServiceDetail, GetSettings, ListAlerts, ListAllServices, ResetServiceBaseline, ReviewAlertOccurrence, SaveSettings, ServicesApiError, SetServicePaused, TestAlertmanager, TestService, UpdateService, type AlertOccurrence, type AlertRecord, type ApplicationSettings, type CreateServiceInput, type Service, type ServiceChange } from './api';
