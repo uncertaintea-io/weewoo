@@ -6,10 +6,29 @@ The Emergency Light is licensed under Creative Commons Attribution-Share Alike 3
 See NOTICE.md for details.
 -->
 
+An experimental system for alerting when the performance of a system is out of the ordinary.
+
+This was built as a internship project by @brippy207 in the summer of 2026.
+For full details, see the [internship project plan](docs/plans/internship.md).
+
+
+
+## Screenshots
+
+<p style="align: top">
+  <a href="docs/screenshots/weewoo-service.png">
+    <img src="docs/screenshots/weewoo-service.png" alt="Service" width="400" align=top>
+  </a>
+  <a href="docs/screenshots/weewoo-alert.png">
+    <img src="docs/screenshots/weewoo-alert.png" alt="Alert" width="400" align=top>
+  </a>
+</p>
+
+
 ## Database
 
-Each WeeWoo server uses either PostgreSQL or its own SQLite database. Select the
-backend explicitly in `config.yaml`:
+Each WeeWoo server uses either a shared PostgreSQL database or a local SQLite database.
+The database is selected using a YAML configuration file, typically called `config.yaml`:
 
 ```yaml
 database: postgresql
@@ -59,35 +78,10 @@ docker run --rm \
   ghcr.io/uncertaintea-io/weewoo:latest
 ```
 
-You can initialize or update a remote database using the migration command:
-
-```shell
-go run ./cmd/migrate -config config.yaml up
-```
-
-Each SQLite-backed WeeWoo server should own its database file. Use PostgreSQL
-when multiple WeeWoo processes need to share one database.
-
-## Prerequisites
-
-### jecdf
-
-To run the code locally, you will need to download the latest version of the closed-source `jecdf` tool,
-available through its [Releases page](https://github.com/uncertaintea-io/db/releases?q=jecdf&expanded=true).
-Download the tarball for your operating system and platform, extract the stand-alone `jecdf` binary,
-and copy it to the root directory of the respository.
-
 ## Alerts
 
 WeeWoo stores user-visible alert conditions, occurrences, review decisions, and
-Alertmanager handoff state in its configured database. The server applies pending database
-migrations automatically before it starts workers or accepts requests. To
-inspect or apply migrations administratively, run:
-
-```shell
-go run ./cmd/migrate -config config.yaml status
-go run ./cmd/migrate -config config.yaml up
-```
+Alertmanager handoff state in its configured database.
 
 The Alerts page is available at `#alerts`; its JSON endpoint is
 `GET /api/alerts`. Accepting an anomalous time chunk as normal changes only that
