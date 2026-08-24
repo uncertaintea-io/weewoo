@@ -35,6 +35,7 @@ path = [
   "demo/**",
   "docs/adr/**",
   "docs/design/**",
+  "docs/plans/**",
   "docs/runbooks/**",
   "internal/collection/testdata/**",
   "go.*",
