@@ -6,7 +6,10 @@ SPDX-FileCopyrightText = "https://commons.wikimedia.org/wiki/user:Zeke_Essiestud
 SPDX-License-Identifier = "CC-BY-SA-3.0"
 
 [[annotations]]
-path = "ui/src/img/*"
+path = [
+  "docs/screenshots/**",
+  "ui/src/img/*",
+]
 SPDX-FileCopyrightText = "2026 Uncertain Tea Inc."
 SPDX-License-Identifier = "LicenseRef-Proprietary-Assets"
 

@@ -25,9 +25,9 @@ See `LICENSES/LicenseRef-Proprietary-Binary.txt` for applicable terms.
 
 ## Company Assets
 
-Images under `ui/src/img/`, which include company names, logos, trademarks,
-and other branding materials, are not licensed under the PolyForm Internal
-Use License.
+Images under `docs/screenshots` & `ui/src/img/`, which include company names,
+logos, trademarks, and other branding materials, are not licensed under the
+PolyForm Internal Use License.
 
 See `LICENSES/LicenseRef-Proprietary-Assets.txt` for applicable terms.
 
