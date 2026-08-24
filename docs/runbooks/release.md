@@ -35,12 +35,12 @@ gh release create ${TAG} --title ${TAG} --generate-notes
 ```
 
 Creating a release triggers the `Publish Docker Image` GitHub Action. It first
-builds `cmd/weewoo-server/Dockerfile` for `linux/amd64` and `linux/arm64` and
-pushes the version-matched `ghcr.io/uncertaintea-io/weewoo-server` image. It then
-uses that image as the artifact source for the public root `Dockerfile` and
-pushes both `ghcr.io/uncertaintea-io/weewoo:${TAG}` and
-`ghcr.io/uncertaintea-io/weewoo:latest`.
-It also will generate and publish release notes based on the PRs included in the release.
+builds the UI assets, then builds `cmd/weewoo-server/Dockerfile` for
+`linux/amd64` and `linux/arm64`. The action pushes a single
+`ghcr.io/uncertaintea-io/weewoo` image tagged with the release tag, `latest`,
+and the source commit SHA.
+The `gh release create --generate-notes` command generates release notes from
+the pull requests included in the release.
 
 ## Manual Release Procedure
 
@@ -83,7 +83,13 @@ docker buildx inspect --bootstrap
 ### Building the Docker Image
 
 The GitHub Action normally handles this after a release is published. If you
-need to push images manually, build and push the server image first:
+need to push the image manually, build the UI assets from the repository root,
+then build and push the multi-platform image:
+
+```shell
+npm --prefix ui ci
+npm --prefix ui run build
+```
 
 ```shell
 docker buildx build \

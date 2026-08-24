@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Uncertain Tea Inc.
+// SPDX-License-Identifier: LicenseRef-PolyForm-Internal-Use-1.0.0
+
 import {
   GetJointECDF,
   JECDF_RENDER_OPTION_LOG_X,

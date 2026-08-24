@@ -1,5 +1,8 @@
 # syntax=docker/dockerfile:1
 
+# SPDX-FileCopyrightText: 2026 Uncertain Tea Inc.
+# SPDX-License-Identifier: LicenseRef-PolyForm-Internal-Use-1.0.0
+
 # Use the jecdf image matching the target platform.
 FROM ghcr.io/uncertaintea-io/jecdf:latest AS jecdf-stage
 
@@ -15,7 +18,7 @@ RUN mkdir -p /out/data
 FROM gcr.io/distroless/static-debian12:nonroot AS release-stage
 
 LABEL org.opencontainers.image.licenses="PolyForm-Internal-Use-1.0.0"
-LABEL org.opencontainers.image.vendor="Uncertain Tea, Inc."
+LABEL org.opencontainers.image.vendor="Uncertain Tea Inc."
 
 WORKDIR /app
 COPY --from=build-stage --chown=nonroot:nonroot /out/weewoo-server ./weewoo-server

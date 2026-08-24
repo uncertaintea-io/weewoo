@@ -1,7 +1,8 @@
 {
   "name": "weewoo.uncertaintea.io",
-  "version": "0.0.1",
+  "version": "0.13.0",
   "description": "Better alerting through probability distributions.",
+  "license": "PolyForm-Internal-Use-1.0.0",
   "private": true,
   "homepage": "https://weewoo.uncertaintea.io",
   "bugs": {

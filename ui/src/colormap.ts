@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright 2010-2024 Mike Bostock
+// SPDX-License-Identifier: LicenseRef-Mike-Bostock
+
 export interface RGBA {
   r: number
   g: number

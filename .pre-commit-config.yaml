@@ -20,3 +20,9 @@ repos:
   rev: v8.29.1
   hooks:
     - id: gitleaks
+
+# https://reuse.software/
+- repo: https://codeberg.org/fsfe/reuse-tool
+  rev: v6.2.0
+  hooks:
+    - id: reuse
