@@ -20,10 +20,30 @@ SPDX-License-Identifier = "LicenseRef-Proprietary-Binary"
 
 [[annotations]]
 path = [
+  ".dockerignore",
+  ".envrc",
+  ".github/**",
+  ".gitignore",
+  ".go-version",
+  ".nvmrc",
+  ".pre-commit-config.yaml",
+  ".python-version",
+  "CONTEXT.md",
+  "NOTICE.md",
+  "README.md",
+  "compose.yaml",
+  "demo/**",
   "docs/adr/**",
   "docs/design/**",
   "docs/runbooks/**",
-  "internal/collection/testdata/**"
+  "internal/collection/testdata/**",
+  "go.*",
+  "requirements.txt",
+  "ui/.gitignore",
+  "ui/*.json",
+  "ui/*.mjs",
+  "ui/*.js",
+  "weewoo.code-workspace",
 ]
 SPDX-FileCopyrightText = "2026 Uncertain Tea Inc."
 SPDX-License-Identifier = "LicenseRef-PolyForm-Internal-Use-1.0.0"
