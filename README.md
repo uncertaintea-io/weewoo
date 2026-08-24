@@ -8,7 +8,7 @@ See NOTICE.md for details.
 
 An experimental system for alerting when the performance of a system is out of the ordinary.
 
-This was built as a internship project by [Brian Rippy](@brippy207) in the summer of 2026.
+This was built as a internship project by @brippy207 in the summer of 2026.
 For full details, see the [internship project plan](docs/plans/internship.md).
 
 
