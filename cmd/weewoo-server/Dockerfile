@@ -7,7 +7,7 @@
 FROM ghcr.io/uncertaintea-io/jecdf:latest AS jecdf-stage
 
 # Build the application from source.
-FROM golang:1.26 AS build-stage
+FROM golang:1.27 AS build-stage
 WORKDIR /app
 COPY . .
 RUN go mod download
