@@ -370,7 +370,7 @@ export function renderAlertPDFComparison(
   resetButtonID = 'alert-pdf-reset',
 ): () => void {
   const canvas = document.querySelector<HTMLCanvasElement>(`#${canvasID}`);
-  if (canvas === null) return () => { void canvas; };
+  if (canvas === null) return () => { /* do nothing */ };
   const resetButton = document.querySelector<HTMLButtonElement>(`#${resetButtonID}`);
   const plot = new AlertPDFPlot(canvas, comparison, resetButton);
   return () => { plot.destroy(); };

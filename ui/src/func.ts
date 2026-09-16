@@ -13,8 +13,7 @@ export class ConstFunc implements Func {
     this.value = value
   }
 
-  eval(x: number): number {
-    void x
+  eval(_x: number): number {
     return this.value
   }
 
